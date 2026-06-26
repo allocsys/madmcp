@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { githubRequest, toBase64, fromBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
+import { register as registerDiff } from "./diff.js";
 
 export function register(server) {
 
@@ -671,4 +672,7 @@ export function register(server) {
       return { content: [{ type: "text", text }] };
     }
   );
+
+  // ── Diff ─────────────────────────────────────────────────────────────────
+  registerDiff(server);
 }

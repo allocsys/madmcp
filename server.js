@@ -11,6 +11,7 @@ import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY } from "./config.js";
 import * as github from "./connectors/github/tools.js";
 import * as notion from "./connectors/notion/tools.js";
 import * as mem0   from "./connectors/mem/tools.js";
+import * as fetch  from "./connectors/fetch/tools.js";
 
 function buildServer() {
   const server = new McpServer({
@@ -21,6 +22,7 @@ function buildServer() {
   github.register(server);
   notion.register(server);
   mem0.register(server);
+  fetch.register(server);
 
   // Adding a new connector:
   //   import * as myThing from "./connectors/myThing/tools.js";
