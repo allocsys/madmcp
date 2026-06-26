@@ -13,23 +13,20 @@ import * as notion from "./connectors/notion/tools.js";
 import * as mem0   from "./connectors/mem/tools.js";
 import * as fetch  from "./connectors/fetch/tools.js";
 
-function buildServer() {
-  const server = new McpServer({
-    name: "manufact-mcp-server",
-    version: "2.0.0",
-  });
+// Build the MCP server once at startup and reuse it across all requests.
+const mcpServer = new McpServer({
+  name: "manufact-mcp-server",
+  version: "2.0.0",
+});
 
-  github.register(server);
-  notion.register(server);
-  mem0.register(server);
-  fetch.register(server);
+github.register(mcpServer);
+notion.register(mcpServer);
+mem0.register(mcpServer);
+fetch.register(mcpServer);
 
-  // Adding a new connector:
-  //   import * as myThing from "./connectors/myThing/tools.js";
-  //   myThing.register(server);
-
-  return server;
-}
+// Adding a new connector:
+//   import * as myThing from "./connectors/myThing/tools.js";
+//   myThing.register(mcpServer);
 
 // Constant-time-ish comparison to avoid trivial timing leaks on the shared key.
 function safeEqual(a, b) {
@@ -76,10 +73,9 @@ app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 async function handleMcp(req, res) {
   try {
-    const server    = buildServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    res.on("close", () => { transport.close(); server.close(); });
-    await server.connect(transport);
+    res.on("close", () => { transport.close(); });
+    await mcpServer.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (err) {
     console.error("MCP request error:", err);
@@ -102,8 +98,8 @@ app.post("/mcp/:key", requireMcpKey, handleMcp);
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`manufact-mcp-server listening on port ${PORT}`);
-  if (!GITHUB_TOKEN) console.warn("WARNING: GITHUB_TOKEN is not set.");
-  if (!NOTION_TOKEN) console.warn("WARNING: NOTION_TOKEN is not set. Notion tools will fail.");
-  if (!MEM0_API_KEY) console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");
+  if (!GITHUB_TOKEN)  console.warn("WARNING: GITHUB_TOKEN is not set.");
+  if (!NOTION_TOKEN)  console.warn("WARNING: NOTION_TOKEN is not set. Notion tools will fail.");
+  if (!MEM0_API_KEY)  console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");
   if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp endpoint is OPEN to anyone who has the URL.");
 });

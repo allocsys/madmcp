@@ -1,7 +1,7 @@
 {
-  "name": "github-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP server with tools for reading/writing files in GitHub repos, deployable on Manufact Cloud.",
+  "name": "manufact",
+  "version": "2.0.0",
+  "description": "MCP server with GitHub, Notion, Mem0, and Fetch connectors.",
   "main": "server.js",
   "type": "module",
   "scripts": {
