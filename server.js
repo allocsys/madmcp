@@ -70,6 +70,10 @@ function buildServer() {
     version: "1.0.0",
   });
 
+  // -------------------------------------------------------------------------
+  // Original tools
+  // -------------------------------------------------------------------------
+
   server.tool(
     "read_file",
     "Read a file's contents from a GitHub repository.",
@@ -138,8 +142,6 @@ function buildServer() {
       branch: z.string().optional().describe("Branch to commit to (default: repo's default branch)"),
     },
     async ({ owner, repo, path, content, message, branch }) => {
-      // Need the current file SHA if it already exists, otherwise GitHub
-      // will reject the update as a conflict.
       let sha;
       try {
         const query = branch ? `?ref=${encodeURIComponent(branch)}` : "";
@@ -229,6 +231,288 @@ function buildServer() {
       });
       return {
         content: [{ type: "text", text: `Created repo: ${data.full_name} (${data.html_url})` }],
+      };
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // New tools
+  // -------------------------------------------------------------------------
+
+  server.tool(
+    "list_repos",
+    "List repositories for a GitHub user or organization.",
+    {
+      owner: z.string().describe("GitHub username or organization name"),
+      type: z.enum(["all", "owner", "member"]).optional().describe("Filter by repo type (default: all)"),
+      sort: z.enum(["created", "updated", "pushed", "full_name"]).optional().describe("Sort order (default: updated)"),
+      per_page: z.number().optional().describe("Number of repos to return, max 100 (default: 30)"),
+    },
+    async ({ owner, type = "all", sort = "updated", per_page = 30 }) => {
+      let data;
+      try {
+        data = await githubRequest(
+          `/users/${owner}/repos?type=${type}&sort=${sort}&per_page=${per_page}`
+        );
+      } catch {
+        data = await githubRequest(
+          `/orgs/${owner}/repos?type=${type}&sort=${sort}&per_page=${per_page}`
+        );
+      }
+      const lines = data.map(
+        (r) =>
+          `${r.private ? "🔒" : "🌐"} ${r.full_name}${r.description ? ` — ${r.description}` : ""} [${r.language || "unknown"}] ⭐${r.stargazers_count}`
+      );
+      return {
+        content: [{ type: "text", text: lines.join("\n") || "(no repositories found)" }],
+      };
+    }
+  );
+
+  server.tool(
+    "search_code",
+    "Search for code across GitHub repositories.",
+    {
+      query: z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
+      per_page: z.number().optional().describe("Number of results to return, max 100 (default: 10)"),
+    },
+    async ({ query, per_page = 10 }) => {
+      const data = await githubRequest(
+        `/search/code?q=${encodeURIComponent(query)}&per_page=${per_page}`
+      );
+      if (!data.items || data.items.length === 0) {
+        return { content: [{ type: "text", text: "No results found." }] };
+      }
+      const lines = data.items.map(
+        (item) => `📄 ${item.repository.full_name}/${item.path} (${item.html_url})`
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Found ${data.total_count} result(s), showing ${data.items.length}:\n\n${lines.join("\n")}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_commit",
+    "Get details of a specific commit in a GitHub repository.",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      sha: z.string().describe("Commit SHA"),
+    },
+    async ({ owner, repo, sha }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/commits/${sha}`);
+      const files = data.files
+        .map((f) => `  ${f.status} ${f.filename} (+${f.additions}/-${f.deletions})`)
+        .join("\n");
+      const text =
+        `Commit: ${data.sha.slice(0, 7)}\n` +
+        `Author: ${data.commit.author.name} <${data.commit.author.email}>\n` +
+        `Date: ${data.commit.author.date}\n` +
+        `Message: ${data.commit.message}\n\n` +
+        `Files changed (${data.files.length}):\n${files}`;
+      return { content: [{ type: "text", text }] };
+    }
+  );
+
+  server.tool(
+    "list_commits",
+    "List commits on a branch in a GitHub repository.",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      branch: z.string().optional().describe("Branch name (default: repo's default branch)"),
+      per_page: z.number().optional().describe("Number of commits to return, max 100 (default: 20)"),
+    },
+    async ({ owner, repo, branch, per_page = 20 }) => {
+      const query = new URLSearchParams({ per_page: String(per_page) });
+      if (branch) query.set("sha", branch);
+      const data = await githubRequest(`/repos/${owner}/${repo}/commits?${query}`);
+      const lines = data.map(
+        (c) =>
+          `${c.sha.slice(0, 7)} — ${c.commit.message.split("\n")[0]} (${c.commit.author.name}, ${c.commit.author.date.slice(0, 10)})`
+      );
+      return { content: [{ type: "text", text: lines.join("\n") || "(no commits)" }] };
+    }
+  );
+
+  server.tool(
+    "create_branch",
+    "Create a new branch in a GitHub repository from an existing ref.",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      branch: z.string().describe("Name of the new branch to create"),
+      from_branch: z.string().optional().describe("Branch, tag, or SHA to branch from (default: repo's default branch)"),
+    },
+    async ({ owner, repo, branch, from_branch }) => {
+      let sha;
+      if (from_branch) {
+        const ref = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(from_branch)}`);
+        sha = ref.object.sha;
+      } else {
+        const repoData = await githubRequest(`/repos/${owner}/${repo}`);
+        const defaultBranch = repoData.default_branch;
+        const ref = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+        sha = ref.object.sha;
+      }
+
+      await githubRequest(`/repos/${owner}/${repo}/git/refs`, {
+        method: "POST",
+        body: { ref: `refs/heads/${branch}`, sha },
+      });
+
+      return {
+        content: [{ type: "text", text: `Created branch '${branch}' in ${owner}/${repo} from ${sha.slice(0, 7)}.` }],
+      };
+    }
+  );
+
+  server.tool(
+    "get_pull_requests",
+    "List pull requests in a GitHub repository.",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      state: z.enum(["open", "closed", "all"]).optional().describe("Filter by PR state (default: open)"),
+      per_page: z.number().optional().describe("Number of PRs to return, max 100 (default: 20)"),
+    },
+    async ({ owner, repo, state = "open", per_page = 20 }) => {
+      const data = await githubRequest(
+        `/repos/${owner}/${repo}/pulls?state=${state}&per_page=${per_page}`
+      );
+      if (!data.length) {
+        return { content: [{ type: "text", text: `No ${state} pull requests found.` }] };
+      }
+      const lines = data.map(
+        (pr) =>
+          `#${pr.number} [${pr.state}] ${pr.title}\n  ${pr.head.label} → ${pr.base.label} | by ${pr.user.login} | ${pr.created_at.slice(0, 10)}\n  ${pr.html_url}`
+      );
+      return { content: [{ type: "text", text: lines.join("\n\n") }] };
+    }
+  );
+
+  server.tool(
+    "create_pull_request",
+    "Open a new pull request in a GitHub repository.",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      title: z.string().describe("PR title"),
+      head: z.string().describe("The branch containing the changes (source branch)"),
+      base: z.string().describe("The branch to merge into (target branch, e.g. 'main')"),
+      body: z.string().optional().describe("PR description body"),
+      draft: z.boolean().optional().describe("Open as a draft PR (default: false)"),
+    },
+    async ({ owner, repo, title, head, base, body, draft = false }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/pulls`, {
+        method: "POST",
+        body: { title, head, base, body, draft },
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Created PR #${data.number}: "${data.title}"\n${data.html_url}`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_file_tree",
+    "Recursively list all files and folders in a GitHub repository (full tree).",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      ref: z.string().optional().describe("Branch, tag, or commit SHA (default: repo's default branch)"),
+    },
+    async ({ owner, repo, ref }) => {
+      let treeSha;
+      if (ref) {
+        try {
+          const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+          treeSha = refData.object.sha;
+        } catch {
+          treeSha = ref;
+        }
+      } else {
+        const repoData = await githubRequest(`/repos/${owner}/${repo}`);
+        const branchData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${repoData.default_branch}`);
+        treeSha = branchData.object.sha;
+      }
+
+      const data = await githubRequest(
+        `/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`
+      );
+
+      const lines = data.tree.map(
+        (item) => `${item.type === "tree" ? "📁" : "📄"} ${item.path}`
+      );
+
+      const truncatedNote = data.truncated ? "\n\n⚠️ Tree was truncated (repo too large for full listing)." : "";
+      return {
+        content: [
+          {
+            type: "text",
+            text: lines.join("\n") + truncatedNote || "(empty repository)",
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "rename_file",
+    "Rename or move a file in a GitHub repository (copies content to new path and deletes the old one).",
+    {
+      owner: z.string().describe("Repository owner (user or org)"),
+      repo: z.string().describe("Repository name"),
+      old_path: z.string().describe("Current file path"),
+      new_path: z.string().describe("New file path / destination"),
+      message: z.string().optional().describe("Commit message (default: 'rename <old> to <new>')"),
+      branch: z.string().optional().describe("Branch to commit to (default: repo's default branch)"),
+    },
+    async ({ owner, repo, old_path, new_path, message, branch }) => {
+      const commitMessage = message || `rename ${old_path} to ${new_path}`;
+
+      const query = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+      const existing = await githubRequest(
+        `/repos/${owner}/${repo}/contents/${encodeURIComponent(old_path)}${query}`
+      );
+      const content = existing.content.replace(/\n/g, ""); // already base64, strip newlines
+
+      // Create file at new path
+      const createResult = await githubRequest(
+        `/repos/${owner}/${repo}/contents/${encodeURIComponent(new_path)}`,
+        {
+          method: "PUT",
+          body: { message: commitMessage, content, branch },
+        }
+      );
+
+      // Delete old file
+      await githubRequest(
+        `/repos/${owner}/${repo}/contents/${encodeURIComponent(old_path)}`,
+        {
+          method: "DELETE",
+          body: { message: commitMessage, sha: existing.sha, branch },
+        }
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Renamed ${old_path} → ${new_path} in ${owner}/${repo} (commit ${createResult.commit.sha.slice(0, 7)}).`,
+          },
+        ],
       };
     }
   );
