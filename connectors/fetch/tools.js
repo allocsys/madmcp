@@ -31,11 +31,11 @@ export function register(server) {
     "Fetch the content of any public URL and return its text, JSON, or stripped HTML. Useful for reading docs, APIs, pages, or raw files from the web.",
     {
       url:          z.string().url().describe("The URL to fetch"),
-      max_chars:    z.number().optional().describe("Truncate response to this many characters (default: 8000)"),
+      max_chars:    z.number().optional().describe("Truncate response to this many characters (default: 500000)"),
       raw_html:     z.boolean().optional().describe("Return raw HTML instead of stripped plain text (default: false)"),
       headers:      z.record(z.string()).optional().describe("Optional extra HTTP request headers (e.g. Authorization)"),
     },
-    async ({ url, max_chars = 8000, raw_html = false, headers = {} }) => {
+    async ({ url, max_chars = 500000, raw_html = false, headers = {} }) => {
       const { status, ok, contentType, text } = await fetchUrl(url, { headers });
 
       let output = text;
