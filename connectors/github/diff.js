@@ -13,12 +13,10 @@ function unifiedDiff(aText, bText, aLabel, bLabel) {
   const aLines = aText.split("\n");
   const bLines = bText.split("\n");
 
-  // Build diff using a simple LCS-based line diff
   const diff = [];
   diff.push(`--- ${aLabel}`);
   diff.push(`+++ ${bLabel}`);
 
-  // LCS table (only store lengths to keep memory usage low)
   const m = aLines.length;
   const n = bLines.length;
   const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
@@ -28,7 +26,6 @@ function unifiedDiff(aText, bText, aLabel, bLabel) {
         ? dp[i + 1][j + 1] + 1
         : Math.max(dp[i + 1][j], dp[i][j + 1]);
 
-  // Trace back
   const hunks = [];
   let i = 0, j = 0;
   while (i < m || j < n) {
@@ -44,7 +41,6 @@ function unifiedDiff(aText, bText, aLabel, bLabel) {
     }
   }
 
-  // Format with ±3 context lines
   const CONTEXT = 3;
   const changed = new Set(
     hunks.map((h, idx) => (h.type !== "ctx" ? idx : -1)).filter((x) => x >= 0)
@@ -66,26 +62,42 @@ function unifiedDiff(aText, bText, aLabel, bLabel) {
   return diff.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Helper: read file via Blobs API (no 1MB limit)
+// ---------------------------------------------------------------------------
+async function readFileBlobForDiff(owner, repo, filePath, ref) {
+  const repoInfo = await githubRequest(`/repos/${owner}/${repo}`);
+  const branch = ref || repoInfo.default_branch;
+  let treeSha;
+  try {
+    const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+    treeSha = refData.object.sha;
+  } catch {
+    treeSha = branch;
+  }
+  const tree = await githubRequest(`/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`);
+  const entry = tree.tree.find((item) => item.path === filePath && item.type === "blob");
+  if (!entry) throw new Error(`File not found in tree: ${filePath}`);
+  const blob = await githubRequest(`/repos/${owner}/${repo}/git/blobs/${entry.sha}`);
+  return fromBase64(blob.content.replace(/\n/g, ""));
+}
+
 export function register(server) {
 
   server.tool(
     "diff_files",
     "Compare two files or two versions of the same file in a GitHub repository and return a unified diff.",
     {
-      owner:  z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:   z.string().describe("Repository name"),
-      // Option A: compare same file across two refs
-      path:   z.string().optional().describe("File path to compare across two refs (use with base_ref and head_ref)"),
-      base_ref: z.string().optional().describe("Base ref (branch, tag, or SHA). Defaults to repo default branch."),
-      head_ref: z.string().optional().describe("Head ref to compare against base_ref."),
-      // Option B: compare two different files on the same ref
+      owner:     z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:      z.string().describe("Repository name"),
+      path:      z.string().optional().describe("File path to compare across two refs (use with base_ref and head_ref)"),
+      base_ref:  z.string().optional().describe("Base ref (branch, tag, or SHA). Defaults to repo default branch."),
+      head_ref:  z.string().optional().describe("Head ref to compare against base_ref."),
       base_path: z.string().optional().describe("Path of the base file (use with head_path for cross-file diff)"),
       head_path: z.string().optional().describe("Path of the head file (use with base_path for cross-file diff)"),
       ref:       z.string().optional().describe("Ref to use when comparing two different file paths (default: default branch)"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, base_ref, head_ref, base_path, head_path, ref }) => {
-
-      // Validate inputs
       const crossFile = base_path && head_path;
       const sameFile  = path && head_ref;
       if (!crossFile && !sameFile) {
@@ -98,25 +110,19 @@ export function register(server) {
       let aLabel, bLabel, aText, bText;
 
       if (sameFile) {
-        // Compare same file at two refs
         const resolvedBase = base_ref || (await githubRequest(`/repos/${owner}/${repo}`)).default_branch;
-        const [aData, bData] = await Promise.all([
-          githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(resolvedBase)}`),
-          githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(head_ref)}`),
+        [aText, bText] = await Promise.all([
+          readFileBlobForDiff(owner, repo, path, resolvedBase),
+          readFileBlobForDiff(owner, repo, path, head_ref),
         ]);
-        aText  = fromBase64(aData.content);
-        bText  = fromBase64(bData.content);
         aLabel = `${path} (${resolvedBase})`;
         bLabel = `${path} (${head_ref})`;
       } else {
-        // Compare two different files
         const resolvedRef = ref || (await githubRequest(`/repos/${owner}/${repo}`)).default_branch;
-        const [aData, bData] = await Promise.all([
-          githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(base_path)}?ref=${encodeURIComponent(resolvedRef)}`),
-          githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(head_path)}?ref=${encodeURIComponent(resolvedRef)}`),
+        [aText, bText] = await Promise.all([
+          readFileBlobForDiff(owner, repo, base_path, resolvedRef),
+          readFileBlobForDiff(owner, repo, head_path, resolvedRef),
         ]);
-        aText  = fromBase64(aData.content);
-        bText  = fromBase64(bData.content);
         aLabel = `${base_path} (${resolvedRef})`;
         bLabel = `${head_path} (${resolvedRef})`;
       }
