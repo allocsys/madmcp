@@ -7,10 +7,10 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM_API_KEY } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY } from "./config.js";
 import * as github from "./connectors/github/tools.js";
 import * as notion from "./connectors/notion/tools.js";
-import * as mem    from "./connectors/mem/tools.js";
+import * as mem0   from "./connectors/mem/tools.js";
 
 function buildServer() {
   const server = new McpServer({
@@ -20,7 +20,7 @@ function buildServer() {
 
   github.register(server);
   notion.register(server);
-  mem.register(server);
+  mem0.register(server);
 
   // Adding a new connector:
   //   import * as myThing from "./connectors/myThing/tools.js";
@@ -39,7 +39,7 @@ app.get("/", (_req, res) => {
     configured: {
       github: Boolean(GITHUB_TOKEN),
       notion: Boolean(NOTION_TOKEN),
-      mem:    Boolean(MEM_API_KEY),
+      mem0:   Boolean(MEM0_API_KEY),
     },
   });
 });
@@ -66,5 +66,5 @@ app.listen(PORT, () => {
   console.log(`manufact-mcp-server listening on port ${PORT}`);
   if (!GITHUB_TOKEN) console.warn("WARNING: GITHUB_TOKEN is not set.");
   if (!NOTION_TOKEN) console.warn("WARNING: NOTION_TOKEN is not set. Notion tools will fail.");
-  if (!MEM_API_KEY)  console.warn("WARNING: MEM_API_KEY is not set. Mem tools will fail.");
+  if (!MEM0_API_KEY) console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");
 });
