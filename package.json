@@ -1,0 +1,15 @@
+{
+  "name": "notes-mcp-server",
+  "version": "1.0.0",
+  "description": "A simple MCP server for managing notes and todos, deployable on Manufact Cloud.",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.21.2",
+    "zod": "^3.24.1"
+  }
+}
