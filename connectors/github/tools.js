@@ -52,6 +52,28 @@ export function register(server) {
     async ({ owner = DEFAULT_OWNER, repo, path, ref }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
       return { content: [{ type: "text", text: content }] };
+  server.tool(
+    "read_file_chunked",
+    "Read a slice of a large file from a GitHub repository. Use when read_file times out or is truncated. Returns a chunk of the file starting at `char_offset` with length up to `char_limit`, plus total file size so you can page through it.",
+    {
+      owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:        z.string().describe("Repository name"),
+      path:        z.string().describe("File path within the repo"),
+      ref:         z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      char_offset: z.number().optional().describe("Character offset to start reading from (default: 0)"),
+      char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000, max: 100000)"),
+    },
+    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset = 0, char_limit = 20000 }) => {
+      const safeLimit = Math.min(char_limit, 100000);
+      const content   = await readFileViaBlob(owner, repo, path, ref);
+      const total     = content.length;
+      const slice     = content.slice(char_offset, char_offset + safeLimit);
+      const remaining = Math.max(0, total - char_offset - slice.length);
+      const header    = `[File: ${path} | Total: ${total} chars | Offset: ${char_offset} | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
+      return { content: [{ type: "text", text: header + slice }] };
+    }
+  );
+
     }
   );
 
