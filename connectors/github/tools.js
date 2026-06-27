@@ -3,8 +3,6 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import fs from "fs/promises";
-import nodePath from "path";
 import { githubRequest, toBase64, fromBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 import { register as registerDiff } from "./diff.js";
@@ -48,17 +46,16 @@ export function register(server) {
 
   // ── Download repo to Claude local disk ──────────────────────────────────
 
-  server.tool(
+    "Fetch all files from a GitHub repository and return their contents as a JSON payload. Claude receives the file tree and content directly and can write them to local disk using create_file.",
     "download_repo",
     "Download files from a GitHub repository directly to Claude's local working directory (/home/claude). Fetches the full file tree (or a subdirectory) and writes every file to disk so Claude can read, run, grep, and patch them locally.",
     {
       owner:      z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:       z.string().describe("Repository name"),
-      ref:        z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
       src_path:   z.string().optional().describe("Subdirectory inside the repo to download (default: entire repo root)"),
       dest:       z.string().optional().describe("Local destination directory (default: /home/claude/<repo>)"),
       extensions: z.array(z.string()).optional().describe("Only download files with these extensions e.g. ['.js', '.ts']. Omit to download everything."),
-      max_files:  z.number().optional().describe("Safety cap on number of files to download (default: 200)"),
+    async ({ owner = DEFAULT_OWNER, repo, ref, src_path = "", extensions, max_files = 200 }) => {
     },
     async ({ owner = DEFAULT_OWNER, repo, ref, src_path = "", dest, extensions, max_files = 200 }) => {
       // 1. Resolve the tree SHA
@@ -87,27 +84,20 @@ export function register(server) {
         const exts = extensions.map((e) => e.startsWith(".") ? e : "." + e);
         blobs = blobs.filter((item) => exts.some((ext) => item.path.endsWith(ext)));
       }
-
-      // 5. Safety cap
-      if (blobs.length > max_files) {
-        return {
-          content: [{ type: "text", text: `⚠️ Repo has ${blobs.length} matching files which exceeds max_files=${max_files}. Use src_path or extensions to narrow the scope, or raise max_files.` }],
+      // 6. Fetch all file contents and return as JSON payload
+      const files = [];
+      const errors = [];
           isError: true,
         };
       }
-
-      // 6. Resolve local destination
-      const localRoot = dest || `/home/claude/${repo}`;
-
+          files.push({ path: item.path, content });
       // 7. Download and write each file
-      const results = [];
+          errors.push({ path: item.path, error: err.message });
       for (const item of blobs) {
         try {
           const content  = await readFileViaBlob(owner, repo, item.path, treeSha);
-          const fileDest = nodePath.join(localRoot, src_path ? item.path.slice(src_path.length).replace(/^\//, "") : item.path);
-          await fs.mkdir(nodePath.dirname(fileDest), { recursive: true });
-          await fs.writeFile(fileDest, content, "utf8");
-          results.push(`✅ ${item.path} → ${fileDest}`);
+      const summary = `Fetched ${files.length}/${blobs.length} files from ${owner}/${repo}${errors.length ? ` (${errors.length} failed)` : ""}`;
+      return { content: [{ type: "text", text: JSON.stringify({ summary, files, errors }, null, 2) }] };
         } catch (err) {
           results.push(`❌ ${item.path} — ${err.message}`);
         }
