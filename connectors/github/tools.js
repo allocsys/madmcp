@@ -15,6 +15,7 @@ import { register as registerSearch    } from "./search.js";
 import { register as registerActions   } from "./actions.js";
 import { register as registerStrReplace} from "./str_replace.js";
 import { register as registerDiff      } from "./diff.js";
+import { register as registerRepoMgmt } from "./repo_mgmt.js";
 
 export function register(server) {
   registerDownload(server);
@@ -28,4 +29,5 @@ export function register(server) {
   registerActions(server);
   registerStrReplace(server);
   registerDiff(server);
+  registerRepoMgmt(server);
 }
