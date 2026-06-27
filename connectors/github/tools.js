@@ -36,13 +36,19 @@ async function readFileViaBlob(owner, repo, filePath, ref) {
   return fromBase64(blob.content.replace(/\n/g, ""));
 }
 
+// ---------------------------------------------------------------------------
+// Threshold above which read_file auto-switches to chunked mode
+// ---------------------------------------------------------------------------
+const CHUNK_SIZE = 20000;
+const CHUNK_THRESHOLD = 100000;
+
 export function register(server) {
 
   // ── File & directory ────────────────────────────────────────────────────
 
   server.tool(
     "read_file",
-    "Read a file's contents from a GitHub repository.",
+    "Read a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -51,7 +57,23 @@ export function register(server) {
     },
     async ({ owner = DEFAULT_OWNER, repo, path, ref }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
-      return { content: [{ type: "text", text: content }] };
+      const total   = content.length;
+
+      // Small file — return everything as-is
+      if (total <= CHUNK_THRESHOLD) {
+        return { content: [{ type: "text", text: content }] };
+      }
+
+      // Large file — return first chunk with pagination header
+      const slice     = content.slice(0, CHUNK_SIZE);
+      const remaining = total - CHUNK_SIZE;
+      const header    =
+        `⚠️ File too large to return in full (${total.toLocaleString()} chars). ` +
+        `Returning first ${CHUNK_SIZE.toLocaleString()} chars. ` +
+        `Use read_file_chunked with char_offset=${CHUNK_SIZE} to continue.\n` +
+        `[File: ${path} | Total: ${total} chars | Offset: 0 | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
+
+      return { content: [{ type: "text", text: header + slice }] };
     }
   );
 
@@ -183,13 +205,9 @@ export function register(server) {
     async ({ owner, repo, old_path, new_path, message, branch }) => {
       const commitMessage = message || `rename ${old_path} to ${new_path}`;
 
-      // Use Blobs API to read the file (no 1MB limit)
       const content = await readFileViaBlob(owner, repo, old_path, branch);
-
-      // Get the blob SHA of the old file for deletion
       const { blobSha: oldBlobSha } = await getFileBlobSha(owner, repo, old_path, branch);
 
-      // Commit new file + delete old file in one operation via Git Data API
       const repoInfo     = await githubRequest(`/repos/${owner}/${repo}`);
       const targetBranch = branch || repoInfo.default_branch;
       const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(targetBranch)}`);
@@ -206,7 +224,7 @@ export function register(server) {
           base_tree: baseCommit.tree.sha,
           tree: [
             { path: new_path, mode: "100644", type: "blob", sha: newBlob.sha },
-            { path: old_path, mode: "100644", type: "blob", sha: null }, // null SHA = delete
+            { path: old_path, mode: "100644", type: "blob", sha: null },
           ],
         },
       });
