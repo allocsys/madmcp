@@ -9,7 +9,6 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, MCP_SHARED_KEY } from "./config.js";
 import * as github   from "./connectors/github/tools.js";
-import * as patch    from "./connectors/github/patch.js";
 import * as resource from "./connectors/github/resource.js";
 import * as notion   from "./connectors/notion/tools.js";
 import * as mem0     from "./connectors/mem/tools.js";
@@ -22,7 +21,6 @@ const mcpServer = new McpServer({
 });
 
 github.register(mcpServer);
-patch.register(mcpServer);
 resource.register(mcpServer);
 notion.register(mcpServer);
 mem0.register(mcpServer);
