@@ -130,7 +130,13 @@ export function register(server) {
         body: { sha: newCommit.sha },
       });
 
-      const linesChanged = patch.split("\n").filter((l) => l.startsWith("+") || l.startsWith("-")).length;
+      // Exclude --- / +++ header lines from the changed-line count
+      const linesChanged = patch.split("\n").filter((l) =>
+        (l.startsWith("+") || l.startsWith("-")) &&
+        !l.startsWith("---") &&
+        !l.startsWith("+++ ")
+      ).length;
+
       return {
         content: [{ type: "text", text: `Patched ${path} in ${owner}/${repo}@${targetBranch} (commit ${newCommit.sha.slice(0, 7)}). ~${linesChanged} lines changed.` }],
       };
