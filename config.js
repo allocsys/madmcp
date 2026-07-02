@@ -15,6 +15,10 @@ export const MEM0_API_KEY   = process.env.MEM0_API_KEY;
 export const MEM0_API       = "https://api.mem0.ai";
 export const MEM0_USER_ID   = process.env.MEM0_USER_ID || "default";
 
+export const CLOUDFLARE_API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
+export const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+export const CLOUDFLARE_API        = "https://api.cloudflare.com/client/v4";
+
 // Shared-secret auth for the /mcp endpoint. If set, every request to /mcp
 // must include a matching `x-manufact-key` header, or it is rejected before
 // any connector tools (GitHub, Notion, Mem0, Fetch) are reachable.
