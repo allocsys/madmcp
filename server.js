@@ -7,12 +7,13 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, MCP_SHARED_KEY } from "./config.js";
-import * as github   from "./connectors/github/tools.js";
-import * as resource from "./connectors/github/resource.js";
-import * as notion   from "./connectors/notion/tools.js";
-import * as mem0     from "./connectors/mem/tools.js";
-import * as fetch    from "./connectors/fetch/tools.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, MCP_SHARED_KEY } from "./config.js";
+import * as github     from "./connectors/github/tools.js";
+import * as resource   from "./connectors/github/resource.js";
+import * as notion     from "./connectors/notion/tools.js";
+import * as mem0       from "./connectors/mem/tools.js";
+import * as fetch      from "./connectors/fetch/tools.js";
+import * as cloudflare from "./connectors/cloudflare/tools.js";
 
 // Build the MCP server once at startup and reuse it across all requests.
 const mcpServer = new McpServer({
@@ -25,6 +26,7 @@ resource.register(mcpServer);
 notion.register(mcpServer);
 mem0.register(mcpServer);
 fetch.register(mcpServer);
+cloudflare.register(mcpServer);
 
 // Adding a new connector:
 //   import * as myThing from "./connectors/myThing/tools.js";
@@ -66,6 +68,7 @@ app.get("/", (_req, res) => {
       github: Boolean(GITHUB_TOKEN),
       notion: Boolean(NOTION_TOKEN),
       mem0:   Boolean(MEM0_API_KEY),
+      cloudflare: Boolean(CLOUDFLARE_API_TOKEN && CLOUDFLARE_ACCOUNT_ID),
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });
@@ -96,5 +99,6 @@ app.listen(PORT, () => {
   if (!GITHUB_TOKEN)   console.warn("WARNING: GITHUB_TOKEN is not set.");
   if (!NOTION_TOKEN)   console.warn("WARNING: NOTION_TOKEN is not set. Notion tools will fail.");
   if (!MEM0_API_KEY)   console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");
+  if (!CLOUDFLARE_API_TOKEN || !CLOUDFLARE_ACCOUNT_ID) console.warn("WARNING: CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID not set. Cloudflare tools will fail.");
   if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp endpoint is OPEN to anyone who has the URL.");
 });
