@@ -21,6 +21,17 @@ function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
+// Cloudflare's telemetry query/values endpoints require timeframe bounds as
+// epoch millis (numbers), not ISO strings — accept either from callers and
+// normalize here.
+function toEpochMillis(ts) {
+  if (typeof ts === "number") return ts;
+  if (/^\d+$/.test(ts)) return Number(ts);
+  const parsed = Date.parse(ts);
+  if (Number.isNaN(parsed)) throw new Error(`Invalid timeframe value: ${ts}`);
+  return parsed;
+}
+
 const filterSchema = z.object({
   key: z.string().describe("Field to filter on, e.g. '$workers.event.response.status' or '$metadata.service'. Use cf_workers_observability_keys to discover valid keys."),
   operator: z.string().describe("Comparison operator, e.g. 'eq', 'neq', 'gt', 'lt', 'includes'"),
@@ -52,10 +63,17 @@ export function register(server) {
       timeframe_from: z.string().describe("Start of time range, ISO 8601 or epoch millis"),
       timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
     },
-    async ({ key, dataset = "cloudflare-workers", timeframe_from, timeframe_to }) =>
+      type: z.enum(["string", "boolean", "number"]).optional().describe("The value type of the key being listed (required by the Cloudflare API). Default: 'string'."),
+    },
+    async ({ key, dataset = "cloudflare-workers", timeframe_from, timeframe_to, type = "string" }) =>
       textResult(await cfAccountRequest("/workers/observability/telemetry/values", {
         method: "POST",
-        body: { dataset, key, timeframe: { from: timeframe_from, to: timeframe_to } },
+        body: {
+          datasets: [dataset],
+          key,
+          type,
+          timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },
+        },
       }))
   );
 
@@ -80,8 +98,8 @@ export function register(server) {
       const body = {
         queryId: query_id || `manufact-${Date.now()}`,
         view,
-        dataset,
-        timeframe: { from: timeframe_from, to: timeframe_to },
+        datasets: [dataset],
+        timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },
         parameters: { filters: allFilters },
         ...(limit ? { limit } : {}),
       };
