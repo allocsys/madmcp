@@ -81,16 +81,15 @@ export function register(server) {
       run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
       categories: z.array(z.string()).optional().describe("Optional category tags to attach to this memory (e.g. ['manager.js','decisions']) — improves filtered search later"),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'})"),
-      infer:      z.boolean().optional().describe("If false, bypasses Mem0's LLM extraction and stores the content verbatim ('direct import') instead of atomizing/rephrasing it into inferred facts. Default: true (Mem0's default extraction behavior)."),
+      infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories."),
     },
-    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, metadata, infer }) => {
+    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, metadata, infer = false }) => {
       const messages = [{ role: "user", content }];
-      const body = { messages, user_id };
+      const body = { messages, user_id, infer };
       if (agent_id) body.agent_id = agent_id;
       if (run_id) body.run_id = run_id;
       if (categories?.length) body.categories = categories;
       if (metadata) body.metadata = metadata;
-      if (typeof infer === "boolean") body.infer = infer;
       const data = await mem0Request("/v3/memories/add/", { method: "POST", body });
       const eventId = data.event_id || data.id;
       return {
@@ -116,17 +115,16 @@ export function register(server) {
         run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
         categories: z.array(z.string()).optional().describe("Optional category tags for this memory"),
         metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
-        infer:      z.boolean().optional().describe("If false, bypasses Mem0's LLM extraction and stores the content verbatim instead of atomizing/rephrasing it. Default: true."),
+        infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
       })).min(1).describe("List of memories to add"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map(({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, metadata, infer }) => {
-        const body = { messages: [{ role: "user", content }], user_id };
+      const results = await Promise.allSettled(items.map(({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, metadata, infer = false }) => {
+        const body = { messages: [{ role: "user", content }], user_id, infer };
         if (agent_id) body.agent_id = agent_id;
         if (run_id) body.run_id = run_id;
         if (categories?.length) body.categories = categories;
         if (metadata) body.metadata = metadata;
-        if (typeof infer === "boolean") body.infer = infer;
         return mem0Request("/v3/memories/add/", { method: "POST", body });
       }));
       const lines = results.map((r, i) => {
