@@ -32,6 +32,26 @@ function toEpochMillis(ts) {
   return parsed;
 }
 
+// The telemetry query API's `parameters.filters` entries are a discriminated
+// union of either a "group" node ({kind:"group", filterCombination, filters})
+// or a leaf filter node. A leaf node requires `operation` (not `operator`)
+// and a `type` describing the value's type — both were previously missing,
+// which caused every query with any filter (including the script_name
+// convenience filter) to fail Cloudflare's schema validation with a 400.
+function inferValueType(value) {
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "number") return "number";
+  return "string";
+}
+
+function normalizeFilter(f) {
+  // Accept both the tool's public `operator` param name and, defensively,
+  // an already-correct `operation` field if a caller supplies one directly.
+  const operation = f.operation || f.operator;
+  const type = f.type || inferValueType(f.value);
+  return { key: f.key, operation, type, value: f.value };
+}
+
 const filterSchema = z.object({
   key: z.string().describe("Field to filter on, e.g. '$workers.event.response.status' or '$metadata.service'. Use cf_workers_observability_keys to discover valid keys."),
   operator: z.string().describe("Comparison operator, e.g. 'eq', 'neq', 'gt', 'lt', 'includes'"),
@@ -90,9 +110,11 @@ export function register(server) {
       query_id: z.string().optional().describe("Optional query identifier for the request (any string); Cloudflare uses this to tag/save the query"),
     },
     async ({ timeframe_from, timeframe_to, script_name, view = "events", dataset = "cloudflare-workers", filters = [], limit, query_id }) => {
-      const allFilters = script_name
+      const rawFilters = script_name
         ? [{ key: "$metadata.service", operator: "eq", value: script_name }, ...filters]
         : filters;
+
+      const allFilters = rawFilters.map(normalizeFilter);
 
       const body = {
         queryId: query_id || `manufact-${Date.now()}`,
