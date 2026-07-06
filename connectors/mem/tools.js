@@ -10,6 +10,24 @@
 //   - GET  /v1/memories/{id}/  → get single memory
 //   - PUT  /v1/memories/{id}/  → update single memory
 //   - DELETE /v1/memories/{id}/ → delete single memory
+//
+// NOTE on "categories" (2026-07-07):
+// Mem0's /v3/memories/add/ endpoint does NOT accept a per-call `categories`
+// or `custom_categories` field — it's not in the documented request schema
+// (messages, user_id, agent_id, run_id, app_id, metadata, infer,
+// expiration_date only). `custom_categories` from the SDK examples is a
+// PROJECT-LEVEL setting (client.project.update(custom_categories=[...])),
+// applied once for the whole project's classifier going forward — it can't
+// tag a single memory at add-time. Sending either field to /v3/memories/add/
+// is silently ignored; Mem0 falls back to its own default classifier
+// (personal_details, technology, milestones, etc.) regardless.
+//
+// So our `categories` tool param is implemented as a client-side tag: it's
+// stored under `metadata.tags` (a field /v3/memories/add/ *does* support),
+// and mem0_list/mem0_search filter on it by fetching normally and checking
+// each result's metadata.tags for overlap with the requested list, since
+// Mem0's server-side metadata-filter operators (eq/contains/ne, top-level
+// keys only) aren't documented to reliably match inside an array field.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -20,9 +38,16 @@ import { MEM0_USER_ID } from "../../config.js";
 function compactLine(m, { showScore = false } = {}) {
   const preview = (m.memory || m.text || "").slice(0, 90).replace(/\n/g, " ");
   const date = (m.created_at || "").slice(0, 10) || "?";
-  const cats = Array.isArray(m.categories) && m.categories.length ? ` [${m.categories.join(",")}]` : "";
+  const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? ` [${m.metadata.tags.join(",")}]` : "";
   const score = showScore && typeof m.score === "number" ? ` (${m.score.toFixed(2)})` : "";
-  return `${m.id} | ${date}${cats}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
+  return `${m.id} | ${date}${tags}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
+}
+
+// Keep only memories whose metadata.tags intersects the requested categories.
+function filterByTags(memories, categories) {
+  if (!categories?.length) return memories;
+  const wanted = new Set(categories);
+  return memories.filter((m) => Array.isArray(m.metadata?.tags) && m.metadata.tags.some((t) => wanted.has(t)));
 }
 
 export function register(server) {
@@ -35,16 +60,16 @@ export function register(server) {
       user_id:    z.string().optional().describe(`Mem0 user ID to scope memories (default: ${MEM0_USER_ID})`),
       limit:      z.number().optional().describe("Number of memories to return (default: 20)"),
       page:       z.number().optional().describe("Page number for pagination (default: 1)"),
-      categories: z.array(z.string()).optional().describe("Optional category filters (memory must match any listed category)"),
+      categories: z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
       fields:     z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']"),
     },
     async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, fields }) => {
       const filters = { user_id };
-      if (categories?.length) filters.categories = { in: categories };
       const body = { filters, page, page_size: limit };
-      if (fields?.length) body.fields = fields;
+      if (fields?.length) body.fields = Array.from(new Set([...fields, "metadata"]));
       const data = await mem0Request("/v3/memories/", { method: "POST", body });
-      const memories = data.results || data.memories || data || [];
+      let memories = data.results || data.memories || data || [];
+      memories = filterByTags(memories, categories);
       if (!memories.length) return { content: [{ type: "text", text: "No memories found." }] };
       return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
     }
@@ -60,10 +85,11 @@ export function register(server) {
     async ({ memory_id }) => {
       const m = await mem0Request(`/v1/memories/${memory_id}/`);
       const cats = Array.isArray(m.categories) && m.categories.length ? `\nCategories: ${m.categories.join(", ")}` : "";
+      const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? `\nTags: ${m.metadata.tags.join(", ")}` : "";
       const meta = m.metadata && Object.keys(m.metadata).length ? `\n\nMetadata:\n${JSON.stringify(m.metadata, null, 2)}` : "";
       const text =
         `ID: ${m.id}\n` +
-        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}\n\n` +
+        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}\n\n` +
         (m.memory || m.text || "(no content)") +
         meta;
       return { content: [{ type: "text", text }] };
@@ -79,7 +105,7 @@ export function register(server) {
       user_id:    z.string().optional().describe(`Mem0 user ID to scope the memory (default: ${MEM0_USER_ID})`),
       agent_id:   z.string().optional().describe("Optional agent ID for finer-grained scoping (e.g. per-project), in addition to user_id"),
       run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
-      categories: z.array(z.string()).optional().describe("Optional category tags to attach to this memory (e.g. ['manager.js','decisions']) — improves filtered search later"),
+      categories: z.array(z.string()).optional().describe("Optional tags to attach to this memory (e.g. ['manager.js','decisions']) — stored under metadata.tags and used for later tag-filtered list/search, since Mem0's own category classifier can't be overridden per-call"),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'})"),
       infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories."),
     },
@@ -88,12 +114,7 @@ export function register(server) {
       const body = { messages, user_id, infer };
       if (agent_id) body.agent_id = agent_id;
       if (run_id) body.run_id = run_id;
-      // Mem0's add endpoint only recognizes per-call category overrides under
-      // `custom_categories`, shaped as [{ name: description }, ...] — a plain
-      // `categories: string[]` field is silently ignored and falls back to
-      // Mem0's own default classifier. Reshape accordingly.
-      if (categories?.length) body.custom_categories = categories.map((c) => ({ [c]: `Custom category: ${c}` }));
-      if (metadata) body.metadata = metadata;
+      if (categories?.length || metadata) body.metadata = { ...metadata, ...(categories?.length ? { tags: categories } : {}) };
       const data = await mem0Request("/v3/memories/add/", { method: "POST", body });
       const eventId = data.event_id || data.id;
       return {
@@ -117,7 +138,7 @@ export function register(server) {
         user_id:    z.string().optional().describe(`Mem0 user ID to scope this memory (default: ${MEM0_USER_ID})`),
         agent_id:   z.string().optional().describe("Optional agent ID for finer-grained scoping"),
         run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
-        categories: z.array(z.string()).optional().describe("Optional category tags for this memory"),
+        categories: z.array(z.string()).optional().describe("Optional tags for this memory — stored under metadata.tags (see mem0_add for why)"),
         metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
         infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
       })).min(1).describe("List of memories to add"),
@@ -127,8 +148,7 @@ export function register(server) {
         const body = { messages: [{ role: "user", content }], user_id, infer };
         if (agent_id) body.agent_id = agent_id;
         if (run_id) body.run_id = run_id;
-        if (categories?.length) body.custom_categories = categories.map((c) => ({ [c]: `Custom category: ${c}` }));
-        if (metadata) body.metadata = metadata;
+        if (categories?.length || metadata) body.metadata = { ...metadata, ...(categories?.length ? { tags: categories } : {}) };
         return mem0Request("/v3/memories/add/", { method: "POST", body });
       }));
       const lines = results.map((r, i) => {
@@ -151,18 +171,21 @@ export function register(server) {
       query:      z.string().describe("Search query string"),
       user_id:    z.string().optional().describe(`Mem0 user ID to scope search (default: ${MEM0_USER_ID})`),
       limit:      z.number().optional().describe("Number of results to return (default: 10)"),
-      categories: z.array(z.string()).optional().describe("Optional category filters (memory must match any listed category)"),
+      categories: z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
       rerank:     z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval (default: false). Improves precision for ambiguous queries at some latency cost."),
       threshold:  z.number().optional().describe("Optional minimum relevance score (0-1) — results below this are dropped"),
     },
     async ({ query, user_id = MEM0_USER_ID, limit = 10, categories, rerank, threshold }) => {
       const filters = { user_id };
-      if (categories?.length) filters.categories = { in: categories };
-      const body = { query, filters, top_k: limit };
+      // Over-fetch a bit when tag-filtering client-side, so filtering doesn't
+      // starve the result set down below what the caller asked for.
+      const fetchLimit = categories?.length ? Math.max(limit * 3, limit + 20) : limit;
+      const body = { query, filters, top_k: fetchLimit };
       if (rerank) body.rerank = true;
       if (typeof threshold === "number") body.threshold = threshold;
       const data = await mem0Request("/v3/memories/search/", { method: "POST", body });
-      const memories = data.results || data.memories || data || [];
+      let memories = data.results || data.memories || data || [];
+      memories = filterByTags(memories, categories).slice(0, limit);
       if (!memories.length) return { content: [{ type: "text", text: "No memories found matching your query." }] };
       return { content: [{ type: "text", text: memories.map((m) => compactLine(m, { showScore: true })).join("\n") }] };
     }
