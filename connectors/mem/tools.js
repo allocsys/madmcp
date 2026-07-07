@@ -42,11 +42,28 @@
 // to merge and then call mem0_update. This is the deterministic/Tier-1 path
 // from the plan; Tier-2 (similarity-based possible_duplicate_of flagging
 // with no entity_id) is not yet implemented.
+//
+// NOTE on status field (2026-07-07, Part 3 of the anti-bloat plan):
+// mem0_add/mem0_update accept an optional `status` (open/resolved/
+// superseded), stored under metadata.status — same "store in metadata,
+// filter client-side" mechanism as tags/entity_id, for the same reason
+// (Mem0's own fields can't be repurposed for this, and metadata-array/field
+// filter operators aren't reliably documented). mem0_list/mem0_search
+// exclude status="superseded" by default; pass status_filter to override
+// (either to explicitly include "superseded", or to narrow to a specific
+// status like "open"). Memories with no status set are always shown by
+// default — the exclusion only applies to memories explicitly marked
+// superseded. mem0_update can update metadata.status without touching
+// content by fetching the current record first (Mem0's PUT replaces the
+// whole metadata object, so we merge client-side before writing back to
+// avoid clobbering tags/entity_id set at add-time).
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
 import { mem0Request } from "./client.js";
 import { MEM0_USER_ID } from "../../config.js";
+
+const STATUS_VALUES = ["open", "resolved", "superseded"];
 
 // Compact one-line formatter shared by list/search to keep token usage low.
 function compactLine(m, { showScore = false } = {}) {
@@ -54,8 +71,9 @@ function compactLine(m, { showScore = false } = {}) {
   const date = (m.created_at || "").slice(0, 10) || "?";
   const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? ` [${m.metadata.tags.join(",")}]` : "";
   const eid = m.metadata?.entity_id ? ` {${m.metadata.entity_id}}` : "";
+  const status = m.metadata?.status ? ` (${m.metadata.status})` : "";
   const score = showScore && typeof m.score === "number" ? ` (${m.score.toFixed(2)})` : "";
-  return `${m.id} | ${date}${tags}${eid}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
+  return `${m.id} | ${date}${tags}${eid}${status}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
 }
 
 // Keep only memories whose metadata.tags intersects the requested categories.
@@ -63,6 +81,18 @@ function filterByTags(memories, categories) {
   if (!categories?.length) return memories;
   const wanted = new Set(categories);
   return memories.filter((m) => Array.isArray(m.metadata?.tags) && m.metadata.tags.some((t) => wanted.has(t)));
+}
+
+// Default: hide memories explicitly marked superseded. If status_filter is
+// given, narrow to exactly those statuses instead (this is how you'd
+// explicitly ask for superseded ones, or for e.g. only "open").
+// Memories with no status set are never hidden by the default behavior.
+function filterByStatus(memories, status_filter) {
+  if (status_filter?.length) {
+    const wanted = new Set(status_filter);
+    return memories.filter((m) => wanted.has(m.metadata?.status));
+  }
+  return memories.filter((m) => m.metadata?.status !== "superseded");
 }
 
 // Look for an existing memory tagged with this entity_id, scoped the same
@@ -85,19 +115,24 @@ export function register(server) {
     "mem0_list",
     "List recent memories from your Mem0 workspace.",
     {
-      user_id:    z.string().optional().describe(`Mem0 user ID to scope memories (default: ${MEM0_USER_ID})`),
-      limit:      z.number().optional().describe("Number of memories to return (default: 20)"),
-      page:       z.number().optional().describe("Page number for pagination (default: 1)"),
-      categories: z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
-      fields:     z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']"),
+      user_id:        z.string().optional().describe(`Mem0 user ID to scope memories (default: ${MEM0_USER_ID})`),
+      limit:          z.number().optional().describe("Number of memories to return (default: 20)"),
+      page:           z.number().optional().describe("Page number for pagination (default: 1)"),
+      categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
+      status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories, or [\"open\"] to narrow to just open ones."),
+      fields:         z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']"),
     },
-    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, fields }) => {
+    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, status_filter, fields }) => {
       const filters = { user_id };
-      const body = { filters, page, page_size: limit };
+      // Over-fetch a bit since tag/status filtering happens client-side.
+      const needsClientFilter = categories?.length || status_filter?.length || true; // status default-filter always applies
+      const fetchSize = needsClientFilter ? Math.max(limit * 2, limit + 20) : limit;
+      const body = { filters, page, page_size: fetchSize };
       if (fields?.length) body.fields = Array.from(new Set([...fields, "metadata"]));
       const data = await mem0Request("/v3/memories/", { method: "POST", body });
       let memories = data.results || data.memories || data || [];
       memories = filterByTags(memories, categories);
+      memories = filterByStatus(memories, status_filter).slice(0, limit);
       if (!memories.length) return { content: [{ type: "text", text: "No memories found." }] };
       return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
     }
@@ -115,10 +150,11 @@ export function register(server) {
       const cats = Array.isArray(m.categories) && m.categories.length ? `\nCategories: ${m.categories.join(", ")}` : "";
       const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? `\nTags: ${m.metadata.tags.join(", ")}` : "";
       const eid = m.metadata?.entity_id ? `\nEntity ID: ${m.metadata.entity_id}` : "";
+      const status = m.metadata?.status ? `\nStatus: ${m.metadata.status}` : "";
       const meta = m.metadata && Object.keys(m.metadata).length ? `\n\nMetadata:\n${JSON.stringify(m.metadata, null, 2)}` : "";
       const text =
         `ID: ${m.id}\n` +
-        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}\n\n` +
+        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}${status}\n\n` +
         (m.memory || m.text || "(no content)") +
         meta;
       return { content: [{ type: "text", text }] };
@@ -136,10 +172,11 @@ export function register(server) {
       run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
       categories: z.array(z.string()).optional().describe("Optional tags to attach to this memory (e.g. ['manager.js','decisions']) — stored under metadata.tags and used for later tag-filtered list/search, since Mem0's own category classifier can't be overridden per-call"),
       entity_id:  z.string().optional().describe("Optional stable identifier for the fact/entity this memory is about (e.g. 'bug-4', 'nexus-file-naming'). If a memory already exists with this entity_id, mem0_add will NOT create a duplicate — it returns the existing memory's id and content instead, so you can merge old + new content yourself (keeping everything not explicitly contradicted) and call mem0_update. Use this whenever you're recording an update to something you've stored before, rather than adding a fresh mem0_add call."),
+      status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status for this memory (open/resolved/superseded). Left unset by default. Memories marked \"superseded\" are hidden from mem0_list/mem0_search by default."),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'})"),
       infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories."),
     },
-    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, metadata, infer = false }) => {
+    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false }) => {
       if (entity_id) {
         const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
         if (existing) {
@@ -162,6 +199,7 @@ export function register(server) {
       const meta = { ...metadata };
       if (categories?.length) meta.tags = categories;
       if (entity_id) meta.entity_id = entity_id;
+      if (status) meta.status = status;
       if (Object.keys(meta).length) body.metadata = meta;
       const data = await mem0Request("/v3/memories/add/", { method: "POST", body });
       const eventId = data.event_id || data.id;
@@ -188,12 +226,13 @@ export function register(server) {
         run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
         categories: z.array(z.string()).optional().describe("Optional tags for this memory — stored under metadata.tags (see mem0_add for why)"),
         entity_id:  z.string().optional().describe("Optional stable identifier for this fact/entity — see mem0_add. If a memory already exists for it, this item is skipped (not duplicated) and the existing id + content is reported instead."),
+        status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status (open/resolved/superseded) — see mem0_add."),
         metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
         infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
       })).min(1).describe("List of memories to add"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, metadata, infer = false }) => {
+      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false }) => {
         if (entity_id) {
           const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
           if (existing) {
@@ -206,6 +245,7 @@ export function register(server) {
         const meta = { ...metadata };
         if (categories?.length) meta.tags = categories;
         if (entity_id) meta.entity_id = entity_id;
+        if (status) meta.status = status;
         if (Object.keys(meta).length) body.metadata = meta;
         return mem0Request("/v3/memories/add/", { method: "POST", body });
       }));
@@ -229,24 +269,27 @@ export function register(server) {
     "mem0_search",
     "Search memories in your Mem0 workspace using hybrid semantic + keyword retrieval.",
     {
-      query:      z.string().describe("Search query string"),
-      user_id:    z.string().optional().describe(`Mem0 user ID to scope search (default: ${MEM0_USER_ID})`),
-      limit:      z.number().optional().describe("Number of results to return (default: 10)"),
-      categories: z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
-      rerank:     z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval (default: false). Improves precision for ambiguous queries at some latency cost."),
-      threshold:  z.number().optional().describe("Optional minimum relevance score (0-1) — results below this are dropped"),
+      query:          z.string().describe("Search query string"),
+      user_id:        z.string().optional().describe(`Mem0 user ID to scope search (default: ${MEM0_USER_ID})`),
+      limit:          z.number().optional().describe("Number of results to return (default: 10)"),
+      categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
+      status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories."),
+      rerank:         z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval (default: false). Improves precision for ambiguous queries at some latency cost."),
+      threshold:      z.number().optional().describe("Optional minimum relevance score (0-1) — results below this are dropped"),
     },
-    async ({ query, user_id = MEM0_USER_ID, limit = 10, categories, rerank, threshold }) => {
+    async ({ query, user_id = MEM0_USER_ID, limit = 10, categories, status_filter, rerank, threshold }) => {
       const filters = { user_id };
-      // Over-fetch a bit when tag-filtering client-side, so filtering doesn't
-      // starve the result set down below what the caller asked for.
-      const fetchLimit = categories?.length ? Math.max(limit * 3, limit + 20) : limit;
+      // Over-fetch since tag/status filtering happens client-side (status
+      // default-exclusion of "superseded" always applies, so always over-fetch
+      // a bit even with no explicit categories/status_filter given).
+      const fetchLimit = Math.max(limit * 3, limit + 20);
       const body = { query, filters, top_k: fetchLimit };
       if (rerank) body.rerank = true;
       if (typeof threshold === "number") body.threshold = threshold;
       const data = await mem0Request("/v3/memories/search/", { method: "POST", body });
       let memories = data.results || data.memories || data || [];
-      memories = filterByTags(memories, categories).slice(0, limit);
+      memories = filterByTags(memories, categories);
+      memories = filterByStatus(memories, status_filter).slice(0, limit);
       if (!memories.length) return { content: [{ type: "text", text: "No memories found matching your query." }] };
       return { content: [{ type: "text", text: memories.map((m) => compactLine(m, { showScore: true })).join("\n") }] };
     }
@@ -255,17 +298,32 @@ export function register(server) {
   // ── Update memory ────────────────────────────────────────────────────────
   server.tool(
     "mem0_update",
-    "Update (overwrite) the content of an existing Mem0 memory by ID.",
+    "Update an existing Mem0 memory by ID: replace its content, change its status, or both. At least one of content/status must be given.",
     {
       memory_id: z.string().describe("The memory ID to update"),
-      content:   z.string().describe("New content for the memory (replaces existing content)"),
+      content:   z.string().optional().describe("New content for the memory (replaces existing content). Omit to change only the status."),
+      status:    z.enum(STATUS_VALUES).optional().describe("New lifecycle status (open/resolved/superseded) for this memory. Omit to leave status unchanged. Existing tags/entity_id/other metadata are preserved regardless."),
     },
-    async ({ memory_id, content }) => {
-      const data = await mem0Request(`/v1/memories/${memory_id}/`, {
-        method: "PUT",
-        body: { text: content },
-      });
-      return { content: [{ type: "text", text: `Updated memory (ID: ${data.id || memory_id}).\nUpdated: ${data.updated_at?.slice(0, 10) || "unknown"}` }] };
+    async ({ memory_id, content, status }) => {
+      if (content === undefined && status === undefined) {
+        return {
+          content: [{ type: "text", text: "Nothing to update — provide content, status, or both." }],
+          isError: true,
+        };
+      }
+      // Mem0's PUT replaces the whole metadata object, so fetch current
+      // metadata first and merge in the status change client-side, rather
+      // than risk wiping out tags/entity_id set at add-time.
+      const current = await mem0Request(`/v1/memories/${memory_id}/`);
+      const finalText = content !== undefined ? content : (current.memory || current.text || "");
+      const finalMetadata = { ...current.metadata, ...(status !== undefined ? { status } : {}) };
+      const body = { text: finalText };
+      if (Object.keys(finalMetadata).length) body.metadata = finalMetadata;
+      const data = await mem0Request(`/v1/memories/${memory_id}/`, { method: "PUT", body });
+      const parts = [];
+      if (content !== undefined) parts.push("content updated");
+      if (status !== undefined) parts.push(`status set to "${status}"`);
+      return { content: [{ type: "text", text: `Updated memory (ID: ${data.id || memory_id}) — ${parts.join(", ")}.\nUpdated: ${data.updated_at?.slice(0, 10) || "unknown"}` }] };
     }
   );
 
