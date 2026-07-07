@@ -57,6 +57,14 @@
 // content by fetching the current record first (Mem0's PUT replaces the
 // whole metadata object, so we merge client-side before writing back to
 // avoid clobbering tags/entity_id set at add-time).
+//
+// NOTE on version history (2026-07-07, Part 4 of the anti-bloat plan):
+// mem0_get_history is a thin wrapper around Mem0's own
+// GET /v1/memories/{id}/history/ endpoint, which already maintains an
+// audit trail (event type ADD/UPDATE/DELETE, old/new value, timestamp) for
+// every memory. No custom versioning was built — Mem0's native history
+// already satisfies the "don't destructively overwrite" requirement, so
+// this just surfaces it in the same compact format as the other tools.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -158,6 +166,30 @@ export function register(server) {
         (m.memory || m.text || "(no content)") +
         meta;
       return { content: [{ type: "text", text }] };
+    }
+  );
+
+  // ── Get memory version history ───────────────────────────────────────────
+  server.tool(
+    "mem0_get_history",
+    "Get the version/audit history of a specific Mem0 memory by ID — every ADD/UPDATE/DELETE event recorded for it, with old/new values and timestamps. Wraps Mem0's native history endpoint.",
+    {
+      memory_id: z.string().describe("The memory ID (from mem0_list or mem0_search)"),
+    },
+    async ({ memory_id }) => {
+      const data = await mem0Request(`/v1/memories/${memory_id}/history/`);
+      const entries = data.results || data.history || data || [];
+      if (!entries.length) return { content: [{ type: "text", text: "No history found for this memory." }] };
+      const lines = entries.map((h) => {
+        const date = (h.created_at || h.updated_at || "").slice(0, 10) || "?";
+        const event = h.event || h.action || "?";
+        const trunc = (s) => (s || "").slice(0, 70).replace(/\n/g, " ") + ((s || "").length > 70 ? "…" : "");
+        const oldVal = h.prev_value ?? h.old_memory;
+        const newVal = h.new_value ?? h.new_memory;
+        const diff = oldVal || newVal ? ` | ${trunc(oldVal) || "(none)"} → ${trunc(newVal) || "(none)"}` : "";
+        return `${date} [${event}]${diff}`;
+      });
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     }
   );
 
