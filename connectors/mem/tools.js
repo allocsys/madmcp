@@ -28,6 +28,20 @@
 // each result's metadata.tags for overlap with the requested list, since
 // Mem0's server-side metadata-filter operators (eq/contains/ne, top-level
 // keys only) aren't documented to reliably match inside an array field.
+//
+// NOTE on entity_id upsert (2026-07-07, Tier 1 of the anti-bloat plan):
+// mem0_add accepts an optional `entity_id` (e.g. "bug-4"), stored under
+// metadata.entity_id, same mechanism as tags. If a memory already exists
+// for that entity_id (checked via a client-side scan, same reasoning as
+// tags — metadata array/field filtering isn't reliably documented),
+// mem0_add refuses to create a duplicate. It does NOT attempt an automatic
+// text merge itself: merging old + new content correctly (keep everything
+// not explicitly contradicted) is a judgment call that needs an LLM in the
+// loop, and this server has no LLM call of its own. Instead it returns the
+// existing memory's id + full content back to the caller, who is expected
+// to merge and then call mem0_update. This is the deterministic/Tier-1 path
+// from the plan; Tier-2 (similarity-based possible_duplicate_of flagging
+// with no entity_id) is not yet implemented.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -39,8 +53,9 @@ function compactLine(m, { showScore = false } = {}) {
   const preview = (m.memory || m.text || "").slice(0, 90).replace(/\n/g, " ");
   const date = (m.created_at || "").slice(0, 10) || "?";
   const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? ` [${m.metadata.tags.join(",")}]` : "";
+  const eid = m.metadata?.entity_id ? ` {${m.metadata.entity_id}}` : "";
   const score = showScore && typeof m.score === "number" ? ` (${m.score.toFixed(2)})` : "";
-  return `${m.id} | ${date}${tags}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
+  return `${m.id} | ${date}${tags}${eid}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
 }
 
 // Keep only memories whose metadata.tags intersects the requested categories.
@@ -48,6 +63,19 @@ function filterByTags(memories, categories) {
   if (!categories?.length) return memories;
   const wanted = new Set(categories);
   return memories.filter((m) => Array.isArray(m.metadata?.tags) && m.metadata.tags.some((t) => wanted.has(t)));
+}
+
+// Look for an existing memory tagged with this entity_id, scoped the same
+// way the add call would be. Scans up to 100 most recent memories in scope —
+// good enough for a per-project/per-bug entity_id namespace; not a substitute
+// for a real indexed lookup if this scope ever gets huge.
+async function findByEntityId({ user_id, agent_id, run_id, entity_id }) {
+  const filters = { user_id };
+  if (agent_id) filters.agent_id = agent_id;
+  if (run_id) filters.run_id = run_id;
+  const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page: 1, page_size: 100 } });
+  const memories = data.results || data.memories || data || [];
+  return memories.find((m) => m.metadata?.entity_id === entity_id) || null;
 }
 
 export function register(server) {
@@ -86,10 +114,11 @@ export function register(server) {
       const m = await mem0Request(`/v1/memories/${memory_id}/`);
       const cats = Array.isArray(m.categories) && m.categories.length ? `\nCategories: ${m.categories.join(", ")}` : "";
       const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? `\nTags: ${m.metadata.tags.join(", ")}` : "";
+      const eid = m.metadata?.entity_id ? `\nEntity ID: ${m.metadata.entity_id}` : "";
       const meta = m.metadata && Object.keys(m.metadata).length ? `\n\nMetadata:\n${JSON.stringify(m.metadata, null, 2)}` : "";
       const text =
         `ID: ${m.id}\n` +
-        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}\n\n` +
+        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}\n\n` +
         (m.memory || m.text || "(no content)") +
         meta;
       return { content: [{ type: "text", text }] };
@@ -106,15 +135,34 @@ export function register(server) {
       agent_id:   z.string().optional().describe("Optional agent ID for finer-grained scoping (e.g. per-project), in addition to user_id"),
       run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
       categories: z.array(z.string()).optional().describe("Optional tags to attach to this memory (e.g. ['manager.js','decisions']) — stored under metadata.tags and used for later tag-filtered list/search, since Mem0's own category classifier can't be overridden per-call"),
+      entity_id:  z.string().optional().describe("Optional stable identifier for the fact/entity this memory is about (e.g. 'bug-4', 'nexus-file-naming'). If a memory already exists with this entity_id, mem0_add will NOT create a duplicate — it returns the existing memory's id and content instead, so you can merge old + new content yourself (keeping everything not explicitly contradicted) and call mem0_update. Use this whenever you're recording an update to something you've stored before, rather than adding a fresh mem0_add call."),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'})"),
       infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories."),
     },
-    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, metadata, infer = false }) => {
+    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, metadata, infer = false }) => {
+      if (entity_id) {
+        const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
+        if (existing) {
+          return {
+            content: [{
+              type: "text",
+              text:
+                `Not adding — a memory already exists for entity_id "${entity_id}" (id: ${existing.id}). No duplicate was created.\n\n` +
+                `Existing content:\n${existing.memory || existing.text || "(no content)"}\n\n` +
+                `New content you were about to add:\n${content}\n\n` +
+                `Next step: merge these two yourself — keep everything from the existing content that the new content doesn't explicitly contradict — then call mem0_update with memory_id="${existing.id}" and the merged text.`,
+            }],
+          };
+        }
+      }
       const messages = [{ role: "user", content }];
       const body = { messages, user_id, infer };
       if (agent_id) body.agent_id = agent_id;
       if (run_id) body.run_id = run_id;
-      if (categories?.length || metadata) body.metadata = { ...metadata, ...(categories?.length ? { tags: categories } : {}) };
+      const meta = { ...metadata };
+      if (categories?.length) meta.tags = categories;
+      if (entity_id) meta.entity_id = entity_id;
+      if (Object.keys(meta).length) body.metadata = meta;
       const data = await mem0Request("/v3/memories/add/", { method: "POST", body });
       const eventId = data.event_id || data.id;
       return {
@@ -139,21 +187,34 @@ export function register(server) {
         agent_id:   z.string().optional().describe("Optional agent ID for finer-grained scoping"),
         run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
         categories: z.array(z.string()).optional().describe("Optional tags for this memory — stored under metadata.tags (see mem0_add for why)"),
+        entity_id:  z.string().optional().describe("Optional stable identifier for this fact/entity — see mem0_add. If a memory already exists for it, this item is skipped (not duplicated) and the existing id + content is reported instead."),
         metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
         infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
       })).min(1).describe("List of memories to add"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map(({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, metadata, infer = false }) => {
+      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, metadata, infer = false }) => {
+        if (entity_id) {
+          const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
+          if (existing) {
+            return { skipped: true, entity_id, existingId: existing.id, existingContent: existing.memory || existing.text || "(no content)" };
+          }
+        }
         const body = { messages: [{ role: "user", content }], user_id, infer };
         if (agent_id) body.agent_id = agent_id;
         if (run_id) body.run_id = run_id;
-        if (categories?.length || metadata) body.metadata = { ...metadata, ...(categories?.length ? { tags: categories } : {}) };
+        const meta = { ...metadata };
+        if (categories?.length) meta.tags = categories;
+        if (entity_id) meta.entity_id = entity_id;
+        if (Object.keys(meta).length) body.metadata = meta;
         return mem0Request("/v3/memories/add/", { method: "POST", body });
       }));
       const lines = results.map((r, i) => {
         const title = (items[i].content || "").split("\n")[0].slice(0, 60);
         if (r.status === "fulfilled") {
+          if (r.value?.skipped) {
+            return `⏭ [${i}] "${title}" — skipped, entity_id "${r.value.entity_id}" already exists (id: ${r.value.existingId}). Merge and call mem0_update yourself if this content adds anything new.`;
+          }
           const eventId = r.value.event_id || r.value.id || "ok";
           return `✓ [${i}] "${title}" — event_id: ${eventId}`;
         }
