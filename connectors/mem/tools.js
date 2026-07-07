@@ -40,8 +40,7 @@
 // loop, and this server has no LLM call of its own. Instead it returns the
 // existing memory's id + full content back to the caller, who is expected
 // to merge and then call mem0_update. This is the deterministic/Tier-1 path
-// from the plan; Tier-2 (similarity-based possible_duplicate_of flagging
-// with no entity_id) is not yet implemented.
+// from the plan.
 //
 // NOTE on status field (2026-07-07, Part 3 of the anti-bloat plan):
 // mem0_add/mem0_update accept an optional `status` (open/resolved/
@@ -65,6 +64,22 @@
 // every memory. No custom versioning was built — Mem0's native history
 // already satisfies the "don't destructively overwrite" requirement, so
 // this just surfaces it in the same compact format as the other tools.
+//
+// NOTE on Tier 2 duplicate flagging (2026-07-07, Part 2 of the anti-bloat plan):
+// mem0_add/mem0_add_batch, when NOT given an entity_id (entity_id already
+// gets exact-match handling via findByEntityId/Tier 1), run a similarity
+// check via Mem0's own /v3/memories/search/ (with rerank:true for
+// precision) against the new content, scoped the same way the add is.
+// Deliberately non-blocking: unlike a true duplicate this can't be known
+// for certain without an LLM merge judgment (same reasoning as Tier 1), so
+// the memory is still added, but any candidate scoring at or above
+// duplicate_threshold (default 0.75, tunable per call) is recorded under
+// metadata.possible_duplicate_of (array of candidate IDs) and surfaced as a
+// warning in the tool response. Callers can skip the extra search call
+// entirely via skip_duplicate_check (e.g. for bulk/import scenarios where
+// latency matters more). mem0_list gained flagged_duplicates_only to
+// surface these for the Part 5 periodic consolidation pass; mem0_get and
+// compactLine both show a "⚠dup" indicator when the flag is present.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -80,8 +95,9 @@ function compactLine(m, { showScore = false } = {}) {
   const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? ` [${m.metadata.tags.join(",")}]` : "";
   const eid = m.metadata?.entity_id ? ` {${m.metadata.entity_id}}` : "";
   const status = m.metadata?.status ? ` (${m.metadata.status})` : "";
+  const dup = Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length ? " ⚠dup" : "";
   const score = showScore && typeof m.score === "number" ? ` (${m.score.toFixed(2)})` : "";
-  return `${m.id} | ${date}${tags}${eid}${status}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
+  return `${m.id} | ${date}${tags}${eid}${status}${dup}${score} | ${preview}${preview.length >= 90 ? "…" : ""}`;
 }
 
 // Keep only memories whose metadata.tags intersects the requested categories.
@@ -103,6 +119,14 @@ function filterByStatus(memories, status_filter) {
   return memories.filter((m) => m.metadata?.status !== "superseded");
 }
 
+// Keep only memories flagged at add-time as possible duplicates of another
+// memory (metadata.possible_duplicate_of non-empty) — see mem0_list's
+// flagged_duplicates_only param, meant for a periodic consolidation pass.
+function filterFlaggedDuplicates(memories, flaggedOnly) {
+  if (!flaggedOnly) return memories;
+  return memories.filter((m) => Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length);
+}
+
 // Look for an existing memory tagged with this entity_id, scoped the same
 // way the add call would be. Scans up to 100 most recent memories in scope —
 // good enough for a per-project/per-bug entity_id namespace; not a substitute
@@ -114,6 +138,23 @@ async function findByEntityId({ user_id, agent_id, run_id, entity_id }) {
   const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page: 1, page_size: 100 } });
   const memories = data.results || data.memories || data || [];
   return memories.find((m) => m.metadata?.entity_id === entity_id) || null;
+}
+
+// Tier 2: search for existing memories similar to new content (used when no
+// entity_id was given, since entity_id already gets exact-match handling
+// above). Uses Mem0's own hybrid search with reranking for precision rather
+// than any custom similarity logic — this server has no LLM/embedding call
+// of its own, so it leans on Mem0's engine the same way mem0_search does.
+// Excludes superseded memories from candidacy (a superseded memory being
+// similar to a new one isn't useful to flag).
+async function findPossibleDuplicates({ user_id, agent_id, run_id, content, threshold, limit = 3 }) {
+  const filters = { user_id };
+  if (agent_id) filters.agent_id = agent_id;
+  if (run_id) filters.run_id = run_id;
+  const data = await mem0Request("/v3/memories/search/", { method: "POST", body: { query: content, filters, top_k: limit, rerank: true } });
+  let memories = data.results || data.memories || data || [];
+  memories = filterByStatus(memories, undefined);
+  return memories.filter((m) => typeof m.score === "number" && m.score >= threshold);
 }
 
 export function register(server) {
@@ -129,18 +170,20 @@ export function register(server) {
       categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
       status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories, or [\"open\"] to narrow to just open ones."),
       fields:         z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']"),
+      flagged_duplicates_only: z.boolean().optional().describe("If true, only return memories flagged at add-time as possible duplicates of another memory (metadata.possible_duplicate_of non-empty) — useful for a periodic consolidation pass (Part 5 of the anti-bloat plan)."),
     },
-    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, status_filter, fields }) => {
+    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, status_filter, fields, flagged_duplicates_only }) => {
       const filters = { user_id };
       // Over-fetch a bit since tag/status filtering happens client-side.
-      const needsClientFilter = categories?.length || status_filter?.length || true; // status default-filter always applies
+      const needsClientFilter = categories?.length || status_filter?.length || flagged_duplicates_only || true; // status default-filter always applies
       const fetchSize = needsClientFilter ? Math.max(limit * 2, limit + 20) : limit;
       const body = { filters, page, page_size: fetchSize };
       if (fields?.length) body.fields = Array.from(new Set([...fields, "metadata"]));
       const data = await mem0Request("/v3/memories/", { method: "POST", body });
       let memories = data.results || data.memories || data || [];
       memories = filterByTags(memories, categories);
-      memories = filterByStatus(memories, status_filter).slice(0, limit);
+      memories = filterByStatus(memories, status_filter);
+      memories = filterFlaggedDuplicates(memories, flagged_duplicates_only).slice(0, limit);
       if (!memories.length) return { content: [{ type: "text", text: "No memories found." }] };
       return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
     }
@@ -159,10 +202,11 @@ export function register(server) {
       const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? `\nTags: ${m.metadata.tags.join(", ")}` : "";
       const eid = m.metadata?.entity_id ? `\nEntity ID: ${m.metadata.entity_id}` : "";
       const status = m.metadata?.status ? `\nStatus: ${m.metadata.status}` : "";
+      const dup = Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length ? `\nPossible duplicate of: ${m.metadata.possible_duplicate_of.join(", ")}` : "";
       const meta = m.metadata && Object.keys(m.metadata).length ? `\n\nMetadata:\n${JSON.stringify(m.metadata, null, 2)}` : "";
       const text =
         `ID: ${m.id}\n` +
-        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}${status}\n\n` +
+        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}${status}${dup}\n\n` +
         (m.memory || m.text || "(no content)") +
         meta;
       return { content: [{ type: "text", text }] };
@@ -207,8 +251,10 @@ export function register(server) {
       status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status for this memory (open/resolved/superseded). Left unset by default. Memories marked \"superseded\" are hidden from mem0_list/mem0_search by default."),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'})"),
       infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories."),
+      skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check against existing memories (only relevant when no entity_id is given). Default: false — the check runs automatically. Set true for bulk/import scenarios where the extra search call's latency isn't worth it."),
+      duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) for an existing memory to be flagged as a possible duplicate of this one. Default: 0.75. Only used when entity_id is not given and skip_duplicate_check is false."),
     },
-    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false }) => {
+    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
       if (entity_id) {
         const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
         if (existing) {
@@ -224,23 +270,34 @@ export function register(server) {
           };
         }
       }
-      const messages = [{ role: "user", content }];
-      const body = { messages, user_id, infer };
-      if (agent_id) body.agent_id = agent_id;
-      if (run_id) body.run_id = run_id;
+      let duplicateWarning = "";
       const meta = { ...metadata };
       if (categories?.length) meta.tags = categories;
       if (entity_id) meta.entity_id = entity_id;
       if (status) meta.status = status;
+      if (!entity_id && !skip_duplicate_check) {
+        const candidates = await findPossibleDuplicates({ user_id, agent_id, run_id, content, threshold: duplicate_threshold });
+        if (candidates.length) {
+          meta.possible_duplicate_of = candidates.map((c) => c.id);
+          duplicateWarning =
+            `\n\n⚠ Possible duplicate(s) found — added anyway (not blocked), flagged for review:\n` +
+            candidates.map((c) => `  ${c.id} (score ${c.score.toFixed(2)}): ${(c.memory || c.text || "").slice(0, 70)}`).join("\n") +
+            `\nCheck with mem0_get; if it's a real duplicate, merge via mem0_update and mark the stale one status="superseded".`;
+        }
+      }
+      const messages = [{ role: "user", content }];
+      const body = { messages, user_id, infer };
+      if (agent_id) body.agent_id = agent_id;
+      if (run_id) body.run_id = run_id;
       if (Object.keys(meta).length) body.metadata = meta;
       const data = await mem0Request("/v3/memories/add/", { method: "POST", body });
       const eventId = data.event_id || data.id;
       return {
         content: [{
           type: "text",
-          text: eventId
+          text: (eventId
             ? `Memory extraction started (event_id: ${eventId}). Mem0 will process and store the relevant facts asynchronously.`
-            : `Memory added: ${JSON.stringify(data)}`,
+            : `Memory added: ${JSON.stringify(data)}`) + duplicateWarning,
         }],
       };
     }
@@ -261,25 +318,36 @@ export function register(server) {
         status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status (open/resolved/superseded) — see mem0_add."),
         metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
         infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
+        skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check for this item (only relevant when no entity_id is given). Default: false."),
+        duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) to flag an existing memory as a possible duplicate of this item. Default: 0.75."),
       })).min(1).describe("List of memories to add"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false }) => {
+      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
         if (entity_id) {
           const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
           if (existing) {
             return { skipped: true, entity_id, existingId: existing.id, existingContent: existing.memory || existing.text || "(no content)" };
           }
         }
-        const body = { messages: [{ role: "user", content }], user_id, infer };
-        if (agent_id) body.agent_id = agent_id;
-        if (run_id) body.run_id = run_id;
         const meta = { ...metadata };
         if (categories?.length) meta.tags = categories;
         if (entity_id) meta.entity_id = entity_id;
         if (status) meta.status = status;
+        let duplicatesFlagged = null;
+        if (!entity_id && !skip_duplicate_check) {
+          const candidates = await findPossibleDuplicates({ user_id, agent_id, run_id, content, threshold: duplicate_threshold });
+          if (candidates.length) {
+            meta.possible_duplicate_of = candidates.map((c) => c.id);
+            duplicatesFlagged = candidates.map((c) => c.id);
+          }
+        }
+        const body = { messages: [{ role: "user", content }], user_id, infer };
+        if (agent_id) body.agent_id = agent_id;
+        if (run_id) body.run_id = run_id;
         if (Object.keys(meta).length) body.metadata = meta;
-        return mem0Request("/v3/memories/add/", { method: "POST", body });
+        const result = await mem0Request("/v3/memories/add/", { method: "POST", body });
+        return { ...result, duplicatesFlagged };
       }));
       const lines = results.map((r, i) => {
         const title = (items[i].content || "").split("\n")[0].slice(0, 60);
@@ -288,7 +356,8 @@ export function register(server) {
             return `⏭ [${i}] "${title}" — skipped, entity_id "${r.value.entity_id}" already exists (id: ${r.value.existingId}). Merge and call mem0_update yourself if this content adds anything new.`;
           }
           const eventId = r.value.event_id || r.value.id || "ok";
-          return `✓ [${i}] "${title}" — event_id: ${eventId}`;
+          const dupNote = r.value.duplicatesFlagged?.length ? ` ⚠ flagged as possible duplicate of ${r.value.duplicatesFlagged.join(", ")}` : "";
+          return `✓ [${i}] "${title}" — event_id: ${eventId}${dupNote}`;
         }
         return `✗ [${i}] "${title}" — error: ${r.reason?.message || r.reason}`;
       });
