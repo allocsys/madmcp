@@ -168,20 +168,23 @@ async function findPossibleDuplicates({ user_id, agent_id, run_id, content, thre
 // since infer:false — the default — stores content unchanged; a caller
 // using infer:true won't get a reliable match here since Mem0 may have
 // rephrased it, so verification is best-effort in that case).
-async function verifyLanded({ user_id, agent_id, run_id, entity_id, content }, { retries = 4, delayMs = 1200 } = {}) {
+//
+// Deliberately a SINGLE check after one wait, not a bounded retry loop —
+// this only ever costs one extra Mem0 API call per add (reduced 2026-07-10
+// from an up-to-4-attempt loop to cut call volume). A memory that takes
+// longer than the wait to materialize will report as unconfirmed even
+// though it may land moments later; that's an accepted false-negative
+// trade-off since the caller is already told to just re-check manually.
+async function verifyLanded({ user_id, agent_id, run_id, entity_id, content }, { delayMs = 3000 } = {}) {
   const filters = { user_id };
   if (agent_id) filters.agent_id = agent_id;
   if (run_id) filters.run_id = run_id;
-  for (let attempt = 0; attempt < retries; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, delayMs * attempt));
-    const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page: 1, page_size: 20 } });
-    const memories = data.results || data.memories || data || [];
-    const found = memories.find((m) =>
-      entity_id ? m.metadata?.entity_id === entity_id : (m.memory || m.text) === content
-    );
-    if (found) return found;
-  }
-  return null;
+  await new Promise((r) => setTimeout(r, delayMs));
+  const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page: 1, page_size: 20 } });
+  const memories = data.results || data.memories || data || [];
+  return memories.find((m) =>
+    entity_id ? m.metadata?.entity_id === entity_id : (m.memory || m.text) === content
+  ) || null;
 }
 
 export function register(server) {
