@@ -275,6 +275,25 @@ function filterFlaggedDuplicates(memories, flaggedOnly) {
   return memories.filter((m) => Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length);
 }
 
+// REGRESSION FIX (2026-07-13, see manufact-mem0-relations-plan): the
+// /v3/memories/ list endpoint does not reliably surface metadata.relations
+// contents, even though it does reliably surface metadata.entity_id (which
+// is why entity_id matching below still works off list results directly).
+// Confirmed via live repro: a memory's relations array read correctly via
+// /v1/memories/{id}/ single-get, but the same array read off a list-page
+// result had undefined to_entity_id/relation fields. Any caller that needs
+// to trust match.metadata.relations must re-fetch the single record.
+async function fetchSingleForMetadata(listVersion) {
+  try {
+    return await mem0Request(`/v1/memories/${listVersion.id}/`);
+  } catch {
+    // Single-get failed (e.g. deleted between the list scan and this call)
+    // — fall back to the list version rather than throwing, since callers
+    // can still use it for id/basic fields even if relations is untrustworthy.
+    return listVersion;
+  }
+}
+
 // Look for an existing memory tagged with this entity_id, scoped the same
 // way the add call would be. Paginates through up to 1000 most recent
 // memories in scope (10 pages of 100) rather than only the first 100 —
@@ -283,6 +302,11 @@ function filterFlaggedDuplicates(memories, flaggedOnly) {
 // memories once a scope grew past 100. Still not a substitute for a real
 // indexed lookup if a scope grows past ~1000 — revisit via D1/graph-DB
 // migration (previously rejected, not permanently) if that ever happens.
+//
+// Once a match is found via the list scan, re-fetches it via single-get
+// (fetchSingleForMetadata) before returning — see REGRESSION FIX note above.
+// This adds one extra API call per successful lookup (not per page scanned),
+// so it's cheap relative to the pagination cost already paid here.
 async function findByEntityId({ user_id, agent_id, run_id, entity_id }) {
   const filters = { user_id };
   if (agent_id) filters.agent_id = agent_id;
@@ -293,7 +317,7 @@ async function findByEntityId({ user_id, agent_id, run_id, entity_id }) {
     const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page, page_size: PAGE_SIZE } });
     const memories = data.results || data.memories || data || [];
     const match = memories.find((m) => m.metadata?.entity_id === entity_id);
-    if (match) return match;
+    if (match) return await fetchSingleForMetadata(match);
     if (memories.length < PAGE_SIZE) break; // reached the last page
   }
   return null;
