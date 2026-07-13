@@ -120,20 +120,27 @@
 // or surfacing relations on mem0_get/mem0_search/mem0_list — that's the
 // read/resolution side, still to be built per the plan.
 //
-// NOTE on clear_duplicate_flag (2026-07-13, closes the Part 5 tooling gap
-// found during a live consolidation pass): mem0_update previously had no
-// way to remove a metadata key outright — it could only merge in a new
-// status or replace the whole relations array, both additive/replace
-// operations, never a delete. That meant a memory flagged
-// possible_duplicate_of at add-time (Tier 2) stayed flagged forever once
-// reviewed, even when the flag turned out to be a false positive (candidate
-// was topically related but not actually duplicate content) or referenced a
-// candidate ID that had since been deleted — both observed on the same
-// flagged memory during the first real Part 5 pass. clear_duplicate_flag
-// deletes metadata.possible_duplicate_of client-side (same fetch-merge-PUT
-// pattern as status/relations) so mem0_list's flagged_duplicates_only
-// actually empties out as a consolidation pass clears each item, rather
-// than accumulating dead flags indefinitely.
+// NOTE on metadata_patch/metadata_delete_keys (2026-07-13, closes the Part 5
+// tooling gap found during a live consolidation pass): mem0_update
+// previously had no way to touch metadata beyond status/relations — it
+// could merge in a new status or replace the whole relations array, both
+// additive/replace operations on specific known fields, but nothing generic.
+// That meant a memory flagged possible_duplicate_of at add-time (Tier 2)
+// stayed flagged forever once reviewed, even when the flag turned out to be
+// a false positive (candidate was topically related but not actually
+// duplicate content) or referenced a candidate ID that had since been
+// deleted — both observed on the same flagged memory during the first real
+// Part 5 pass. Rather than bolt on a single-purpose boolean for just that
+// one field, metadata_patch (shallow-merge arbitrary keys) and
+// metadata_delete_keys (remove arbitrary keys) generalize this the same way
+// mem0_add's own `metadata` param already does on write — so any future
+// custom field can be fixed or cleared without a new tool param each time.
+// clear_duplicate_flag is kept as a thin convenience alias (shorthand for
+// metadata_delete_keys: ['possible_duplicate_of']) since it was the
+// motivating case and reads more clearly for that specific action. Both
+// patch and delete use the same fetch-merge-PUT pattern as status/relations
+// (patch applied first, then deletes, so a key could theoretically be
+// patched and deleted in the same call, though that's not a real use case).
 //
 // NOTE on relations traversal/read-side (2026-07-13, completes
 // manufact-mem0-relations-plan's relational-info step):
