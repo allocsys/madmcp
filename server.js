@@ -1,9 +1,11 @@
 // ---------------------------------------------------------------------------
 // server.js — HTTP server + MCP bootstrap only.
-// To add a new connector: create connectors/<name>/tools.js and register below.
+// To add a new connector: create connectors/<n>/tools.js and register below.
 // ---------------------------------------------------------------------------
 
 import express from "express";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
@@ -40,11 +42,13 @@ function safeEqual(a, b) {
   return mismatch === 0;
 }
 
+// Header-only auth. We intentionally do NOT accept the key as a URL path
+// segment or query param: URLs get written to proxy/CDN/browser logs, so a
+// path-embedded key leaks far more easily than a header ever would.
 function requireMcpKey(req, res, next) {
   if (!MCP_SHARED_KEY) return next();
   const headerKey = req.get("x-manufact-key");
-  const pathKey   = req.params.key;
-  if ((headerKey && safeEqual(headerKey, MCP_SHARED_KEY)) || (pathKey && safeEqual(pathKey, MCP_SHARED_KEY))) {
+  if (headerKey && safeEqual(headerKey, MCP_SHARED_KEY)) {
     return next();
   }
   res.status(401).json({
@@ -55,11 +59,34 @@ function requireMcpKey(req, res, next) {
 }
 
 const app = express();
+
+// Baseline HTTP security headers.
+app.use(helmet());
+
 // Raise body size limit from the 100kb default to 10mb so that push_files
 // and create_or_update_file can handle large source files without truncation.
 app.use(express.json({ limit: "10mb" }));
 
-app.get("/", (_req, res) => {
+// Rate limit the MCP endpoint so a leaked/guessed key (or repeated failed
+// attempts) can't be used to hammer the GitHub/Cloudflare/Notion APIs behind
+// it. Keyed by IP; adjust window/max as traffic patterns become clearer.
+const mcpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    jsonrpc: "2.0",
+    error: { code: -32029, message: "Too many requests, slow down." },
+    id: null,
+  },
+});
+
+// Root status endpoint is now gated behind the same key. Previously this
+// leaked which connectors were configured (github/notion/mem0/cloudflare/
+// auth booleans) to anyone unauthenticated, which is free recon for an
+// attacker probing the server. Health check below stays public/minimal.
+app.get("/", requireMcpKey, (_req, res) => {
   res.json({
     status: "ok",
     service: "manufact-mcp-server",
@@ -74,6 +101,8 @@ app.get("/", (_req, res) => {
   });
 });
 
+// Intentionally minimal and unauthenticated — just confirms the process is up,
+// for load balancer / uptime checks. No configuration details exposed here.
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 async function handleMcp(req, res) {
@@ -90,8 +119,11 @@ async function handleMcp(req, res) {
   }
 }
 
-app.post("/mcp", requireMcpKey, handleMcp);
-app.post("/mcp/:key", requireMcpKey, handleMcp);
+// NOTE: the old /mcp/:key path-parameter route has been removed. Passing a
+// secret as part of a URL path means it ends up in proxy access logs, CDN
+// logs, and potentially browser history — a much larger leak surface than a
+// header. Callers must send the key via the x-manufact-key header.
+app.post("/mcp", mcpLimiter, requireMcpKey, handleMcp);
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
