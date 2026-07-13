@@ -149,6 +149,13 @@ const STATUS_VALUES = ["open", "resolved", "superseded"];
 // but non-blocking, since that range isn't reliably a true duplicate
 // without an LLM merge judgment.
 const BLOCKING_DUPLICATE_THRESHOLD = 0.92;
+// Default depth for relation traversal (mem0_get, include_relations on
+// mem0_search/mem0_list) — matches the plan's 3-hop minimum requirement.
+const RELATION_TRAVERSAL_DEPTH = 3;
+// mem0_search/mem0_list with include_relations only fully resolve/traverse
+// this many top results; the rest show an outgoing-relation count only, to
+// avoid token blowup at 3-hop depth across a whole result page.
+const RELATION_RESOLVE_LIMIT = 5;
 
 // ---------------------------------------------------------------------------
 // Relations helpers (write-side only — see NOTE above)
@@ -216,8 +223,12 @@ async function processRelations(rawRelations, { ownEntityId, user_id, agent_id, 
       continue;
     }
     seen.add(dedupeKey);
-    cleaned.push({ to_entity_id: toNormalized, relation: canonRelation });
     const target = await findByEntityId({ user_id, agent_id, run_id, entity_id: toNormalized });
+    // resolved_at_write persists whether this target was resolvable in-scope
+    // right now, at write time — the read-side resolver (resolveRelationTarget)
+    // uses this later to tell "never existed" (false here) apart from
+    // "deleted since" (true here, but unresolvable when traversal runs).
+    cleaned.push({ to_entity_id: toNormalized, relation: canonRelation, resolved_at_write: !!target });
     if (!target) {
       warnings.push(`Relation "${canonRelation}" -> "${to_entity_id}" flagged dangling-ref — no memory with that entity_id found in scope yet. Stored anyway; this may resolve later, or may reflect a typo.`);
     }
