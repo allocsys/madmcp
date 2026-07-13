@@ -101,6 +101,24 @@
 // mem0_add and mem0_add_batch. skip_duplicate_check still bypasses Tier 2
 // entirely (including this block), for callers who've already judged the
 // content distinct.
+//
+// NOTE on relations (2026-07-13, relational-info step of the anti-bloat plan
+// rev 2 — storage/write-side only, see manufact-mem0-relations-plan):
+// mem0_add/mem0_add_batch/mem0_update accept an optional `relations` array
+// of {to_entity_id, relation}, stored under metadata.relations — same
+// "store in metadata, resolve client-side" mechanism as tags/entity_id/
+// status. Relation strings are canonicalized via a small static lookup map
+// (case/phrasing variants only; unrecognized strings pass through
+// unchanged — no hard enum, per the plan's explicit rejection of a rigid
+// schema). Self-loops (to_entity_id === this memory's own entity_id) are
+// dropped with a warning rather than blocking the whole add/update.
+// Dangling to_entity_id values (no matching entity_id found yet in scope)
+// are flagged non-blocking at write time, same reasoning as the existing
+// dangling-ref-on-add behavior. mem0_update's relations param is a REPLACE
+// of the whole array, not a merge — matching the plan's decided semantics.
+// NOT included in this step: findReferencingEntities, multi-hop traversal,
+// or surfacing relations on mem0_get/mem0_search/mem0_list — that's the
+// read/resolution side, still to be built per the plan.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -116,6 +134,81 @@ const STATUS_VALUES = ["open", "resolved", "superseded"];
 // but non-blocking, since that range isn't reliably a true duplicate
 // without an LLM merge judgment.
 const BLOCKING_DUPLICATE_THRESHOLD = 0.92;
+
+// ---------------------------------------------------------------------------
+// Relations helpers (write-side only — see NOTE above)
+// ---------------------------------------------------------------------------
+
+// Small static lookup for common phrasing/case variants of the same relation
+// — applied at write time so "is blocking" / "blocking" / "Blocks" etc. don't
+// fragment into separate relation types. Unrecognized strings pass through
+// unchanged (no hard enum — relation vocabulary is still being discovered,
+// per the plan's explicit rejection of a rigid schema).
+const RELATION_CANONICALIZATION = {
+  "is blocking": "blocks",
+  "blocking": "blocks",
+  "blocks": "blocks",
+  "is blocked by": "blocked_by",
+  "blocked by": "blocked_by",
+  "blocked_by": "blocked_by",
+  "depends": "depends_on",
+  "depends on": "depends_on",
+  "depends_on": "depends_on",
+  "dependency of": "depends_on",
+  "relates to": "relates_to",
+  "related to": "relates_to",
+  "relates_to": "relates_to",
+};
+
+function canonicalizeRelation(relation) {
+  const key = relation.trim().toLowerCase();
+  return RELATION_CANONICALIZATION[key] || relation.trim();
+}
+
+// trim+lowercase, matching the normalization the plan specifies for both
+// entity_id and to_entity_id so relation lookups aren't case/whitespace
+// sensitive.
+function normalizeEntityId(id) {
+  return (id || "").trim().toLowerCase();
+}
+
+// Clean a raw `relations` param into what actually gets stored:
+//  - normalize to_entity_id
+//  - canonicalize the relation string via the map above
+//  - drop self-loops (to_entity_id === this memory's own entity_id) — warns
+//    and drops rather than hard-failing the whole add/update over one pair
+//  - dedupe on the (to_entity_id, relation) pair within this one array
+//  - flag (non-blocking) any to_entity_id that doesn't resolve in scope via
+//    findByEntityId, same as the existing dangling-ref-on-add behavior
+// Returns { relations, warnings } — relations is the cleaned array to store
+// (possibly empty), warnings is a list of strings to surface in the response.
+async function processRelations(rawRelations, { ownEntityId, user_id, agent_id, run_id }) {
+  const warnings = [];
+  if (!rawRelations?.length) return { relations: [], warnings };
+  const ownNormalized = ownEntityId ? normalizeEntityId(ownEntityId) : null;
+  const seen = new Set();
+  const cleaned = [];
+  for (const { to_entity_id, relation } of rawRelations) {
+    const toNormalized = normalizeEntityId(to_entity_id);
+    const canonRelation = canonicalizeRelation(relation);
+    if (ownNormalized && toNormalized === ownNormalized) {
+      warnings.push(`Relation "${relation}" -> "${to_entity_id}" skipped — self-loop (entity can't relate to itself).`);
+      continue;
+    }
+    const dedupeKey = `${toNormalized}::${canonRelation}`;
+    if (seen.has(dedupeKey)) {
+      warnings.push(`Relation "${canonRelation}" -> "${to_entity_id}" skipped — duplicate within this call.`);
+      continue;
+    }
+    seen.add(dedupeKey);
+    cleaned.push({ to_entity_id: toNormalized, relation: canonRelation });
+    const target = await findByEntityId({ user_id, agent_id, run_id, entity_id: toNormalized });
+    if (!target) {
+      warnings.push(`Relation "${canonRelation}" -> "${to_entity_id}" flagged dangling-ref — no memory with that entity_id found in scope yet. Stored anyway; this may resolve later, or may reflect a typo.`);
+    }
+  }
+  return { relations: cleaned, warnings };
+}
 
 // Compact one-line formatter shared by list/search to keep token usage low.
 function compactLine(m, { showScore = false } = {}) {
@@ -319,12 +412,16 @@ export function register(server) {
       categories: z.array(z.string()).optional().describe("Optional tags to attach to this memory (e.g. ['manager.js','decisions']) — stored under metadata.tags and used for later tag-filtered list/search, since Mem0's own category classifier can't be overridden per-call"),
       entity_id:  z.string().optional().describe("Optional stable identifier for the fact/entity this memory is about (e.g. 'bug-4', 'nexus-file-naming'). BEFORE inventing a new one, search/list for an existing entity on the same topic — entity_id only prevents duplicates when it EXACTLY matches a string used before; a new entity_id for something that already has a different entity_id will NOT be caught by the exact-match check (though it will still get flagged by the Tier 2 similarity check below, so check the response for a possible_duplicate_of warning). If a memory already exists with this exact entity_id, mem0_add will NOT create a duplicate — it returns the existing memory's id and content instead, so you can merge old + new content yourself (keeping everything not explicitly contradicted) and call mem0_update. Use this whenever you're recording an update to something you've stored before, rather than adding a fresh mem0_add call."),
       status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status for this memory (open/resolved/superseded). Left unset by default. Memories marked \"superseded\" are hidden from mem0_list/mem0_search by default."),
+      relations:  z.array(z.object({
+        to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
+        relation: z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' — free text; known synonyms/variants are canonicalized automatically, unrecognized strings pass through unchanged"),
+      })).optional().describe("Optional list of relations from this memory's entity to others, e.g. [{to_entity_id:'bug-4', relation:'blocks'}]. Stored under metadata.relations. Requires this memory's own entity_id to be set for self-loop protection. Dangling to_entity_id values (no matching entity_id found yet) are flagged non-blocking, same as the existing dangling-ref-on-add behavior."),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'})"),
       infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories."),
       skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check against existing memories. Default: false — the check runs automatically, including when entity_id is given but doesn't exactly match anything existing (a new entity_id gets checked too, not just untagged adds). Set true for bulk/import scenarios where the extra search call's latency isn't worth it."),
       duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) for an existing memory to be flagged as a possible duplicate of this one. Default: 0.75. Applies whenever skip_duplicate_check is false, regardless of entity_id. Note: regardless of this value, a candidate scoring >= 0.92 hard-blocks the add entirely (same as an exact entity_id match) rather than just flagging — see mem0_add's description."),
     },
-    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
+    async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, relations, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
       if (entity_id) {
         const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
         if (existing) {
@@ -345,6 +442,12 @@ export function register(server) {
       if (categories?.length) meta.tags = categories;
       if (entity_id) meta.entity_id = entity_id;
       if (status) meta.status = status;
+      let relationWarnings = [];
+      if (relations?.length) {
+        const { relations: cleanedRelations, warnings } = await processRelations(relations, { ownEntityId: entity_id, user_id, agent_id, run_id });
+        if (cleanedRelations.length) meta.relations = cleanedRelations;
+        relationWarnings = warnings;
+      }
       // Runs regardless of entity_id now — see the Tier 2 NOTE above. An
       // exact entity_id match already returned early, so reaching here with
       // entity_id set means it's a *new* entity_id, which still needs this
@@ -384,12 +487,13 @@ export function register(server) {
       const landedNote = landed
         ? ` Confirmed landed (id: ${landed.id}).`
         : `\n\n⚠ Could not confirm this memory landed after several verification attempts — Mem0's async job may have silently failed (see manufact-mem0-add-silent-failure-diagnostic). Re-run mem0_search/mem0_list shortly to check, and retry mem0_add if it's still missing.`;
+      const relationNote = relationWarnings.length ? `\n\n⚠ Relations:\n${relationWarnings.map((w) => `  ${w}`).join("\n")}` : "";
       return {
         content: [{
           type: "text",
           text: (eventId
             ? `Memory extraction started (event_id: ${eventId}).${landedNote}`
-            : `Memory added: ${JSON.stringify(data)}`) + duplicateWarning,
+            : `Memory added: ${JSON.stringify(data)}`) + duplicateWarning + relationNote,
         }],
       };
     }
@@ -408,6 +512,10 @@ export function register(server) {
         categories: z.array(z.string()).optional().describe("Optional tags for this memory — stored under metadata.tags (see mem0_add for why)"),
         entity_id:  z.string().optional().describe("Optional stable identifier for this fact/entity — see mem0_add. If a memory already exists for it, this item is skipped (not duplicated) and the existing id + content is reported instead."),
         status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status (open/resolved/superseded) — see mem0_add."),
+        relations:  z.array(z.object({
+          to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
+          relation: z.string().describe("The relation type — see mem0_add's relations param."),
+        })).optional().describe("Optional list of relations for this item — see mem0_add's relations param."),
         metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
         infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
         skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check for this item (only relevant when no entity_id is given). Default: false."),
@@ -415,7 +523,7 @@ export function register(server) {
       })).min(1).describe("List of memories to add"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
+      const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, relations, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
         if (entity_id) {
           const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
           if (existing) {
@@ -426,6 +534,12 @@ export function register(server) {
         if (categories?.length) meta.tags = categories;
         if (entity_id) meta.entity_id = entity_id;
         if (status) meta.status = status;
+        let relationWarnings = [];
+        if (relations?.length) {
+          const { relations: cleanedRelations, warnings } = await processRelations(relations, { ownEntityId: entity_id, user_id, agent_id, run_id });
+          if (cleanedRelations.length) meta.relations = cleanedRelations;
+          relationWarnings = warnings;
+        }
         let duplicatesFlagged = null;
         // See Tier 2 NOTE above — runs regardless of entity_id, since a *new*
         // entity_id needs semantic dup protection just as much as an untagged add.
@@ -447,7 +561,7 @@ export function register(server) {
         if (Object.keys(meta).length) body.metadata = meta;
         const result = await mem0Request("/v3/memories/add/", { method: "POST", body });
         const landed = await verifyLanded({ user_id, agent_id, run_id, entity_id, content });
-        return { ...result, duplicatesFlagged, landed: !!landed, landedId: landed?.id };
+        return { ...result, duplicatesFlagged, relationWarnings, landed: !!landed, landedId: landed?.id };
       }));
       const lines = results.map((r, i) => {
         const title = (items[i].content || "").split("\n")[0].slice(0, 60);
@@ -460,8 +574,9 @@ export function register(server) {
           }
           const eventId = r.value.event_id || r.value.id || "ok";
           const dupNote = r.value.duplicatesFlagged?.length ? ` ⚠ flagged as possible duplicate of ${r.value.duplicatesFlagged.join(", ")}` : "";
+          const relNote = r.value.relationWarnings?.length ? ` ⚠ relations: ${r.value.relationWarnings.join("; ")}` : "";
           const landedNote = r.value.landed ? ` — confirmed landed (id: ${r.value.landedId})` : ` — ⚠ could not confirm this landed, check manually`;
-          return `✓ [${i}] "${title}" — event_id: ${eventId}${dupNote}${landedNote}`;
+          return `✓ [${i}] "${title}" — event_id: ${eventId}${dupNote}${relNote}${landedNote}`;
         }
         return `✗ [${i}] "${title}" — error: ${r.reason?.message || r.reason}`;
       });
@@ -529,8 +644,12 @@ export function register(server) {
         replace: z.string().describe("String to replace it with"),
       })).optional().describe("List of find-and-replace operations to apply sequentially to the memory's current content, without resending the full body. Each `find` must match exactly once in the content at the time it's applied (fails loudly on zero or multiple matches, same rule as the github str_replace_file tool). Mutually exclusive with `content`."),
       status:    z.enum(STATUS_VALUES).optional().describe("New lifecycle status (open/resolved/superseded) for this memory. Omit to leave status unchanged. Existing tags/entity_id/other metadata are preserved regardless."),
+      relations: z.array(z.object({
+        to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
+        relation: z.string().describe("The relation type — see mem0_add's relations param."),
+      })).optional().describe("New relations for this memory's entity — REPLACES the existing metadata.relations array whole (not merged). Omit to leave relations unchanged. Canonicalized the same way as mem0_add's relations param. Pass an empty array to clear all relations."),
     },
-    async ({ memory_id, content, replacements, status }) => {
+    async ({ memory_id, content, replacements, status, relations }) => {
       if (content === undefined && replacements === undefined && status === undefined) {
         return {
           content: [{ type: "text", text: "Nothing to update — provide content, replacements, status, or a combination of replacements and status." }],
@@ -569,7 +688,14 @@ export function register(server) {
           finalText = finalText.replace(find, replace);
         }
       }
-      const finalMetadata = { ...current.metadata, ...(status !== undefined ? { status } : {}) };
+      let relationWarnings = [];
+      const metadataUpdates = { ...(status !== undefined ? { status } : {}) };
+      if (relations !== undefined) {
+        const { relations: cleanedRelations, warnings } = await processRelations(relations, { ownEntityId: current.metadata?.entity_id, user_id: current.user_id || MEM0_USER_ID, agent_id: current.agent_id, run_id: current.run_id });
+        metadataUpdates.relations = cleanedRelations;
+        relationWarnings = warnings;
+      }
+      const finalMetadata = { ...current.metadata, ...metadataUpdates };
       const body = { text: finalText };
       if (Object.keys(finalMetadata).length) body.metadata = finalMetadata;
       const data = await mem0Request(`/v1/memories/${memory_id}/`, { method: "PUT", body });
@@ -577,7 +703,9 @@ export function register(server) {
       if (content !== undefined) parts.push("content replaced in full");
       if (replacements !== undefined) parts.push(`${replacements.length} targeted edit${replacements.length === 1 ? "" : "s"} applied`);
       if (status !== undefined) parts.push(`status set to "${status}"`);
-      return { content: [{ type: "text", text: `Updated memory (ID: ${data.id || memory_id}) — ${parts.join(", ")}.\nUpdated: ${data.updated_at?.slice(0, 10) || "unknown"}` }] };
+      if (relations !== undefined) parts.push(`relations replaced (${metadataUpdates.relations.length} stored)`);
+      const relationNote = relationWarnings.length ? `\n\n⚠ Relations:\n${relationWarnings.map((w) => `  ${w}`).join("\n")}` : "";
+      return { content: [{ type: "text", text: `Updated memory (ID: ${data.id || memory_id}) — ${parts.join(", ")}.\nUpdated: ${data.updated_at?.slice(0, 10) || "unknown"}${relationNote}` }] };
     }
   );
 
