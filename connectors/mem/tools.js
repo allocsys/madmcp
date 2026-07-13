@@ -351,6 +351,18 @@ async function findByEntityIdAnyScope({ user_id, entity_id }) {
 // scope for a relations entry whose to_entity_id matches, rather than a
 // single direct lookup. Returns [{ fromEntityId, fromId, relation }, ...].
 // Same ~1000-memory-per-scope pagination ceiling as findByEntityId.
+//
+// REGRESSION FIX (2026-07-13, see manufact-mem0-relations-plan and the note
+// above findByEntityId): list-page results can't be trusted for
+// metadata.relations, so every candidate in every page gets refetched via
+// fetchSingleForMetadata (single-get) before its relations are inspected.
+// This is a real N+1 cost — up to one /v1/memories/{id}/ call per memory
+// scanned, not just per eventual match, since there's no way to tell from
+// the list result alone which memories even have relations set. Fetched in
+// parallel per page via Promise.all to keep it to one round of latency per
+// page rather than serial. Acceptable at current scale (same ~100/page,
+// ~1000/scope ceiling as everything else here); revisit if this traversal
+// path becomes a real bottleneck.
 async function findReferencingEntities({ user_id, agent_id, run_id, entity_id }) {
   const filters = { user_id };
   if (agent_id) filters.agent_id = agent_id;
@@ -361,7 +373,8 @@ async function findReferencingEntities({ user_id, agent_id, run_id, entity_id })
   for (let page = 1; page <= MAX_PAGES; page++) {
     const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page, page_size: PAGE_SIZE } });
     const memories = data.results || data.memories || data || [];
-    for (const m of memories) {
+    const fullRecords = await Promise.all(memories.map((m) => fetchSingleForMetadata(m)));
+    for (const m of fullRecords) {
       const rels = Array.isArray(m.metadata?.relations) ? m.metadata.relations : [];
       for (const rel of rels) {
         if (rel.to_entity_id === entity_id) {
