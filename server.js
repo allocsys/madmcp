@@ -98,7 +98,9 @@ function isInitializeRequest(req) {
 
 function requireAllowedIp(req, res, next) {
   if (!IP_ALLOWLIST_ENABLED) return next();
-  if (isInitializeRequest(req)) return next();
+  // TEMP DISABLED for testing whether the requireMcpKey-before-requireAllowedIp
+  // reorder alone is enough to pass deploy health checks. See commit 0326509.
+  // if (isInitializeRequest(req)) return next();
   const ip = getClientIp(req);
   const allowed = ip && ALLOWED_IP_RANGES.some((cidr) => isIpInCidr(ip, cidr));
   if (allowed) return next();
@@ -116,7 +118,9 @@ function requireAllowedIp(req, res, next) {
 // Prefer the header for any client that does support it.
 function requireMcpKey(req, res, next) {
   if (!MCP_SHARED_KEY) return next();
-  if (isInitializeRequest(req)) return next();
+  // TEMP DISABLED for testing whether the requireMcpKey-before-requireAllowedIp
+  // reorder alone is enough to pass deploy health checks. See commit 0326509.
+  // if (isInitializeRequest(req)) return next();
   const headerKey = req.get("x-manufact-key");
   const pathKey   = req.params.key;
   if ((headerKey && safeEqual(headerKey, MCP_SHARED_KEY)) || (pathKey && safeEqual(pathKey, MCP_SHARED_KEY))) {
