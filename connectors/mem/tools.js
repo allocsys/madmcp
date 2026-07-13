@@ -507,8 +507,9 @@ export function register(server) {
       status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories, or [\"open\"] to narrow to just open ones."),
       fields:         z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']"),
       flagged_duplicates_only: z.boolean().optional().describe("If true, only return memories flagged at add-time as possible duplicates of another memory (metadata.possible_duplicate_of non-empty) — useful for a periodic consolidation pass (Part 5 of the anti-bloat plan)."),
+      include_relations: z.boolean().optional().describe(`Default: false. If true, resolve and show each memory's related entities (up to ${RELATION_TRAVERSAL_DEPTH} hops, both outgoing and incoming) — but only for the top ${RELATION_RESOLVE_LIMIT} results by rank, to avoid a full multi-hop resolution cost across the whole page. Remaining results show an outgoing-relation count only. Unresolved targets are labeled deleted / not found / different scope rather than left blank.`),
     },
-    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, status_filter, fields, flagged_duplicates_only }) => {
+    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, status_filter, fields, flagged_duplicates_only, include_relations = false }) => {
       const filters = { user_id };
       // Over-fetch a bit since tag/status filtering happens client-side.
       const needsClientFilter = categories?.length || status_filter?.length || flagged_duplicates_only || true; // status default-filter always applies
@@ -521,7 +522,15 @@ export function register(server) {
       memories = filterByStatus(memories, status_filter);
       memories = filterFlaggedDuplicates(memories, flagged_duplicates_only).slice(0, limit);
       if (!memories.length) return { content: [{ type: "text", text: "No memories found." }] };
-      return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
+      if (!include_relations) {
+        return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
+      }
+      const lines = [];
+      for (let i = 0; i < memories.length; i++) {
+        const suffix = await buildRelationsSuffix(memories[i], i, { user_id });
+        lines.push(compactLine(memories[i]) + suffix);
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     }
   );
 
