@@ -120,6 +120,21 @@
 // or surfacing relations on mem0_get/mem0_search/mem0_list — that's the
 // read/resolution side, still to be built per the plan.
 //
+// NOTE on clear_duplicate_flag (2026-07-13, closes the Part 5 tooling gap
+// found during a live consolidation pass): mem0_update previously had no
+// way to remove a metadata key outright — it could only merge in a new
+// status or replace the whole relations array, both additive/replace
+// operations, never a delete. That meant a memory flagged
+// possible_duplicate_of at add-time (Tier 2) stayed flagged forever once
+// reviewed, even when the flag turned out to be a false positive (candidate
+// was topically related but not actually duplicate content) or referenced a
+// candidate ID that had since been deleted — both observed on the same
+// flagged memory during the first real Part 5 pass. clear_duplicate_flag
+// deletes metadata.possible_duplicate_of client-side (same fetch-merge-PUT
+// pattern as status/relations) so mem0_list's flagged_duplicates_only
+// actually empties out as a consolidation pass clears each item, rather
+// than accumulating dead flags indefinitely.
+//
 // NOTE on relations traversal/read-side (2026-07-13, completes
 // manufact-mem0-relations-plan's relational-info step):
 // Adds findReferencingEntities (reverse lookup — who points AT this
@@ -863,7 +878,7 @@ export function register(server) {
   // Mutually exclusive with `content`: pick one mode per call.
   server.tool(
     "mem0_update",
-    "Update an existing Mem0 memory by ID: replace its content (in full, or via targeted find/replace edits), change its status, or both. At least one of content/replacements/status must be given. `content` and `replacements` are mutually exclusive — use `replacements` for small edits to avoid resending the whole memory body.",
+    "Update an existing Mem0 memory by ID: replace its content (in full, or via targeted find/replace edits), change its status, change its relations, clear a stale possible_duplicate_of flag, or any combination. At least one of content/replacements/status/relations/clear_duplicate_flag must be given. `content` and `replacements` are mutually exclusive — use `replacements` for small edits to avoid resending the whole memory body.",
     {
       memory_id: z.string().describe("The memory ID to update"),
       content:   z.string().optional().describe("New content for the memory (replaces existing content in full). Omit to change only the status, or use `replacements` for a targeted edit instead. Mutually exclusive with `replacements`."),
