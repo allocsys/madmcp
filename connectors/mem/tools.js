@@ -425,21 +425,25 @@ export function register(server) {
     {
       query:          z.string().describe("Search query string"),
       user_id:        z.string().optional().describe(`Mem0 user ID to scope search (default: ${MEM0_USER_ID})`),
+      agent_id:       z.string().optional().describe("Optional agent ID to scope search (e.g. per-project), in addition to user_id. Scoping at query time — not just at write time — meaningfully improves precision by excluding irrelevant projects/entities from the candidate pool before ranking even starts."),
+      run_id:         z.string().optional().describe("Optional run/session ID to scope search, in addition to user_id."),
       limit:          z.number().optional().describe("Number of results to return (default: 10)"),
       categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
       status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories."),
-      rerank:         z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval (default: false). Improves precision for ambiguous queries at some latency cost."),
-      threshold:      z.number().optional().describe("Optional minimum relevance score (0-1) — results below this are dropped"),
+      rerank:         z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval. Default: true — reranking meaningfully improves precision and is now the connector default rather than opt-in; pass false to skip it if latency matters more than precision for a given call."),
+      threshold:      z.number().optional().describe("Minimum relevance score (0-1) — results below this are dropped. Default: 0.35 (raised from Mem0 v3's own default of 0.1, which let through too much low-relevance noise). Pass 0 explicitly to disable filtering and see everything Mem0 returns."),
     },
-    async ({ query, user_id = MEM0_USER_ID, limit = 10, categories, status_filter, rerank, threshold }) => {
+    async ({ query, user_id = MEM0_USER_ID, agent_id, run_id, limit = 10, categories, status_filter, rerank = true, threshold = 0.35 }) => {
       const filters = { user_id };
+      if (agent_id) filters.agent_id = agent_id;
+      if (run_id) filters.run_id = run_id;
       // Over-fetch since tag/status filtering happens client-side (status
       // default-exclusion of "superseded" always applies, so always over-fetch
       // a bit even with no explicit categories/status_filter given).
       const fetchLimit = Math.max(limit * 3, limit + 20);
       const body = { query, filters, top_k: fetchLimit };
       if (rerank) body.rerank = true;
-      if (typeof threshold === "number") body.threshold = threshold;
+      if (threshold > 0) body.threshold = threshold;
       const data = await mem0Request("/v3/memories/search/", { method: "POST", body });
       let memories = data.results || data.memories || data || [];
       memories = filterByTags(memories, categories);
