@@ -119,6 +119,21 @@
 // NOT included in this step: findReferencingEntities, multi-hop traversal,
 // or surfacing relations on mem0_get/mem0_search/mem0_list — that's the
 // read/resolution side, still to be built per the plan.
+//
+// NOTE on relations traversal/read-side (2026-07-13, completes
+// manufact-mem0-relations-plan's relational-info step):
+// Adds findReferencingEntities (reverse lookup — who points AT this
+// entity_id, since relations are stored one-directional on the source
+// memory only), a resolveRelationTarget helper that distinguishes three
+// cases for an unresolved to_entity_id instead of a blank/not-found result
+// (never_existed / deleted / wrong_scope — see resolveRelationTarget's own
+// comment for how "deleted" is detected without proactive tracking), and
+// traverseRelations, a cycle-safe BFS walking both outgoing and incoming
+// edges up to a depth (default 3, per the plan's 3-hop minimum). Surfaced
+// in mem0_get (always, when the memory has an entity_id) and in
+// mem0_search/mem0_list (opt-in via include_relations, fully resolved only
+// for the top RELATION_RESOLVE_LIMIT results to avoid token blowup at
+// 3-hop depth — remaining results show an outgoing-relation COUNT only).
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
