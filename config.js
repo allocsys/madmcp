@@ -34,7 +34,10 @@ export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 // Add more ranges (e.g. for OpenAI/GPT actions) as a comma-separated list.
 // Set IP_ALLOWLIST_ENABLED=false to disable entirely (e.g. for local dev).
 export const IP_ALLOWLIST_ENABLED = process.env.IP_ALLOWLIST_ENABLED !== "false";
-export const ALLOWED_IP_RANGES = (process.env.ALLOWED_IP_RANGES || "160.79.104.0/21")
+// 208.77.244.90/32 is manufact's own deploy-time health-check IP (it POSTs an
+// MCP `initialize` request to /mcp as part of deploy verification) — without
+// it, every deploy fails its own health check against this allowlist.
+export const ALLOWED_IP_RANGES = (process.env.ALLOWED_IP_RANGES || "160.79.104.0/21,208.77.244.90/32")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
