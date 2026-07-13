@@ -186,8 +186,8 @@ async function handleMcp(req, res) {
   }
 }
 
-app.post("/mcp", requireAllowedIp, mcpLimiter, requireMcpKey, handleMcp);
-app.post("/mcp/:key", requireAllowedIp, mcpLimiter, requireMcpKey, handleMcp);
+app.post("/mcp", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
+app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
