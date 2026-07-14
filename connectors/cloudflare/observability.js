@@ -101,7 +101,7 @@ export function register(server) {
     async ({ dataset = "cloudflare-workers", timeframe_from, timeframe_to }) =>
       textResult(await cfAccountRequest("/workers/observability/telemetry/keys", {
         method: "POST",
-        body: { dataset, timeframe: { from: timeframe_from, to: timeframe_to } },
+        body: { dataset, timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) } },
       }))
   );
 
