@@ -3,9 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { githubRequest } from "./client.js";
+import { githubRequest, fromBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
-import { readFileViaBlob } from "./helpers.js";
 
 export function register(server) {
   server.tool(
@@ -45,16 +44,33 @@ export function register(server) {
           isError: true,
         };
       }
+      // Fetch blobs directly by the SHA we already have from treeData above —
+      // each item.sha is a stable blob SHA (unlike a branch name, it can't
+      // move), so there's no need to re-resolve owner/repo/branch or re-walk
+      // the whole recursive tree for every single file. Previously this used
+      // readFileViaBlob(owner, repo, item.path, treeSha), which internally
+      // re-fetched repo info, re-attempted a branch-ref lookup, AND re-fetched
+      // the entire recursive tree again per file — O(n) full-tree fetches for
+      // an n-file repo. Fetched with bounded concurrency so a large repo
+      // doesn't fire hundreds of simultaneous requests at once.
+      const CONCURRENCY = 10;
       const files = [];
       const errors = [];
-      for (const item of blobs) {
-        try {
-          const content = await readFileViaBlob(owner, repo, item.path, treeSha);
-          files.push({ path: item.path, content });
-        } catch (err) {
-          errors.push({ path: item.path, error: err.message });
+      let cursor = 0;
+      async function worker() {
+        while (cursor < blobs.length) {
+          const item = blobs[cursor++];
+          try {
+            const blob = await githubRequest(`/repos/${owner}/${repo}/git/blobs/${item.sha}`);
+            const content = fromBase64(blob.content.replace(/\n/g, ""));
+            files.push({ path: item.path, content });
+          } catch (err) {
+            errors.push({ path: item.path, error: err.message });
+          }
         }
       }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, blobs.length) }, worker));
+      files.sort((a, b) => a.path.localeCompare(b.path));
       const summary = `Fetched ${files.length}/${blobs.length} files from ${owner}/${repo}@${targetBranch}${errors.length ? ` (${errors.length} failed)` : ""}`;
       return { content: [{ type: "text", text: JSON.stringify({ summary, files, errors }, null, 2) }] };
     }
