@@ -310,8 +310,9 @@
     ], ms:237},
     { id:'no', label:'NOTION · INCIDENT DOC', lines:[
       ['prompt','> update the incident doc'],
-      ['call','→ notion_update_page({ page: "INC-114", append: "Fix in review (PR #482)." })'],
-      ['result','✓ page updated · status → In review'],
+      ['why','Why: on-call and stakeholders watch the Notion doc, not GitHub — keep it as the single source of truth in real time.'],
+      ['call','→ notion_update_page({ page: "INC-114", properties: { status: "In review" }, append: "Fix in review (PR #482)." })'],
+      ['result','✓ page updated · status: Investigating → In review\nlinked PR #482 attached to timeline'],
       ['stamped','✓ stamped · 312ms']
     ], ms:312},
     { id:'m0', label:'MEM0 · DEDUP + RELATIONS', lines:[
