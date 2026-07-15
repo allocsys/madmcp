@@ -132,7 +132,7 @@ export function register(server) {
 
   server.tool(
     "overwrite_file",
-    "Replace, rewrite, or update a file's full contents in a GitHub repository, or create it if it doesn't exist yet. Use this for a deliberate full rewrite; for small, targeted edits/patches use str_replace_file instead so you don't have to resend the whole file. To create a new file and fail loudly if it already exists, use create_repo_file instead.",
+    "Replace, rewrite, or update a file's full contents in a GitHub repository, or create it if it doesn't exist yet. Use this for a deliberate full rewrite; for small, targeted edits/patches use str_replace_file instead so you don't have to resend the whole file. To create a new file and fail loudly if it already exists, use create_repo_file instead. To write/overwrite several files at once as a single atomic commit, use overwrite_files.",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
