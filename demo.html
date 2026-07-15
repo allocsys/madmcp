@@ -172,10 +172,16 @@
     font-family:'IBM Plex Mono',monospace;
     font-size:12.5px;
     line-height:1.65;
-    min-height:420px;
+    height:440px;
+    overflow-y:auto;
     white-space:pre-wrap;
     word-break:break-word;
+    scroll-behavior:smooth;
   }
+  .term::-webkit-scrollbar{width:8px;}
+  .term::-webkit-scrollbar-track{background:transparent;}
+  .term::-webkit-scrollbar-thumb{background:var(--hair);border-radius:4px;}
+  .term::-webkit-scrollbar-thumb:hover{background:var(--dim);}
   .term .step{
     color:var(--dim);
     font-size:10.5px;
@@ -239,7 +245,7 @@
   @media (max-width:520px){
     .jacks{grid-template-columns:repeat(3,1fr);}
     .jack:nth-child(4),.jack:nth-child(5){grid-column:span 1;}
-    .term{min-height:480px;font-size:11.5px;}
+    .term{height:400px;font-size:11.5px;}
   }
 
   @media (prefers-reduced-motion:reduce){
