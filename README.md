@@ -45,12 +45,11 @@ no Dockerfile or CLI needed, but they're not identical:
   vars on the **Configure Deployment** screen (or paste a `.env`), then
   **Deploy**. Node.js is auto-detected from `package.json`, no Dockerfile
   needed. Free tier scales to zero like Render's free tier (cold starts);
-  paid plans offer "Prevent Scale to Zero." One thing to verify yourself
-  after deploying: Manufact's gateway URL is `https://<slug>.run.mcp-use.com/mcp`
-  — I couldn't confirm from their docs whether the `/mcp/<key>` path-auth
-  variant this repo uses survives that gateway routing, so test it (or fall
-  back to the `x-manufact-key` header, which any MCP client that supports
-  custom headers can use) before assuming it works.
+  paid plans offer "Prevent Scale to Zero." Manufact's gateway URL pattern is
+  `https://<slug>.run.mcp-use.com/mcp` — the `/mcp/<key>` path-auth variant
+  this repo uses does survive that gateway routing (confirmed: it's the exact
+  pattern in use), so the same `https://<slug>.run.mcp-use.com/mcp/<your
+  MCP_SHARED_KEY>` URL from step 5 below works here too.
 
 Prefer another host, or running it yourself? It's a plain Node/Express app —
 `npm install && npm start`, listens on `$PORT` (default `8080`) — so any
