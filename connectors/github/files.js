@@ -222,8 +222,8 @@ export function register(server) {
   );
 
   server.tool(
-    "push_files",
-    "Create or overwrite multiple files in a GitHub repository as a single atomic commit -- each file's full content is written as-is (create_repo_file/overwrite_file/str_replace_file are single-file equivalents; use those for one file at a time).",
+    "overwrite_files",
+    "Create, overwrite, replace, or update multiple files in a GitHub repository as a single atomic commit -- each file's full content is written as-is (create_repo_file/overwrite_file/str_replace_file are single-file equivalents; use those for one file at a time).",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
