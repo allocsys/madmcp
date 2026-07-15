@@ -289,8 +289,9 @@
   const steps = [
     { id:'gh', label:'GITHUB · SEARCH', lines:[
       ['prompt','> edge-router is slow under load — find the suspect code'],
-      ['call','→ search_code({ repo: "acme-labs/edge-router", query: "legacyPricingService" })'],
-      ['result','checkout.js:142  await legacyPricingService.call(req.body)\ncheckout.js:143  // TODO: no timeout — revisit before GA'],
+      ['why','Why: checkout latency usually traces to an unbounded downstream call, not the router itself — search the code before touching infra.'],
+      ['call','→ search_code({ repo: "acme-labs/edge-router", query: "legacyPricingService", per_page: 10 })'],
+      ['result','checkout.js:142  await legacyPricingService.call(req.body)\ncheckout.js:143  // TODO: no timeout — revisit before GA\n1 file matched · 0 other callers found'],
       ['stamped','✓ stamped · 118ms · 1 match, no timeout set']
     ], ms:118},
     { id:'cf', label:'CLOUDFLARE · METRICS', lines:[
