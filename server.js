@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS } from "./config.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
 import * as notion     from "./connectors/notion/tools.js";
@@ -130,11 +130,13 @@ const mcpLimiter = rateLimit({
 });
 
 const app = express();
-// Trust exactly one hop: the deploy platform sits in front of this server as
-// the sole entry point and sets X-Forwarded-For itself, so this is safe (and
-// matches what getClientIp() below already assumes). Fixes express-rate-limit
-// throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request.
-app.set("trust proxy", 1);
+// Trust TRUST_PROXY_HOPS reverse-proxy hops (default 1, matching Render and
+// most single-CDN-hop platforms) so X-Forwarded-For is read consistently
+// with getClientIp() below. Fixes express-rate-limit throwing
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request. If deploying behind a
+// different proxy chain, set TRUST_PROXY_HOPS to match instead of assuming
+// this default is universally correct.
+app.set("trust proxy", TRUST_PROXY_HOPS);
 app.use(helmet());
 // Raise body size limit from the 100kb default to 10mb so that push_files
 // and create_or_update_file can handle large source files without truncation.
