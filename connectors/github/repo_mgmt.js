@@ -35,6 +35,36 @@ export function register(server) {
     }
   );
 
+  // ── Fork repo ────────────────────────────────────────────────────────────
+
+  server.tool(
+    "fork_repo",
+    "Fork a GitHub repository into the authenticated user's account or an org. Forking is async on GitHub's side — the returned repo may take a few seconds to become fully clone-able.",
+    {
+      owner:            z.string().describe("Owner of the repository to fork (e.g. 'modelcontextprotocol')"),
+      repo:             z.string().describe("Repository name to fork"),
+      organization:      z.string().optional().describe("Org to fork into. Omit to fork into the authenticated user's account."),
+      name:             z.string().optional().describe("Rename the fork. Omit to keep the original name."),
+      default_branch_only: z.boolean().optional().describe("Fork only the default branch (default: false — forks all branches)."),
+    },
+    async ({ owner, repo, organization, name, default_branch_only }) => {
+      const body = {};
+      if (organization) body.organization = organization;
+      if (name) body.name = name;
+      if (default_branch_only !== undefined) body.default_branch_only = default_branch_only;
+      const data = await githubRequest(`/repos/${owner}/${repo}/forks`, {
+        method: "POST",
+        body,
+      });
+      return {
+        content: [{
+          type: "text",
+          text: `Forked ${owner}/${repo} → ${data.full_name}\n${data.html_url}\n(fork may take a few seconds to finish populating)`,
+        }],
+      };
+    }
+  );
+
   // ── Delete repo ──────────────────────────────────────────────────────────
 
   server.tool(
