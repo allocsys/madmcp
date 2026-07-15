@@ -1,17 +1,38 @@
-# manufact-mcp-server
+<div align="center">
 
-An MCP server giving Claude (or any MCP client) tool access to GitHub,
-Cloudflare, Notion, Mem0, and arbitrary web pages — so agent workflows can
-read/write real infrastructure and content directly, without manual copy/paste.
+# 🔌 madmcp
+
+**An MCP server giving Claude (or any MCP client) direct tool access to GitHub, Cloudflare, Notion, Mem0, and the web — one connector, five real backends.**
+
+[![Protocol](https://img.shields.io/badge/protocol-MCP-E8A33D?style=flat-square)](https://modelcontextprotocol.io)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-6FBF8B?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![Connectors](https://img.shields.io/badge/connectors-GitHub%20%C2%B7%20Cloudflare%20%C2%B7%20Notion%20%C2%B7%20Mem0%20%C2%B7%20Fetch-7CA6D6?style=flat-square)](#connectors--tools)
+[![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commons%20Clause-blue?style=flat-square)](./LICENSE)
+
+<a href="https://dumbCodesOnly.github.io/madmcp/demo.html">
+  <img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&size=15&duration=2600&pause=900&color=E8A33D&center=true&vCenter=true&width=580&lines=%E2%86%92+tool_call+search_code(%7B+query%3A+%22legacyPricingService%22+%7D);%E2%9C%93+200+%C2%B7+118ms+%C2%B7+1+match%2C+no+timeout+set;%E2%86%92+tool_call+create_pull_request(%7B+title%3A+%22Add+timeout+guard%22+%7D);%E2%9C%93+PR+%23482+opened+against+main;%E2%86%92+tool_call+mem0_add(%7B+entity_id%3A+%22edge-router-incident%22+%7D)" alt="typing animation of a madmcp tool-call trace" />
+</a>
+
+**[▶ Watch the live protocol trace](https://dumbCodesOnly.github.io/madmcp/demo.html)**
+
+</div>
+
+---
+
+## What this is
+
+`madmcp` is a single MCP server that gives an AI agent tool-level access to
+real infrastructure — GitHub, Cloudflare, Notion, Mem0, and arbitrary web
+pages — so agent workflows can read and write directly instead of relying on
+manual copy/paste between tabs.
 
 ## Live demo
-
-[**View the live protocol trace →**](https://dumbCodesOnly.github.io/madmcp/demo.html)
 
 An illustrative six-step walkthrough of a mock incident response — finding a
 slow endpoint, checking latency metrics, shipping and reviewing a fix, and
 logging it to memory — touching all five connectors in one flow (including a
-deeper look at Mem0's semantic dedup and relation-graph tools). Sample data
+deeper look at Mem0's semantic dedup and relation-graph tools), with a synced
+status panel and live call/latency stats alongside the trace. Sample data
 throughout, not a live call. (If GitHub Pages isn't enabled for this repo
 yet, open `demo.html` directly.)
 
