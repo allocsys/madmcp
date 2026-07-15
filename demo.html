@@ -261,12 +261,12 @@
 
     <div class="cards" id="cards">
       <div class="cards-head">Manifest log</div>
-      <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p></div>
-      <div class="card" data-id="1"><div class="tag-row"><span class="tag">Step 2 · Cloudflare</span><span class="metric">204ms</span></div><p>Pulls live Workers metrics to confirm the hunch.</p></div>
-      <div class="card" data-id="2"><div class="tag-row"><span class="tag">Step 3 · GitHub</span><span class="metric">237ms</span></div><p>Commits the fix and opens a PR in the same turn.</p></div>
-      <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p></div>
-      <div class="card" data-id="4"><div class="tag-row"><span class="tag">Step 5 · Mem0</span><span class="metric">874ms</span></div><p>Stores the root cause with dedup + relations.</p></div>
-      <div class="card" data-id="5"><div class="tag-row"><span class="tag">Step 6 · Fetch</span><span class="metric">233ms</span></div><p>Confirms the status page reflects the fix.</p></div>
+      <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p><p class="tech">search_code · 1 file matched, no timeout set</p></div>
+      <div class="card" data-id="1"><div class="tag-row"><span class="tag">Step 2 · Cloudflare</span><span class="metric">204ms</span></div><p>Pulls live Workers metrics to confirm the hunch.</p><p class="tech">cf_workers_observability_query · 0.93 correlation to traffic</p></div>
+      <div class="card" data-id="2"><div class="tag-row"><span class="tag">Step 3 · GitHub</span><span class="metric">237ms</span></div><p>Commits the fix and opens a PR in the same turn.</p><p class="tech">push_files + create_pull_request · PR #482</p></div>
+      <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update_page · status → In review</p></div>
+      <div class="card" data-id="4"><div class="tag-row"><span class="tag">Step 5 · Mem0</span><span class="metric">874ms</span></div><p>Stores the root cause with dedup + relations.</p><p class="tech">mem0_add + mem0_update · dup flagged, 3 relations linked</p></div>
+      <div class="card" data-id="5"><div class="tag-row"><span class="tag">Step 6 · Fetch</span><span class="metric">233ms</span></div><p>Confirms the status page reflects the fix.</p><p class="tech">web_fetch · matches Cloudflare baseline</p></div>
       <div class="stats">
         <div class="row"><span>Connectors touched</span><span id="statConn">1 / 5</span></div>
         <div class="row"><span>Total latency</span><span id="statMs">118ms</span></div>
