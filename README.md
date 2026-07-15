@@ -37,10 +37,25 @@ no Dockerfile or CLI needed, but they're not identical:
   `openssl rand -hex 32` — and paste it into the form; Vercel's button
   can't auto-fill it the way Render's blueprint does.
 
+- **[Manufact Cloud](https://manufact.com/cloud)** is purpose-built for hosting
+  MCP servers (this one included — the default IP allowlist already carries a
+  comment about Manufact's own deploy-time health check). It doesn't have a
+  one-click button with a public URL scheme the way Render/Vercel do; instead
+  sign in, **New Server → Import from GitHub →** pick this repo, add your env
+  vars on the **Configure Deployment** screen (or paste a `.env`), then
+  **Deploy**. Node.js is auto-detected from `package.json`, no Dockerfile
+  needed. Free tier scales to zero like Render's free tier (cold starts);
+  paid plans offer "Prevent Scale to Zero." One thing to verify yourself
+  after deploying: Manufact's gateway URL is `https://<slug>.run.mcp-use.com/mcp`
+  — I couldn't confirm from their docs whether the `/mcp/<key>` path-auth
+  variant this repo uses survives that gateway routing, so test it (or fall
+  back to the `x-manufact-key` header, which any MCP client that supports
+  custom headers can use) before assuming it works.
+
 Prefer another host, or running it yourself? It's a plain Node/Express app —
 `npm install && npm start`, listens on `$PORT` (default `8080`) — so any
 Node-friendly host (Railway, Fly.io, etc.) or your own server works too,
-just without either platform's auto-fill.
+just without any platform's auto-fill.
 
 *A note on IP allowlisting across hosts:* the allowlist trusts one
 reverse-proxy hop by default (`TRUST_PROXY_HOPS`, default `1`), which
