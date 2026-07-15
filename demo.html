@@ -340,7 +340,7 @@
     for(const line of script){
       if(cancelled) return;
 
-      if(line.t === 'gap'){ await sleep(reduced?0:500); continue; }
+      if(line.t === 'gap'){ await sleep(500); continue; }
 
       if(line.t === 'prompt' && line.final){
         const el=document.createElement('div');
@@ -354,20 +354,21 @@
       if(line.wire) activate(line.wire);
       else clearActive();
 
+      // Note: the typewriter reveal always runs, even under prefers-reduced-motion —
+      // it's a text reveal, not the parallax/zoom kind of motion that setting guards
+      // against. Only the blinking cursor (a true ambient loop) is muted via CSS.
       if(line.t === 'prompt'){
-        if(reduced) appendLine('prompt', line.text);
-        else await typeLine('prompt', line.text, 26);
-        await sleep(reduced?0:250);
+        await typeLine('prompt', line.text, 26);
+        await sleep(250);
       } else if(line.t === 'call'){
-        if(reduced) appendLine('call', line.text);
-        else await typeLine('call', line.text, 14);
-        await sleep(reduced?0:400);
+        await typeLine('call', line.text, 14);
+        await sleep(400);
       } else if(line.t === 'result'){
         appendLine('result', line.text);
-        await sleep(reduced?0:900);
+        await sleep(900);
       } else if(line.t === 'note'){
         appendLine('note', line.text);
-        await sleep(reduced?0:200);
+        await sleep(200);
       }
     }
   }
