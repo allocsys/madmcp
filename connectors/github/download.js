@@ -9,7 +9,7 @@ import { DEFAULT_OWNER } from "../../config.js";
 export function register(server) {
   server.tool(
     "download_repo",
-    "Fetch all files from a GitHub repository and return their full contents as a JSON payload. Claude receives {summary, files:[{path,content}], errors} and can then write them locally using create_file.",
+    "Fetch all files from a GitHub repository and return their full contents as a JSON payload. Claude receives {summary, files:[{path,content}], errors} and can then write them into the repo one at a time with create_repo_file/overwrite_file, or in a single commit with push_files.",
     {
       owner:      z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:       z.string().describe("Repository name"),
