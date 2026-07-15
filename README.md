@@ -18,21 +18,37 @@ yet, open `demo.html` directly.)
 ## Deploy & connect (quickstart)
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/dumbCodesOnly/madmcp)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/dumbCodesOnly/madmcp&env=MCP_SHARED_KEY,GITHUB_TOKEN,NOTION_TOKEN,MEM0_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID&envDescription=Generate+a+long+random+string+yourself+for+MCP_SHARED_KEY+(Vercel+can%27t+auto-generate+it).+Leave+any+connector+token+blank+to+skip+it.&envLink=https://github.com/dumbCodesOnly/madmcp%23configuration&project-name=manufact-mcp-server&repository-name=manufact-mcp-server)
 
 Get tokens, deploy, connect to Claude — in that order.
 
-**1. Deploy it.** Click the button above — Render reads `render.yaml`,
-generates `MCP_SHARED_KEY` for you automatically, and prompts you for
-whichever connector tokens you have (leave the rest blank, see step 2). No
-CLI, no Dockerfile, nothing to configure by hand. Note: Render's free plan
-spins down after 15 minutes idle, so the first request after a quiet period
-will be slow (~30s cold start) — fine for testing, upgrade to a paid plan if
-you want Claude's calls to stay fast.
+**1. Deploy it — pick a host.** Both buttons above deploy this repo as-is,
+no Dockerfile or CLI needed, but they're not identical:
+
+- **Render** reads `render.yaml` and generates `MCP_SHARED_KEY` for you
+  automatically — one less thing to get wrong. Trade-off: the free plan
+  spins down after 15 minutes idle, so the first request after a quiet
+  period is slow (~30s cold start). Fine for testing; upgrade to a paid plan
+  if you want Claude's calls to stay consistently fast.
+- **Vercel** deploys with zero config (this repo's `server.js` already
+  matches what Vercel expects) and its Fluid compute avoids Render's
+  cold-start spin-down. Trade-off: you have to generate `MCP_SHARED_KEY`
+  yourself — any long random string, e.g. via a password generator or
+  `openssl rand -hex 32` — and paste it into the form; Vercel's button
+  can't auto-fill it the way Render's blueprint does.
 
 Prefer another host, or running it yourself? It's a plain Node/Express app —
 `npm install && npm start`, listens on `$PORT` (default `8080`) — so any
 Node-friendly host (Railway, Fly.io, etc.) or your own server works too,
-just without the auto-filled `MCP_SHARED_KEY`.
+just without either platform's auto-fill.
+
+*A note on IP allowlisting across hosts:* the allowlist trusts one
+reverse-proxy hop by default (`TRUST_PROXY_HOPS`, default `1`), which
+matches Render and most single-CDN-hop platforms. If Claude's calls get
+unexpectedly 403'd on a different platform, that hop count is the first
+thing to check — adjust `TRUST_PROXY_HOPS`, or temporarily set
+`IP_ALLOWLIST_ENABLED=false` to confirm that's the cause before tightening
+it back up.
 
 **2. Collect tokens for the connectors you want.** Each is independent —
 skip any you don't need, its tools just fail at call time instead of
