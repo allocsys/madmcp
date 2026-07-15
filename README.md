@@ -168,6 +168,24 @@ All tokens are optional independently — a connector's tools fail at call time
   and info-free for uptime checks.
 - Rotate any token if you ever suspect it's been exposed.
 
+## License
+
+Licensed under **AGPL-3.0** with the **Commons Clause**. In plain terms:
+
+- You can use, run, modify, and self-host this server, including for internal
+  business use — for free.
+- If you modify it and let others interact with your version over a network
+  (e.g. host it as a service), you must publish the source of your changes
+  (AGPL-3.0's network-copyleft requirement).
+- You may **not** sell it — the Commons Clause blocks offering a paid
+  product or service whose value comes substantially from this software's
+  functionality, including paid hosting of it, without a separate agreement
+  with the licensor.
+
+See [`LICENSE`](./LICENSE) for the full, binding text. This summary is for
+convenience only and isn't a substitute for reading it (and isn't legal
+advice).
+
 ## Running locally
 
 ```bash
