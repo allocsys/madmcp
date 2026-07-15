@@ -17,11 +17,22 @@ yet, open `demo.html` directly.)
 
 ## Deploy & connect (quickstart)
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/dumbCodesOnly/madmcp)
+
 Get tokens, deploy, connect to Claude — in that order.
 
-**1. Host it.** Plain Node/Express app, no one-click deploy yet — push to any
-Node-friendly host (Render, Railway, Fly.io, etc.) or run it yourself. Needs
-only `npm install && npm start`; listens on `$PORT` (default `8080`).
+**1. Deploy it.** Click the button above — Render reads `render.yaml`,
+generates `MCP_SHARED_KEY` for you automatically, and prompts you for
+whichever connector tokens you have (leave the rest blank, see step 2). No
+CLI, no Dockerfile, nothing to configure by hand. Note: Render's free plan
+spins down after 15 minutes idle, so the first request after a quiet period
+will be slow (~30s cold start) — fine for testing, upgrade to a paid plan if
+you want Claude's calls to stay fast.
+
+Prefer another host, or running it yourself? It's a plain Node/Express app —
+`npm install && npm start`, listens on `$PORT` (default `8080`) — so any
+Node-friendly host (Railway, Fly.io, etc.) or your own server works too,
+just without the auto-filled `MCP_SHARED_KEY`.
 
 **2. Collect tokens for the connectors you want.** Each is independent —
 skip any you don't need, its tools just fail at call time instead of
