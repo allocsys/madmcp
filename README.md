@@ -141,6 +141,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `MCP_SHARED_KEY` | Shared-secret auth for `/mcp`. Unset = endpoint is open to anyone with the URL — set this in any real deployment. |
 | `IP_ALLOWLIST_ENABLED` | Set `false` to disable the IP allowlist (default: enabled) |
 | `ALLOWED_IP_RANGES` | Comma-separated CIDR ranges allowed to call `/mcp` (defaults to Anthropic's published connector range) |
+| `TRUST_PROXY_HOPS` | Number of reverse-proxy hops to trust for client-IP detection (default `1`, matches Render). Adjust if deploying behind a different proxy chain. |
 
 ## Security notes
 
