@@ -4,6 +4,7 @@
   "description": "MCP server with GitHub, Notion, Mem0, and Fetch connectors.",
   "main": "server.js",
   "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "start": "node server.js"
   },
