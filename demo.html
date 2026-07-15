@@ -146,73 +146,38 @@
     .port .name{display:none;}
   }
 
-  /* toggle: trace / protocol view — sliding segmented control
-     Grid-based (not JS pixel offsets) so the slider + labels are always
-     bounded by the toggle's own width — they can't drift outside it. */
-  .view-toggle{
-    position:relative;
-    isolation:isolate;
-    display:inline-grid;
-    grid-auto-flow:column;
-    grid-auto-columns:1fr;
-    gap:2px;
-    margin-bottom:14px;
-    max-width:100%;
-    background:var(--panel-2);
-    border:1px solid var(--hair);
-    border-radius:999px;
-    padding:3px;
-    font-family:'IBM Plex Mono',monospace;
-    font-size:11px;
-  }
-  .view-toggle .slider{
-    position:absolute;
-    top:3px;left:3px;
-    width:calc(50% - 3px);
-    height:calc(100% - 6px);
-    border-radius:999px;
-    background:linear-gradient(180deg, rgba(232,163,61,0.20), rgba(232,163,61,0.09));
-    border:1px solid var(--amber-dim);
-    transition:transform 0.28s cubic-bezier(.4,0,.2,1);
-    z-index:0;
-    pointer-events:none;
-  }
-  .view-toggle .slider.pos-1{transform:translateX(calc(100% + 2px));}
+  /* toggle: trace / protocol view — now lives in the bottom controls row,
+     styled to match button.restart (bordered box, not a pill/slider). */
+  .view-toggle{display:inline-flex;gap:8px;flex-wrap:wrap;}
   .view-toggle button{
     -webkit-appearance:none;
     -moz-appearance:none;
     appearance:none;
-    position:relative;
-    z-index:1;
-    margin:0;
-    border:none;
-    outline:none;
-    box-shadow:none;
+    -webkit-tap-highlight-color:transparent;
+    font-family:'IBM Plex Mono',monospace;
     background:transparent;
+    border:1px solid var(--hair);
     color:var(--dim);
-    padding:8px 12px;
-    border-radius:0;
-    cursor:pointer;
+    padding:7px 14px;
+    border-radius:5px;
+    font-size:11.5px;
     letter-spacing:0.04em;
+    cursor:pointer;
     display:inline-flex;
     align-items:center;
-    justify-content:center;
     gap:7px;
     min-width:0;
     white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    transition:color 0.2s ease;
-    -webkit-tap-highlight-color:transparent;
+    transition:border-color 0.2s ease,color 0.2s ease,background 0.2s ease;
   }
   .view-toggle button .ic{font-size:12px;opacity:0.75;letter-spacing:0;flex:none;}
-  .view-toggle button.on{color:var(--amber);}
+  .view-toggle button:hover{border-color:var(--amber);color:var(--amber);}
+  .view-toggle button.on{border-color:var(--amber);color:var(--amber);background:rgba(232,163,61,0.08);}
   .view-toggle button.on .ic{opacity:1;}
   .view-toggle button:focus-visible{outline:2px solid var(--amber);outline-offset:2px;}
 
-  @media (max-width:420px){
-    .view-toggle{font-size:10px;}
-    .view-toggle button{padding:8px 8px;gap:5px;}
+  @media (max-width:480px){
+    .view-toggle button{padding:7px 10px;font-size:10.5px;gap:5px;}
   }
 
   .stage{display:grid;grid-template-columns:1fr 300px;gap:22px;align-items:start;}
@@ -357,10 +322,16 @@
     .term{height:380px;font-size:11.5px;}
   }
 
-  .controls{display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);}
+  .controls{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-top:14px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);}
+  .controls-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
   button.restart{-webkit-appearance:none;-moz-appearance:none;appearance:none;-webkit-tap-highlight-color:transparent;font-family:'IBM Plex Mono',monospace;background:transparent;border:1px solid var(--hair);color:var(--text);padding:7px 14px;border-radius:5px;font-size:11.5px;letter-spacing:0.04em;cursor:pointer;transition:border-color 0.2s ease,color 0.2s ease;}
   button.restart:hover{border-color:var(--amber);color:var(--amber);}
   button.restart:focus-visible{outline:2px solid var(--amber);outline-offset:2px;}
+
+  @media (max-width:480px){
+    .controls{flex-direction:column;align-items:stretch;}
+    .controls-actions{justify-content:space-between;}
+  }
   a{color:var(--amber);text-decoration:none;border-bottom:1px solid var(--amber-dim);}
   a:hover{border-bottom-color:var(--amber);}
 
@@ -401,12 +372,6 @@
       <div class="port" data-id="m0"><div class="socket"><span class="led"></span></div><div class="code">M0</div><div class="name">Mem0</div></div>
       <div class="port" data-id="wf"><div class="socket"><span class="led"></span></div><div class="code">WF</div><div class="name">Fetch</div></div>
     </div>
-  </div>
-
-  <div class="view-toggle" role="tablist" aria-label="Trace display mode">
-    <div class="slider" id="toggleSlider"></div>
-    <button type="button" class="on" data-view="trace" role="tab" aria-selected="true"><span class="ic">▸_</span>patch-bay trace</button>
-    <button type="button" data-view="protocol" role="tab" aria-selected="false"><span class="ic">{ }</span>raw MCP protocol</button>
   </div>
 
   <div class="stage">
@@ -462,7 +427,13 @@
 
   <div class="controls">
     <span id="status">playing sample trace…</span>
-    <button class="restart" id="restart" type="button">restart ↺</button>
+    <div class="controls-actions">
+      <div class="view-toggle" role="tablist" aria-label="Trace display mode">
+        <button type="button" class="on" data-view="trace" role="tab" aria-selected="true"><span class="ic">▸_</span>patch-bay trace</button>
+        <button type="button" data-view="protocol" role="tab" aria-selected="false"><span class="ic">{ }</span>raw MCP protocol</button>
+      </div>
+      <button class="restart" id="restart" type="button">restart ↺</button>
+    </div>
   </div>
 
   <footer>
@@ -486,7 +457,6 @@
   const metrics = document.querySelectorAll('[data-metric]');
   const ticks = document.querySelectorAll('.tick');
   const viewButtons = document.querySelectorAll('.view-toggle button');
-  const toggleSlider = document.getElementById('toggleSlider');
   const statConnectors = document.getElementById('stat-connectors');
   const statCalls = document.getElementById('stat-calls');
   const statLatency = document.getElementById('stat-latency');
@@ -695,11 +665,10 @@
 
   function setView(mode){
     viewMode = mode;
-    viewButtons.forEach((b,i)=>{
+    viewButtons.forEach(b=>{
       const on = b.dataset.view === mode;
       b.classList.toggle('on', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
-      if(on) toggleSlider.classList.toggle('pos-1', i === 1);
     });
     term.style.display = mode === 'trace' ? 'block' : 'none';
     protoTerm.classList.toggle('on', mode === 'protocol');
