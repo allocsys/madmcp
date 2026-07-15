@@ -21,7 +21,7 @@
     --radius:3px;
   }
   *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;}
+  html,body{margin:0;padding:0;overflow-x:hidden;max-width:100%;}
   body{
     background:var(--ink);
     color:var(--text);
@@ -289,6 +289,8 @@
     border-radius:0 0 6px 6px;
     padding:9px 10px;
     gap:4px;
+    max-width:100%;
+    overflow:hidden;
   }
   .tick{
     -webkit-appearance:none;
@@ -296,6 +298,7 @@
     appearance:none;
     -webkit-tap-highlight-color:transparent;
     flex:1;
+    min-width:0;
     display:flex;
     flex-direction:column;
     align-items:center;
@@ -308,7 +311,7 @@
     color:var(--dim);
   }
   .tick .bar{width:100%;height:3px;background:var(--hair);border-radius:2px;transition:background 0.2s ease;}
-  .tick .lbl{font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.7;}
+  .tick .lbl{font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
   .tick.active .bar{background:var(--amber);}
   .tick.active .lbl{color:var(--amber);opacity:1;}
   .tick.done .bar{background:var(--green);opacity:0.5;}
