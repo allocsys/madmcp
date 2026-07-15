@@ -38,8 +38,8 @@ export function register(server) {
   );
 
   server.tool(
-    "cf_hyperdrive_config_edit",
-    "Edit (patch) a Hyperdrive configuration in your Cloudflare account",
+    "cf_hyperdrive_config_update",
+    "Update (patch) a Hyperdrive configuration in your Cloudflare account",
     {
       hyperdrive_id: z.string(),
       name: z.string().optional(),
