@@ -77,7 +77,7 @@
     background:var(--panel);
     border:1px solid var(--hair);
     border-radius:6px;
-    padding:34px 20px 26px;
+    padding:30px 18px 18px;
     margin-bottom:22px;
     overflow:hidden;
   }
@@ -105,16 +105,16 @@
     display:flex;
     flex-direction:column;
     align-items:center;
-    margin-bottom:26px;
+    margin-bottom:10px;
   }
   .core-node{
     font-family:'IBM Plex Mono',monospace;
     font-weight:600;
-    font-size:14px;
+    font-size:13px;
     color:var(--text);
     background:var(--panel-2);
     border:1px solid var(--hair);
-    padding:10px 18px;
+    padding:8px 16px;
     border-radius:5px;
     letter-spacing:0.02em;
   }
@@ -123,7 +123,7 @@
     justify-content:center;
     gap:0;
     position:relative;
-    height:46px;
+    height:20px;
   }
   .wire{
     width:2px;
@@ -134,34 +134,37 @@
   .wire.active{background:var(--amber);box-shadow:0 0 10px rgba(232,163,61,0.6);}
 
   .jacks{
-    display:grid;
-    grid-template-columns:repeat(5,1fr);
-    gap:8px;
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:7px;
   }
   .jack{
     position:relative;
+    display:flex;
+    align-items:baseline;
+    gap:6px;
     font-family:'IBM Plex Mono',monospace;
-    text-align:center;
-    padding:8px 4px 10px;
+    padding:6px 12px;
     border:1px solid var(--hair);
-    border-radius:5px;
+    border-radius:20px;
     background:var(--panel-2);
-    transition:border-color 0.25s ease, box-shadow 0.25s ease;
+    transition:border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
   }
   .jack .code{
-    font-size:12px;
+    font-size:11px;
     font-weight:600;
     color:var(--dim);
     letter-spacing:0.06em;
   }
   .jack .name{
-    font-size:9px;
+    font-size:9.5px;
     color:var(--dim);
-    opacity:0.7;
-    margin-top:2px;
+    opacity:0.6;
   }
-  .jack.active{border-color:var(--amber);box-shadow:0 0 0 1px rgba(232,163,61,0.3), 0 0 14px rgba(232,163,61,0.25);}
+  .jack.active{border-color:var(--amber);background:rgba(232,163,61,0.08);box-shadow:0 0 0 1px rgba(232,163,61,0.3), 0 0 14px rgba(232,163,61,0.2);}
   .jack.active .code{color:var(--amber);}
+  .jack.active .name{color:var(--amber);opacity:0.8;}
 
   /* terminal */
   .term{
@@ -243,8 +246,6 @@
   footer .stack{font-family:'IBM Plex Mono',monospace;font-size:11.5px;}
 
   @media (max-width:520px){
-    .jacks{grid-template-columns:repeat(3,1fr);}
-    .jack:nth-child(4),.jack:nth-child(5){grid-column:span 1;}
     .term{height:400px;font-size:11.5px;}
   }
 
