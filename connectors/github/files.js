@@ -103,8 +103,36 @@ export function register(server) {
   );
 
   server.tool(
-    "create_or_update_file",
-    "Create or update a file in a GitHub repository.",
+    "create_file",
+    "Create a new file in a GitHub repository. Fails if the path already exists -- use str_replace_file for targeted edits to an existing file, or overwrite_file to explicitly replace its full contents.",
+    {
+      owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:    z.string().describe("Repository name"),
+      path:    z.string().describe("File path within the repo"),
+      content: z.string().describe("Full content of the new file (plain text)"),
+      message: z.string().describe("Commit message"),
+      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+    },
+    async ({ owner = DEFAULT_OWNER, repo, path, content, message, branch }) => {
+      const query = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+      try {
+        await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
+        throw new Error(`${path} already exists in ${owner}/${repo}${branch ? `@${branch}` : ""}. Use overwrite_file to replace it, or str_replace_file to patch it.`);
+      } catch (e) {
+        if (e.message?.includes("already exists")) throw e;
+        /* 404 means the path is free -- proceed */
+      }
+      const result = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
+        method: "PUT",
+        body: { message, content: toBase64(content), branch },
+      });
+      return { content: [{ type: "text", text: `Created ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
+    }
+  );
+
+  server.tool(
+    "overwrite_file",
+    "Replace a file's full contents in a GitHub repository, or create it if it doesn't exist yet. Use this for a deliberate full rewrite; for small, targeted edits use str_replace_file instead so you don't have to resend the whole file.",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
@@ -124,7 +152,7 @@ export function register(server) {
         method: "PUT",
         body: { message, content: toBase64(content), branch, sha },
       });
-      return { content: [{ type: "text", text: `${sha ? "Updated" : "Created"} ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
+      return { content: [{ type: "text", text: `${sha ? "Overwrote" : "Created"} ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
     }
   );
 
