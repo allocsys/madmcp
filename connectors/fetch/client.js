@@ -95,7 +95,7 @@ export async function fetchUrl(url, { method = "GET", headers = {}, body } = {})
         "User-Agent": "manufact-mcp-server/2.0",
         ...headers,
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : (typeof body === "string" ? body : JSON.stringify(body)),
       redirect: "manual",
     });
 
