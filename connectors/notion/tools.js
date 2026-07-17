@@ -122,6 +122,30 @@ async function doCreatePage({ parent_id, parent_type, title, content, entity_id,
   return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError };
 }
 
+// Sequential batch runner, mimicking Promise.allSettled's per-item
+// {status, value|reason} shape so callers don't need to change their
+// result-formatting code. NOT run in parallel -- BUG FOUND 2026-07-17 live
+// testing: notion_create_pages_batch originally used Promise.allSettled,
+// which let two items sharing the same entity_id both pass
+// findPageByEntityId's dedup check concurrently (neither had written its
+// index entry yet when the other checked), creating two pages for one
+// entity_id in a single batch call. Running strictly in order guarantees
+// each item's dedup check sees every earlier item's completed index write.
+// Trades batch throughput for correctness -- acceptable at this tool's
+// scale (personal/small-team usage, not high-volume bulk import).
+async function runSequentially(items, fn) {
+  const results = [];
+  for (const item of items) {
+    try {
+      const value = await fn(item);
+      results.push({ status: "fulfilled", value });
+    } catch (reason) {
+      results.push({ status: "rejected", reason });
+    }
+  }
+  return results;
+}
+
 const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "to_do"];
 
 // Best-effort changelog append (gap #4) -- swallows its own errors rather
@@ -404,7 +428,7 @@ export function register(server) {
       })).min(1).describe("List of pages to create"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map((item) => doCreatePage(item)));
+      const results = await runSequentially(items, doCreatePage);
       const lines = results.map((r, i) => {
         const label = items[i].title;
         if (r.status === "rejected") return `\u2717 [${i}] "${label}" — error: ${r.reason?.message || r.reason}`;
@@ -508,7 +532,7 @@ export function register(server) {
       })).min(1).describe("List of page updates to apply"),
     },
     async ({ items }) => {
-      const results = await Promise.allSettled(items.map((item) => doUpdatePage(item)));
+      const results = await runSequentially(items, doUpdatePage);
       const lines = results.map((r, i) => {
         const label = items[i].page_id;
         if (r.status === "rejected") return `\u2717 [${i}] ${label} — ${r.reason?.message || r.reason}`;
