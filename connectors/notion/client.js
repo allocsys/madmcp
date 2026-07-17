@@ -34,6 +34,13 @@ export function notionPageTitle(page) {
   return titleProp ? notionRichTextToString(titleProp.title) : "(untitled)";
 }
 
+// Databases carry their title directly on the object (a top-level `title`
+// rich-text array), not nested inside `properties` like pages -- so this
+// can't reuse notionPageTitle().
+export function notionDatabaseTitle(database) {
+  return notionRichTextToString(database.title) || "(untitled)";
+}
+
 export function notionBlocksToText(blocks = []) {
   return blocks
     .map((b) => {
