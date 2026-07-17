@@ -194,7 +194,16 @@ export function register(server) {
             await doUpdatePage({ page_id: entry.page_id, archived: true });
             deletionLines.push(`  archived (source deleted from mem0): ${entry.entity_id} — ${entry.url}`);
           } catch (err) {
-            deletionLines.push(`  ✗ failed to archive ${entry.entity_id} — ${err.message}`);
+            // Notion rejects re-archiving a page that's already archived
+            // ("Can't edit block that is archived") -- that's the correct
+            // end state already reached (e.g. a prior run or a superseded-
+            // status archive already handled it), not a real failure. Only
+            // surface an error for anything else.
+            if (/already archived|Can't edit block that is archived/i.test(err.message)) {
+              deletionLines.push(`  already archived (no change needed): ${entry.entity_id} — ${entry.url}`);
+            } else {
+              deletionLines.push(`  ✗ failed to archive ${entry.entity_id} — ${err.message}`);
+            }
           }
         }
       }
