@@ -47,6 +47,8 @@ export function notionBlocksToText(blocks = []) {
       const type  = b.type;
       const block = b[type];
       if (!block) return "";
+      if (type === "child_page")         return `📄 [Subpage] ${block.title || "(untitled)"} — id: ${b.id}`;
+      if (type === "child_database")     return `🗄️ [Subdatabase] ${block.title || "(untitled)"} — id: ${b.id}`;
       const text = notionRichTextToString(block.rich_text || []);
       if (type === "heading_1")          return `# ${text}`;
       if (type === "heading_2")          return `## ${text}`;
