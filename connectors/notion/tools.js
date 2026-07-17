@@ -9,7 +9,7 @@ import {
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, notionBlockPlainText, parseMarkers,
   buildIndexEntryText, parseIndexEntryText, buildChangelogEntryText, isChangelogEntryText,
   buildRelationBlocks, parseRelationBlocks,
-  buildSyncStartText, buildSyncRangeBlocks, findSyncRange,
+  buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
 } from "./client.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
