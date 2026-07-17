@@ -119,10 +119,7 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
   const markerBlocks   = buildMarkerBlocks({ entity_id, status });
   const relationBlocks = buildRelationBlocks(relations || []);
   const contentBlocks = content
-    ? content.split("\n").filter(Boolean).map((line) => ({
-        object: "block", type: "paragraph",
-        paragraph: { rich_text: [{ type: "text", text: { content: line } }] },
-      }))
+    ? content.split("\n").filter(Boolean).map(textBlock)
     : [];
   const children = [...markerBlocks, ...relationBlocks, ...contentBlocks];
   const data = await notionRequest("/pages", {
