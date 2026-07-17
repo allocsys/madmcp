@@ -122,6 +122,25 @@ async function doCreatePage({ parent_id, parent_type, title, content, entity_id,
 
 const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "to_do"];
 
+// Best-effort changelog append (gap #4) -- swallows its own errors rather
+// than throwing, since a failed history write shouldn't roll back or block
+// an otherwise-successful page update. Returns an error string (for the
+// caller to optionally surface) or null on success.
+async function appendChangelogEntry(page_id, summary) {
+  try {
+    await notionRequest(`/blocks/${page_id}/children`, {
+      method: "PATCH",
+      body: { children: [{
+        object: "block", type: "paragraph",
+        paragraph: { rich_text: [{ type: "text", text: { content: buildChangelogEntryText(summary) } }] },
+      }] },
+    });
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared update-page logic (2026-07-17, gap #6 -- mirrors doCreatePage above).
 // Extracted out of notion_update_page's handler so notion_update_pages_batch
@@ -184,6 +203,10 @@ async function doUpdatePage({ page_id, title, append_content, archived, replacem
       await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: [statusMarkerBlock(status)] } });
       results.push(`Status marker added: "${status}" (page had none before).`);
     }
+  }
+  if (results.length) {
+    const changelogError = await appendChangelogEntry(page_id, results.join("; "));
+    if (changelogError) results.push(`(\u26a0\ufe0f changelog entry not recorded: ${changelogError})`);
   }
   return results;
 }
