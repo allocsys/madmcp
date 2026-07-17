@@ -3,7 +3,39 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString, notionBlocksToText } from "./client.js";
+import {
+  notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
+  notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, notionBlockPlainText, parseMarkers,
+} from "./client.js";
+
+const STATUS_VALUES = ["open", "resolved", "superseded"];
+
+// ---------------------------------------------------------------------------
+// Dedup/upsert lookup (2026-07-17, gap #1 -- see mem0 entity_id:
+// madmcp-notion-connector-gaps-roadmap). Mirrors mem/tools.js's
+// findByEntityId, adapted to Notion's constraints: there's no indexed
+// metadata field to filter on server-side, so this leans on Notion's own
+// search (best-effort full-text, not a guaranteed exact match) to narrow
+// candidates, then confirms via parseMarkers on each candidate's actual
+// blocks. Bounded to the top 20 search results x first 20 blocks each --
+// same kind of pragmatic ceiling mem/tools.js's own findByEntityId applies
+// (there, a 1000-memory pagination cap; here, a much lower bound since each
+// candidate costs a full extra API call with no cheaper server-side filter
+// available).
+async function findPageByEntityId(entity_id) {
+  const data = await notionRequest("/search", {
+    method: "POST",
+    body: { query: entity_id, filter: { value: "page", property: "object" }, page_size: 20 },
+  });
+  for (const page of data.results || []) {
+    const blocksData = await notionRequest(`/blocks/${page.id}/children?page_size=20`);
+    const markers = parseMarkers(blocksData.results || []);
+    if (markers.entity_id === entity_id) {
+      return { pageId: page.id, title: notionPageTitle(page), url: page.url, markers };
+    }
+  }
+  return null;
+}
 
 export function register(server) {
 
