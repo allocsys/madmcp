@@ -204,7 +204,11 @@ async function doUpdatePage({ page_id, title, append_content, archived, replacem
       results.push(`Status marker added: "${status}" (page had none before).`);
     }
   }
-  if (results.length) {
+  // Skip the changelog write when this call archived the page -- Notion
+  // rejects block edits on an already-archived page ("Can't edit block that
+  // is archived"), confirmed via live testing 2026-07-17. Unarchiving
+  // (archived: false) is fine since the page is editable again by then.
+  if (results.length && archived !== true) {
     const changelogError = await appendChangelogEntry(page_id, results.join("; "));
     if (changelogError) results.push(`(\u26a0\ufe0f changelog entry not recorded: ${changelogError})`);
   }
