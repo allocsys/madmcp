@@ -283,12 +283,8 @@ export function isSyncEndText(text) {
 // into one paragraph block per non-empty line, same convention as every
 // other plain-text content writer in this file.
 export function buildSyncRangeBlocks({ synced_at, contentLines }) {
-  const toBlock = (text) => ({
-    object: "block", type: "paragraph",
-    paragraph: { rich_text: [{ type: "text", text: { content: text } }] },
-  });
-  const contentBlocks = (contentLines || []).filter(Boolean).map(toBlock);
-  return [toBlock(buildSyncStartText(synced_at)), ...contentBlocks, toBlock(SYNC_END_TEXT)];
+  const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
+  return [textBlock(buildSyncStartText(synced_at)), ...contentBlocks, textBlock(SYNC_END_TEXT)];
 }
 
 // Scans a page's top-level blocks (same 100-block-page caveat as
