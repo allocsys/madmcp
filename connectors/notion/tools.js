@@ -7,7 +7,7 @@ import { NOTION_INDEX_PAGE_ID } from "../../config.js";
 import {
   notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, notionBlockPlainText, parseMarkers,
-  buildIndexEntryText, parseIndexEntryText,
+  buildIndexEntryText, parseIndexEntryText, buildChangelogEntryText, isChangelogEntryText,
 } from "./client.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
