@@ -152,7 +152,7 @@ async function appendChangelogEntry(page_id, summary) {
 // unsupported block type) -- the single-item tool catches this to preserve
 // its existing isError response shape; the batch tool lets Promise.allSettled
 // catch it per item, same pattern as mem/tools.js.
-async function doUpdatePage({ page_id, title, append_content, archived, replacements, status }) {
+async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations }) {
   const results = [];
   if (title !== undefined || archived !== undefined) {
     const body = {};
@@ -205,6 +205,23 @@ async function doUpdatePage({ page_id, title, append_content, archived, replacem
       await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: [statusMarkerBlock(status)] } });
       results.push(`Status marker added: "${status}" (page had none before).`);
     }
+  }
+  // relations REPLACES the existing set whole (not merged), same contract as
+  // mem0_update's relations param. Requires reading current blocks to find
+  // the existing relation blocks to remove -- reuses blocksData if a
+  // replacements/status branch above already fetched it, to avoid a
+  // redundant call.
+  if (relations !== undefined) {
+    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
+    const existingRelations = parseRelationBlocks(blocksData.results || []);
+    for (const r of existingRelations) {
+      await notionRequest(`/blocks/${r.blockId}`, { method: "DELETE" });
+    }
+    const newBlocks = buildRelationBlocks(relations);
+    if (newBlocks.length) {
+      await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: newBlocks } });
+    }
+    results.push(`Relations replaced: ${existingRelations.length} removed, ${newBlocks.length} added.`);
   }
   // Skip the changelog write when this call archived the page -- Notion
   // rejects block edits on an already-archived page ("Can't edit block that
