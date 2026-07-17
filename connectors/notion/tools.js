@@ -444,6 +444,7 @@ export function register(server) {
           to_entity_id: z.string().describe("The entity_id of the other tracked page this one relates to"),
           relation:     z.string().describe("The relation type -- see notion_create_page"),
         })).optional().describe("Optional outgoing relations for this page -- see notion_create_page."),
+        one_off:     z.boolean().optional().describe("Required if entity_id is omitted -- see notion_create_page."),
       })).min(1).describe("List of pages to create"),
     },
     async ({ items }) => {
