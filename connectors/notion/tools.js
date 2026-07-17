@@ -588,6 +588,28 @@ export function register(server) {
   );
 
   server.tool(
+    "notion_sync_content",
+    "Write content into a marked, machine-managed range on a Notion page, without disturbing anything a person has added elsewhere on the page. On first use, appends a new range (start marker + content + end marker) to the end of the page. On later calls with the same synced_at, does nothing (already up to date). On later calls with a different synced_at, replaces only the blocks between the markers -- content above the start marker or below the end marker is never read or touched. This is the low-level primitive behind mem0->Notion sync; call directly for testing, or to sync arbitrary external content into a page.",
+    {
+      page_id:     z.string().describe("Notion page ID to write the synced range onto"),
+      content:     z.string().describe("Plain text content for the synced range, one paragraph block per newline-separated line"),
+      synced_at:   z.string().describe("Version/timestamp identifying this content revision (e.g. an ISO timestamp or a source system's updated_at). If this matches what's already on the page, the call is a no-op."),
+    },
+    async ({ page_id, content, synced_at }) => {
+      const contentLines = content.split("\n");
+      let result;
+      try {
+        result = await replaceSyncedRange({ page_id, contentLines, synced_at });
+      } catch (err) {
+        return { content: [{ type: "text", text: err.message }], isError: true };
+      }
+      if (result.action === "created") return { content: [{ type: "text", text: `Created new synced range (${result.blockCount} blocks) on page ${page_id}.` }] };
+      if (result.action === "skipped") return { content: [{ type: "text", text: `No changes made — ${result.reason}.` }] };
+      return { content: [{ type: "text", text: `Synced range updated on page ${page_id}: ${result.removed} block(s) removed, ${result.added} added (was mem0_synced_at: ${result.previousSyncedAt}, now: ${synced_at}). Content above/below the markers was left untouched.` }] };
+    }
+  );
+
+  server.tool(
     "notion_update_pages_batch",
     "Update multiple Notion pages in a single call, to reduce round trips. Each item supports the same title/append_content/archived/replacements/status behavior as notion_update_page. One item failing (e.g. an ambiguous replacement match) does not block the others.",
     {
