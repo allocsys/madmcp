@@ -397,6 +397,10 @@ export function register(server) {
         content:     z.string().optional().describe("Plain text content to add as paragraph blocks"),
         entity_id:   z.string().optional().describe("Optional stable identifier for this page -- see notion_create_page. If a page already exists with this entity_id, this item is skipped (not duplicated) and the existing id/url is reported instead."),
         status:      z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status (open/resolved/superseded) -- see notion_create_page."),
+        relations:   z.array(z.object({
+          to_entity_id: z.string().describe("The entity_id of the other tracked page this one relates to"),
+          relation:     z.string().describe("The relation type -- see notion_create_page"),
+        })).optional().describe("Optional outgoing relations for this page -- see notion_create_page."),
       })).min(1).describe("List of pages to create"),
     },
     async ({ items }) => {
