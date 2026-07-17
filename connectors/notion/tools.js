@@ -241,22 +241,33 @@ export function register(server) {
     "Get a Notion page's properties and content blocks.",
     {
       page_id: z.string().describe("Notion page ID (UUID format, e.g. from notion_search)"),
+      cursor:  z.string().optional().describe("Pagination cursor from a previous call's response (see the more-blocks note) -- fetches the next page of up to 100 blocks instead of starting over. Omit for the first call."),
     },
-    async ({ page_id }) => {
+    async ({ page_id, cursor }) => {
+      const blocksPath = `/blocks/${page_id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`;
       const [page, blocksData] = await Promise.all([
         notionRequest(`/pages/${page_id}`),
-        notionRequest(`/blocks/${page_id}/children?page_size=100`),
+        notionRequest(blocksPath),
       ]);
-      const title    = notionPageTitle(page);
-      const blocks   = blocksData.results || [];
+      const title     = notionPageTitle(page);
+      const allBlocks = blocksData.results || [];
+      // Changelog entries (gap #4) are kept out of the normal content view --
+      // they're an operational log, not page content -- surfaced instead via
+      // notion_get_page_history. Filtered only from what's *shown* here, not
+      // from the raw block count, since they still occupy real block slots.
+      const blocks = allBlocks.filter((b) => !(b.type === "paragraph" && isChangelogEntryText(notionRichTextToString(b.paragraph?.rich_text || []))));
+      const changelogCount = allBlocks.length - blocks.length;
       const content  = notionBlocksToText(blocks);
-      const hasMore  = blocksData.has_more ? "\n\n⚠️ Page has more blocks — only first 100 shown." : "";
+      const hasMore  = blocksData.has_more
+        ? `\n\n⚠️ Page has more blocks — call notion_get_page again with cursor: "${blocksData.next_cursor}" to see the next page.`
+        : "";
       const subPages     = blocks.filter((b) => b.type === "child_page").length;
       const subDatabases = blocks.filter((b) => b.type === "child_database").length;
       const childSummary = (subPages || subDatabases)
         ? `\n\n🔗 ${subPages} subpage(s), ${subDatabases} subdatabase(s) found — use notion_get_page on their IDs above to view them.`
         : "";
-      const markers      = parseMarkers(blocks);
+      const changelogNote = changelogCount ? `\n📜 ${changelogCount} changelog entr${changelogCount === 1 ? "y" : "ies"} on this page (this view) — use notion_get_page_history to see them.` : "";
+      const markers      = parseMarkers(allBlocks);
       const markerLine   = (markers.entity_id || markers.status)
         ? `\n${markers.entity_id ? `Entity ID: ${markers.entity_id}` : ""}${markers.entity_id && markers.status ? " | " : ""}${markers.status ? `Status: ${markers.status}` : ""}`
         : "";
@@ -264,9 +275,34 @@ export function register(server) {
         `# ${title}\n` +
         `ID: ${page.id}\n` +
         `URL: ${page.url}\n` +
-        `Created: ${page.created_time?.slice(0, 10)} | Last edited: ${page.last_edited_time?.slice(0, 10)}${markerLine}\n\n` +
+        `Created: ${page.created_time?.slice(0, 10)} | Last edited: ${page.last_edited_time?.slice(0, 10)}${markerLine}${changelogNote}\n\n` +
         (content || "(no content)") + hasMore + childSummary;
       return { content: [{ type: "text", text }] };
+    }
+  );
+
+  server.tool(
+    "notion_get_page_history",
+    "Get the version/change history of a Notion page -- every notion_update_page call recorded against it, with a summary of what changed and when. Notion's API has no native page-revision endpoint (unlike mem0_get_history, which wraps one), so this reads back the append-only changelog blocks notion_update_page writes on every successful change. Only covers changes made through these tools, not edits made directly in the Notion UI or by other integrations.",
+    {
+      page_id: z.string().describe("Notion page ID (UUID format, e.g. from notion_search)"),
+      cursor:  z.string().optional().describe("Pagination cursor from a previous call, to see older history beyond the first 100 blocks scanned. Omit for the first call."),
+    },
+    async ({ page_id, cursor }) => {
+      const blocksPath = `/blocks/${page_id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const blocksData = await notionRequest(blocksPath);
+      const blocks = blocksData.results || [];
+      const entries = blocks
+        .filter((b) => b.type === "paragraph")
+        .map((b) => notionRichTextToString(b.paragraph?.rich_text || []))
+        .filter(isChangelogEntryText);
+      const hasMore = blocksData.has_more
+        ? `\n\n⚠️ More blocks exist beyond this page — call again with cursor: "${blocksData.next_cursor}" to scan further (older changelog entries, if any, may be further in).`
+        : "";
+      if (!entries.length) {
+        return { content: [{ type: "text", text: `No changelog entries found on this page (within the blocks scanned).${hasMore}` }] };
+      }
+      return { content: [{ type: "text", text: entries.join("\n") + hasMore }] };
     }
   );
 
