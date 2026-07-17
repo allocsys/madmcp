@@ -249,10 +249,7 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     results.push(`Updated page "${notionPageTitle(data)}" (ID: ${data.id}).`);
   }
   if (append_content) {
-    const children = append_content.split("\n").filter(Boolean).map((line) => ({
-      object: "block", type: "paragraph",
-      paragraph: { rich_text: [{ type: "text", text: { content: line } }] },
-    }));
+    const children = append_content.split("\n").filter(Boolean).map(textBlock);
     await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
     results.push(`Appended ${children.length} paragraph(s) to page.`);
   }
