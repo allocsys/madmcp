@@ -119,6 +119,25 @@ export function parseMarkers(blocks = []) {
   return result;
 }
 
+// Index-entry marker format for the dedicated dedup index page (see
+// NOTION_INDEX_PAGE_ID in config.js). One paragraph block per tracked
+// entity_id: "📇 entity_id | page_id | url". Kept separate from the
+// entity/status marker convention above (those live ON the tracked page
+// itself; this lives on the one central index page).
+const INDEX_ENTRY_PREFIX = "📇 ";
+
+export function buildIndexEntryText({ entity_id, page_id, url }) {
+  return `${INDEX_ENTRY_PREFIX}${entity_id} | ${page_id} | ${url || ""}`;
+}
+
+export function parseIndexEntryText(text) {
+  if (!text || !text.startsWith(INDEX_ENTRY_PREFIX)) return null;
+  const rest = text.slice(INDEX_ENTRY_PREFIX.length);
+  const [entity_id, page_id, url] = rest.split("|").map((s) => (s || "").trim());
+  if (!entity_id || !page_id) return null;
+  return { entity_id, page_id, url };
+}
+
 export function notionBlocksToText(blocks = []) {
   return blocks
     .map((b) => {
