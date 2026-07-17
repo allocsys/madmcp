@@ -9,6 +9,7 @@ import {
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, notionBlockPlainText, parseMarkers,
   buildIndexEntryText, parseIndexEntryText, buildChangelogEntryText, isChangelogEntryText,
   buildRelationBlocks, parseRelationBlocks,
+  buildSyncStartText, buildSyncRangeBlocks, findSyncRange,
 } from "./client.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
@@ -160,6 +161,61 @@ async function runSequentially(items, fn) {
 }
 
 const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "to_do"];
+
+// ---------------------------------------------------------------------------
+// Synced-range block replace (2026-07-18, mem0->Notion Sync Tool spec --
+// see mem0 entity_id: mem0-notion-sync-tool-spec). See client.js's
+// "Synced-range marker convention" comment for the marker format and why
+// this exists (protecting manual edits from being clobbered by a re-sync).
+// Same 100-block-page read limitation as findPageByEntityId/parseMarkers
+// elsewhere in this file -- a range on a page with >100 total blocks may
+// not be found; treated as not-found (append fresh range) rather than a
+// silent corruption risk, same reasoning as findSyncRange's unterminated-
+// range case.
+async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+  const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
+  const blocks = blocksData.results || [];
+  const range = findSyncRange(blocks);
+
+  if (!range) {
+    const children = buildSyncRangeBlocks({ synced_at, contentLines });
+    await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
+    return { action: "created", blockCount: children.length };
+  }
+
+  if (range.synced_at === synced_at) {
+    return { action: "skipped", reason: `already up to date (mem0_synced_at: ${synced_at})` };
+  }
+
+  // Delete every block strictly between the markers -- never the markers
+  // themselves, and never anything past the end marker.
+  for (const blockId of range.innerBlockIds) {
+    await notionRequest(`/blocks/${blockId}`, { method: "DELETE" });
+  }
+
+  // Insert new content right after the start marker via Notion's `after`
+  // cursor, so it lands inside the range regardless of what (if anything)
+  // sits below the end marker.
+  const contentBlocks = (contentLines || []).filter(Boolean).map((text) => ({
+    object: "block", type: "paragraph",
+    paragraph: { rich_text: [{ type: "text", text: { content: text } }] },
+  }));
+  if (contentBlocks.length) {
+    await notionRequest(`/blocks/${page_id}/children`, {
+      method: "PATCH",
+      body: { children: contentBlocks, after: range.startBlockId },
+    });
+  }
+
+  // Update the start marker's own text in place with the new timestamp --
+  // same single-block PATCH doUpdatePage uses for the status marker.
+  await notionRequest(`/blocks/${range.startBlockId}`, {
+    method: "PATCH",
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildSyncStartText(synced_at) } }] } },
+  });
+
+  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousSyncedAt: range.synced_at };
+}
 
 // Best-effort changelog append (gap #4) -- swallows its own errors rather
 // than throwing, since a failed history write shouldn't roll back or block
