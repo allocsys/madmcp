@@ -163,6 +163,48 @@ export function isChangelogEntryText(text) {
   return !!text && text.startsWith(CHANGELOG_PREFIX);
 }
 
+// ---------------------------------------------------------------------------
+// Relations convention (2026-07-17, gap #5 -- see mem0 entity_id:
+// madmcp-notion-connector-gaps-roadmap). Mirrors mem0_add's relations param:
+// a list of { relation, to_entity_id } pairs describing outgoing links from
+// this page's entity to another tracked entity. Stored like the
+// entity_id/status markers above -- one visible paragraph block per
+// relation:
+//   🔗 relation_type -> to_entity_id
+// SCOPE NOTE: unlike mem0_list's include_relations (which resolves both
+// outgoing AND incoming relations up to 3 hops), this only supports
+// outgoing relations stored directly on the page. Incoming/reverse lookups
+// ("what points TO this entity") would require scanning every tracked
+// page's blocks via the index page -- a real feature in its own right, not
+// implemented here.
+const RELATION_MARKER_PREFIX = "🔗 ";
+const RELATION_SEPARATOR = " -> ";
+
+export function buildRelationBlocks(relations = []) {
+  return relations.map(({ relation, to_entity_id }) => ({
+    object: "block", type: "paragraph",
+    paragraph: { rich_text: [{ type: "text", text: { content: `${RELATION_MARKER_PREFIX}${relation}${RELATION_SEPARATOR}${to_entity_id}` } }] },
+  }));
+}
+
+export function parseRelationBlocks(blocks = []) {
+  const relations = [];
+  for (const b of blocks) {
+    if (b.type !== "paragraph") continue;
+    const text = notionRichTextToString(b.paragraph?.rich_text || []);
+    if (!text.startsWith(RELATION_MARKER_PREFIX)) continue;
+    const rest = text.slice(RELATION_MARKER_PREFIX.length);
+    const sepIdx = rest.indexOf(RELATION_SEPARATOR);
+    if (sepIdx === -1) continue;
+    relations.push({
+      relation: rest.slice(0, sepIdx).trim(),
+      to_entity_id: rest.slice(sepIdx + RELATION_SEPARATOR.length).trim(),
+      blockId: b.id,
+    });
+  }
+  return relations;
+}
+
 export function notionBlocksToText(blocks = []) {
   return blocks
     .map((b) => {
