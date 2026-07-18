@@ -5,7 +5,7 @@
 
 export const GITHUB_TOKEN   = process.env.GITHUB_TOKEN;
 export const GITHUB_API     = "https://api.github.com";
-export const DEFAULT_OWNER  = process.env.DEFAULT_OWNER || "dumbCodesOnly";
+export const DEFAULT_OWNER  = process.env.DEFAULT_OWNER || "allocsys";
 
 // Minimum spacing (ms) enforced between outgoing GitHub REST requests, to
 // avoid tripping GitHub's *secondary* rate limit, which fires on request
