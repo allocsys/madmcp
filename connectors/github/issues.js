@@ -10,20 +10,22 @@ export function register(server) {
 
   server.tool(
     "get_issue",
-    "Get a single issue's full details, including its complete body text -- unlike search_issues/list_issues, which only return title/metadata snippets. Use this before assessing whether an issue is a good, well-scoped contribution candidate.",
+    "Get a single issue's full details, including its complete body text and comment thread -- unlike search_issues/list_issues, which only return title/metadata snippets. Use this before assessing whether an issue is a good, well-scoped contribution candidate.",
     {
-      owner:        z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:         z.string().describe("Repository name"),
-      issue_number: z.number().describe("Issue number"),
+      owner:                z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:                 z.string().describe("Repository name"),
+      issue_number:         z.number().describe("Issue number"),
+      include_comments:     z.boolean().optional().describe("Whether to fetch and include the issue's comment thread (default: true)"),
+      max_comments:         z.number().optional().describe("Max number of comments to include, most recent first (default: 20, max: 100)"),
     },
-    async ({ owner = DEFAULT_OWNER, repo, issue_number }) => {
+    async ({ owner = DEFAULT_OWNER, repo, issue_number, include_comments = true, max_comments = 20 }) => {
       const data = await githubRequest(`/repos/${owner}/${repo}/issues/${issue_number}`);
       if (data.pull_request) {
         return { content: [{ type: "text", text: `#${issue_number} is a pull request, not an issue -- use get_pr_comments/get_pr_reviews instead.` }] };
       }
       const labels = data.labels.length ? data.labels.map((l) => l.name).join(", ") : "none";
       const assignees = data.assignees.length ? data.assignees.map((a) => a.login).join(", ") : "none";
-      const text = [
+      const lines = [
         `#${data.number} [${data.state}] ${data.title}`,
         `by ${data.user.login} | opened ${data.created_at.slice(0, 10)} | updated ${data.updated_at.slice(0, 10)}`,
         `labels: ${labels} | assignees: ${assignees} | comments: ${data.comments}`,
@@ -31,8 +33,25 @@ export function register(server) {
         "",
         "--- body ---",
         data.body || "(no body)",
-      ].join("\n");
-      return { content: [{ type: "text", text }] };
+      ];
+
+      if (include_comments && data.comments > 0) {
+        const perPage = Math.min(Math.max(max_comments, 1), 100);
+        const commentsData = await githubRequest(
+          `/repos/${owner}/${repo}/issues/${issue_number}/comments?per_page=${perPage}&sort=created&direction=desc`
+        );
+        // Re-sort ascending (oldest first) for a natural reading order, since
+        // the API call above fetches the most recent N via direction=desc.
+        const ordered = [...commentsData].reverse();
+        lines.push("", `--- comments (${ordered.length} of ${data.comments} shown) ---`);
+        for (const c of ordered) {
+          lines.push("", `[${c.user.login} | ${c.created_at.slice(0, 10)}]`, c.body || "(empty)");
+        }
+      } else if (include_comments) {
+        lines.push("", "--- comments ---", "(no comments)");
+      }
+
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     }
   );
 
