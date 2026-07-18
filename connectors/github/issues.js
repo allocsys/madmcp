@@ -9,6 +9,34 @@ import { DEFAULT_OWNER } from "../../config.js";
 export function register(server) {
 
   server.tool(
+    "get_issue",
+    "Get a single issue's full details, including its complete body text -- unlike search_issues/list_issues, which only return title/metadata snippets. Use this before assessing whether an issue is a good, well-scoped contribution candidate.",
+    {
+      owner:        z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:         z.string().describe("Repository name"),
+      issue_number: z.number().describe("Issue number"),
+    },
+    async ({ owner = DEFAULT_OWNER, repo, issue_number }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/issues/${issue_number}`);
+      if (data.pull_request) {
+        return { content: [{ type: "text", text: `#${issue_number} is a pull request, not an issue -- use get_pr_comments/get_pr_reviews instead.` }] };
+      }
+      const labels = data.labels.length ? data.labels.map((l) => l.name).join(", ") : "none";
+      const assignees = data.assignees.length ? data.assignees.map((a) => a.login).join(", ") : "none";
+      const text = [
+        `#${data.number} [${data.state}] ${data.title}`,
+        `by ${data.user.login} | opened ${data.created_at.slice(0, 10)} | updated ${data.updated_at.slice(0, 10)}`,
+        `labels: ${labels} | assignees: ${assignees} | comments: ${data.comments}`,
+        data.html_url,
+        "",
+        "--- body ---",
+        data.body || "(no body)",
+      ].join("\n");
+      return { content: [{ type: "text", text }] };
+    }
+  );
+
+  server.tool(
     "list_issues",
     "List issues in a GitHub repository.",
     {
