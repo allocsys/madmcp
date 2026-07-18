@@ -7,6 +7,24 @@ export const GITHUB_TOKEN   = process.env.GITHUB_TOKEN;
 export const GITHUB_API     = "https://api.github.com";
 export const DEFAULT_OWNER  = process.env.DEFAULT_OWNER || "dumbCodesOnly";
 
+// Minimum spacing (ms) enforced between outgoing GitHub REST requests, to
+// avoid tripping GitHub's *secondary* rate limit, which fires on request
+// burstiness/concurrency rather than raw hourly quota (see
+// https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+// A shared in-process queue in client.js enforces this even across
+// concurrent tool calls. Override via env var if this proves too
+// conservative or not conservative enough in practice.
+export const GITHUB_MIN_REQUEST_INTERVAL_MS = Number(process.env.GITHUB_MIN_REQUEST_INTERVAL_MS) || 300;
+
+// Retry behavior specifically for secondary-rate-limit (403) and primary
+// rate-limit-exhausted (403 with x-ratelimit-remaining: 0) responses, plus
+// 429s. Does NOT retry other 4xx/5xx errors -- those are real failures, not
+// pacing issues, and should surface immediately.
+export const GITHUB_MAX_RETRIES = Number(process.env.GITHUB_MAX_RETRIES) || 3;
+// Fallback backoff (ms) when GitHub doesn't send a Retry-After header.
+// Doubles each retry (300 -> ~1.6s -> ~3.2s with jitter) if Retry-After is absent.
+export const GITHUB_RETRY_BASE_MS = Number(process.env.GITHUB_RETRY_BASE_MS) || 1500;
+
 export const NOTION_TOKEN   = process.env.NOTION_TOKEN;
 export const NOTION_API     = "https://api.notion.com/v1";
 export const NOTION_VERSION = "2022-06-28";
