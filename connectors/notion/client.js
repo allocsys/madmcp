@@ -162,17 +162,30 @@ export function parseMarkers(blocks = []) {
 // entity/status marker convention above (those live ON the tracked page
 // itself; this lives on the one central index page).
 const INDEX_ENTRY_PREFIX = "📇 ";
+const INDEX_TAGS_PREFIX  = "tags:";
 
-export function buildIndexEntryText({ entity_id, page_id, url }) {
-  return `${INDEX_ENTRY_PREFIX}${entity_id} | ${page_id} | ${url || ""}`;
+// tags param is optional -- omitted entirely (no 4th segment) for entries
+// that have no tags, rather than writing an empty "tags:" segment, so old
+// entries and untagged entries look identical on the page.
+export function buildIndexEntryText({ entity_id, page_id, url, tags }) {
+  const base = `${INDEX_ENTRY_PREFIX}${entity_id} | ${page_id} | ${url || ""}`;
+  if (!tags || !tags.length) return base;
+  return `${base} | ${INDEX_TAGS_PREFIX}${tags.join(",")}`;
 }
 
+// Backward compatible with the original 3-field format (entity_id | page_id
+// | url) -- a 4th "tags:..." segment is read if present, otherwise tags
+// comes back as an empty array rather than the parse failing.
 export function parseIndexEntryText(text) {
   if (!text || !text.startsWith(INDEX_ENTRY_PREFIX)) return null;
   const rest = text.slice(INDEX_ENTRY_PREFIX.length);
-  const [entity_id, page_id, url] = rest.split("|").map((s) => (s || "").trim());
+  const parts = rest.split("|").map((s) => (s || "").trim());
+  const [entity_id, page_id, url, tagsField] = parts;
   if (!entity_id || !page_id) return null;
-  return { entity_id, page_id, url };
+  const tags = (tagsField || "").startsWith(INDEX_TAGS_PREFIX)
+    ? tagsField.slice(INDEX_TAGS_PREFIX.length).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+    : [];
+  return { entity_id, page_id, url, tags };
 }
 
 // ---------------------------------------------------------------------------
