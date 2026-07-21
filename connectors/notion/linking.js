@@ -127,37 +127,65 @@ export function scoreCandidate({ title, content, tags, createdAt }, candidate) {
 }
 
 const MAX_CANDIDATES_TO_SCORE = 8;
+const MAX_TAG_QUERIES = 2;
 
 // Searches Notion for plausible candidates and scores them against the new
-// page. Only called when the new page's title/content contains at least one
-// repo#number-style identifier -- with no identifier to anchor a search
-// query on, notion_search would just return keyword noise, so we skip
-// straight to "no candidates" rather than guessing a query.
+// page. Runs one search per "anchor" -- the identifier's repo name (if any)
+// plus up to MAX_TAG_QUERIES of the new page's own tags -- and merges the
+// results, deduped by page ID, before scoring.
+//
+// FIX (2026-07-21, live-test bug): originally only searched on the
+// identifier's repo name, which meant Signal 3 (tag overlap) could only
+// ever fire as an accidental side effect of that search also surfacing a
+// tag-sharing page for unrelated reasons -- a candidate under a different
+// repo/identifier had no path into the pool at all, even with 2+ shared
+// tags. The tag-anchored queries below give it one.
+//
+// If the new page has neither an identifier nor any tags, there's nothing
+// deterministic to search on -- notion_search would just return keyword
+// noise -- so we skip straight to "no candidates" instead of guessing.
 //
 // Returns { strong: [...], medium: [...] } -- weak/null candidates are
 // dropped entirely, not surfaced to callers.
 export async function findLinkCandidates({ title, content }) {
   const idTokens = [...extractIdentifiers(title), ...extractIdentifiers(content || "")];
-  if (!idTokens.length) return { strong: [], medium: [] };
+  const newTags  = extractTags(content || "");
+  if (!idTokens.length && !newTags.size) return { strong: [], medium: [] };
 
-  // Search on the repo name (most specific short deterministic query we can
-  // build) rather than the full title/content -- Notion's search is
-  // keyword-based and a full sentence dilutes relevance.
-  const [primaryRepo] = idTokens[0].split("#");
-  let searchData;
-  try {
-    searchData = await notionRequest("/search", {
-      method: "POST",
-      body: { query: primaryRepo, page_size: MAX_CANDIDATES_TO_SCORE },
-    });
-  } catch {
-    // Search unreachable -- fail soft (no candidates found) rather than
-    // blocking page creation over a best-effort convenience feature.
-    return { strong: [], medium: [] };
+  const queries = [];
+  if (idTokens.length) {
+    // Repo name is the most specific short deterministic query we can build
+    // from an identifier -- Notion's search is keyword-based and a full
+    // sentence dilutes relevance.
+    const [primaryRepo] = idTokens[0].split("#");
+    queries.push(primaryRepo);
   }
-  const hits = (searchData.results || []).filter((r) => r.object === "page");
+  for (const tag of [...newTags].slice(0, MAX_TAG_QUERIES)) {
+    queries.push(tag);
+  }
 
-  const newTags = extractTags(content || "");
+  const seenPageIds = new Set();
+  const hits = [];
+  for (const q of queries) {
+    let searchData;
+    try {
+      searchData = await notionRequest("/search", {
+        method: "POST",
+        body: { query: q, page_size: MAX_CANDIDATES_TO_SCORE },
+      });
+    } catch {
+      // This query failed -- try the remaining anchors rather than aborting
+      // the whole candidate search over one bad call.
+      continue;
+    }
+    for (const hit of searchData.results || []) {
+      if (hit.object !== "page" || seenPageIds.has(hit.id)) continue;
+      seenPageIds.add(hit.id);
+      hits.push(hit);
+    }
+  }
+  if (!hits.length) return { strong: [], medium: [] };
+
   const strong = [];
   const medium = [];
   for (const hit of hits) {
