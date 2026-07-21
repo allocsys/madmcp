@@ -118,6 +118,41 @@ export async function githubRequest(path, { method = "GET", body, accept } = {})
   throw new Error(`GitHub API error (${lastErr ? lastErr.status : 429}): ${message} -- exhausted ${GITHUB_MAX_RETRIES} retries`);
 }
 
+// GitHub's REST API has no endpoint to convert a draft PR to ready-for-review
+// -- that action only exists as the markPullRequestReadyForReview GraphQL
+// mutation. Reuses the same throttle queue as REST requests so it doesn't
+// bypass the burstiness protection above.
+export async function githubGraphQL(query, variables = {}) {
+  assertConfigured();
+
+  const doGraphQL = async () => {
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        "Content-Type": "application/json",
+        "User-Agent": "manufact-mcp-server",
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    return { res, data };
+  };
+
+  const { res, data } = await scheduleThrottled(doGraphQL);
+
+  if (!res.ok || (data && data.errors)) {
+    const message = data && data.errors
+      ? data.errors.map((e) => e.message).join("; ")
+      : res.statusText;
+    throw new Error(`GitHub GraphQL error: ${message}`);
+  }
+
+  return data.data;
+}
+
 export function toBase64(str) {
   return Buffer.from(str, "utf-8").toString("base64");
 }
