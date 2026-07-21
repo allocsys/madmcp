@@ -19,10 +19,12 @@ export function register(server) {
       pull_number:      z.number().optional().describe("If provided, fetch this single PR's details instead of listing PRs."),
       include_comments: z.boolean().optional().describe("When fetching a single PR, include its conversation comments (default: true)"),
       include_reviews:  z.boolean().optional().describe("When fetching a single PR, include its formal reviews (default: true)"),
+      include_commits:  z.boolean().optional().describe("When fetching a single PR, include its commit list with each commit's GitHub signature verification status (the same 'Verified' badge shown in the GitHub UI) (default: true)"),
       max_comments:     z.number().optional().describe("Max comments to include, most recent first, when fetching a single PR (default: 20, max: 100)"),
       max_reviews:      z.number().optional().describe("Max reviews to include when fetching a single PR (default: 30, max: 100)"),
+      max_commits:      z.number().optional().describe("Max commits to include when fetching a single PR (default: 100, max: 250)"),
     },
-    async ({ owner, repo, state = "open", per_page = 20, pull_number, include_comments = true, include_reviews = true, max_comments = 20, max_reviews = 30 }) => {
+    async ({ owner, repo, state = "open", per_page = 20, pull_number, include_comments = true, include_reviews = true, include_commits = true, max_comments = 20, max_reviews = 30, max_commits = 100 }) => {
       if (pull_number === undefined) {
         const data = await githubRequest(`/repos/${owner}/${repo}/pulls?state=${state}&per_page=${per_page}`);
         if (!data.length) return { content: [{ type: "text", text: `No ${state} pull requests found.` }] };
@@ -58,6 +60,20 @@ export function register(server) {
                 `${r.user.login} — ${r.state} (${(r.submitted_at || "").slice(0, 16).replace("T", " ")})${r.body ? `:\n${r.body}` : ""}`
               ).join("\n\n")
             : "--- No reviews yet ---"
+        );
+      }
+
+      if (include_commits) {
+        const commits = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/commits?per_page=${max_commits}`);
+        sections.push(
+          commits.length
+            ? `--- ${commits.length} commit(s) — signature verification ---\n\n` + commits.map((c) => {
+                const v = c.commit?.verification || {};
+                const badge = v.verified ? "✅ Verified" : `❌ Unverified${v.reason ? ` (${v.reason})` : ""}`;
+                const firstLine = (c.commit?.message || "").split("\n")[0];
+                return `${c.sha.slice(0, 7)} — ${badge}\n  ${firstLine}\n  author: ${c.commit?.author?.name || c.author?.login || "unknown"}`;
+              }).join("\n\n")
+            : "--- No commits found ---"
         );
       }
 
