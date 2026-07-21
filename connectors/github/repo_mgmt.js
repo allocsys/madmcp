@@ -65,6 +65,35 @@ export function register(server) {
     }
   );
 
+  // ── Sync fork ────────────────────────────────────────────────────────────
+
+  server.tool(
+    "sync_fork",
+    "Fast-forward a branch on a fork so it matches its upstream parent repository, using GitHub's merge-upstream API. Only works on repos that are actual forks, and only fast-forwards (no conflict resolution) — if the branch has diverged with local commits ahead of upstream, this will report that a merge is needed instead of a fast-forward.",
+    {
+      owner:  z.string().optional().describe(`Repository owner (the fork). Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:   z.string().describe("Repository name (the fork)"),
+      branch: z.string().optional().describe("Branch to sync (default: repo default branch)"),
+    },
+    async ({ owner = DEFAULT_OWNER, repo, branch }) => {
+      let targetBranch = branch;
+      if (!targetBranch) {
+        const repoData = await githubRequest(`/repos/${owner}/${repo}`);
+        targetBranch = repoData.default_branch;
+      }
+      const data = await githubRequest(`/repos/${owner}/${repo}/merge-upstream`, {
+        method: "POST",
+        body: { branch: targetBranch },
+      });
+      return {
+        content: [{
+          type: "text",
+          text: `${data.merge_type === "fast-forward" ? "✅" : "ℹ️"} ${owner}/${repo}:${targetBranch} — ${data.message}\nMerge type: ${data.merge_type}\nNow at: ${data.base_branch}`,
+        }],
+      };
+    }
+  );
+
   // ── Delete repo ──────────────────────────────────────────────────────────
 
   server.tool(
