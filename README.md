@@ -152,7 +152,7 @@ Workers: `cf_workers_list`, `cf_workers_get_worker`, `cf_workers_get_worker_code
 Observability: `cf_workers_observability_query/keys/values/compare`
 
 ### Notion
-`notion_search`, `notion_get_page`, `notion_create_page`, `notion_update_page`
+`notion_search`, `notion_list`, `notion_get_page`, `notion_create_page`, `notion_update_page`
 
 ### Mem0
 `mem0_add`, `mem0_add_batch`, `mem0_get`, `mem0_get_history`, `mem0_list`, `mem0_search`,
