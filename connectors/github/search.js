@@ -51,13 +51,12 @@ async function fallbackCodeSearch({ owner, repo, query, per_page }) {
   const tree        = await githubRequest(`/repos/${owner}/${repo}/git/trees/${branchData.object.sha}?recursive=1`);
 
   const allBlobs = tree.tree.filter((item) => item.type === "blob");
-  const candidates = allBlobs
-    .filter((item) => {
-      if (item.size > FALLBACK_MAX_BYTES) return false;
-      const ext = item.path.includes(".") ? item.path.split(".").pop().toLowerCase() : "";
-      return !BINARY_EXTENSIONS.has(ext);
-    })
-    .slice(0, FALLBACK_MAX_FILES);
+  const eligible = allBlobs.filter((item) => {
+    if (item.size > FALLBACK_MAX_BYTES) return false;
+    const ext = item.path.includes(".") ? item.path.split(".").pop().toLowerCase() : "";
+    return !BINARY_EXTENSIONS.has(ext);
+  });
+  const candidates = eligible.slice(0, FALLBACK_MAX_FILES);
 
   const needle  = searchTerm.toLowerCase();
   const matches = [];
@@ -83,7 +82,11 @@ async function fallbackCodeSearch({ owner, repo, query, per_page }) {
   return {
     matches,
     scanned: candidates.length,
-    truncated: candidates.length < allBlobs.length || tree.truncated === true,
+    // Only flag as capped when we actually left eligible (non-binary,
+    // under-size) files unscanned due to FALLBACK_MAX_FILES, or when GitHub
+    // truncated the tree listing itself. Filtering out binary/oversized
+    // files is expected and shouldn't be reported as a cap.
+    truncated: eligible.length > FALLBACK_MAX_FILES || tree.truncated === true,
   };
 }
 
