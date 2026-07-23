@@ -261,7 +261,11 @@ async function appendChangelogEntry(page_id, summary) {
 // catch it per item, same pattern as mem/tools.js.
 export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations }) {
   const results = [];
-  if (title !== undefined || archived !== undefined) {
+  // Unarchive (or a title-only change) runs first, same as before -- this
+  // leaves the page editable for any block-level edits below. Archiving
+  // (archived: true) is deliberately NOT handled here -- see the bottom of
+  // this function for why it's deferred to run last.
+  if (title !== undefined || archived === false) {
     const body = {};
     if (archived !== undefined) body.archived = archived;
     if (title    !== undefined) body.properties = { title: { title: [{ text: { content: title } }] } };
@@ -326,6 +330,21 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
       await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: newBlocks } });
     }
     results.push(`Relations replaced: ${existingRelations.length} removed, ${newBlocks.length} added.`);
+  }
+  // Archiving (archived: true) runs LAST, after append_content/
+  // replacements/status/relations have all completed above -- confirmed via
+  // live testing 2026-07-23 that Notion rejects block-level edits on an
+  // already-archived page ("Can't edit block that is archived"), so doing
+  // this step first (as the old code did, bundled with title) let the
+  // archive silently succeed while a later block edit in the same call
+  // threw, producing a confusing partial-success-then-error result. Title
+  // is included here too if it wasn't already applied above, so a single
+  // call with {title, archived: true} still sets both in one PATCH.
+  if (archived === true) {
+    const body = { archived: true };
+    if (title !== undefined) body.properties = { title: { title: [{ text: { content: title } }] } };
+    const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
+    results.push(`Updated page "${notionPageTitle(data)}" (ID: ${data.id}).`);
   }
   // Skip the changelog write when this call archived the page -- Notion
   // rejects block edits on an already-archived page ("Can't edit block that
