@@ -2,11 +2,11 @@
 
 # 🔌 madmcp
 
-**An MCP server giving Claude (or any MCP client) direct tool access to GitHub, Cloudflare, Notion, Mem0, and the web — one connector, five real backends.**
+**An MCP server giving Claude (or any MCP client) direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, and the web — one connector, six real backends.**
 
 [![Protocol](https://img.shields.io/badge/protocol-MCP-E8A33D?style=flat-square)](https://modelcontextprotocol.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-6FBF8B?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![Connectors](https://img.shields.io/badge/connectors-GitHub%20%C2%B7%20Cloudflare%20%C2%B7%20Notion%20%C2%B7%20Mem0%20%C2%B7%20Fetch-7CA6D6?style=flat-square)](#connectors--tools)
+[![Connectors](https://img.shields.io/badge/connectors-GitHub%20%C2%B7%20Cloudflare%20%C2%B7%20Notion%20%C2%B7%20Mem0%20%C2%B7%20Context7%20%C2%B7%20Fetch-7CA6D6?style=flat-square)](#connectors--tools)
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commons%20Clause-blue?style=flat-square)](./LICENSE)
 
 <a href="https://allocsys.github.io/madmcp/demo.html">
@@ -124,19 +124,20 @@ See **Configuration** below for the full variable reference.
 
 ### GitHub
 File/repo ops: `read_file`, `read_file_chunked`, `get_file_at_commit`, `list_directory`,
-`get_file_tree`, `create_or_update_file`, `push_files`, `str_replace_file`, `rename_file`,
+`get_file_tree`, `create_repo_file`, `overwrite_file`, `overwrite_files`, `str_replace_file`, `rename_file`,
 `delete_file`, `diff_files`, `download_repo`
 
 Branches & commits: `list_branches`, `create_branch`, `list_commits`, `get_commit`, `list_contributors`
 
-Issues & PRs: `list_issues`, `create_issue`, `update_issue`, `add_issue_comment`,
-`get_pull_requests`, `create_pull_request`, `review_pull_request`, `merge_pull_request`
+Issues & PRs: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`,
+`get_pull_requests`, `create_pull_request`, `update_pull_request`, `get_pr_comments`, `get_pr_reviews`,
+`review_pull_request`, `merge_pull_request`
 
 Releases & tags: `list_releases`, `create_release`, `list_tags`
 
-Repo management: `list_repos`, `get_repo`, `create_repo`, `delete_repo`, `get_repo_topics`
+Repo management: `list_repos`, `get_repo`, `create_repo`, `delete_repo`, `get_repo_topics`, `fork_repo`, `sync_fork`
 
-Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `search_code`
+Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`, `search_code`, `search_issues`
 
 CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`
 
@@ -149,18 +150,30 @@ KV: `cf_kv_namespaces_list`, `cf_kv_namespace_get/create/update/delete`
 
 R2: `cf_r2_buckets_list`, `cf_r2_bucket_get/create/delete`
 
-Hyperdrive: `cf_hyperdrive_configs_list`, `cf_hyperdrive_config_get/edit/delete`
+Hyperdrive: `cf_hyperdrive_configs_list`, `cf_hyperdrive_config_get/create/update/delete`
 
 Workers: `cf_workers_list`, `cf_workers_get_worker`, `cf_workers_get_worker_code`
 
 Observability: `cf_workers_observability_query/keys/values/compare`
 
 ### Notion
-`notion_search`, `notion_list`, `notion_get_page`, `notion_create_page`, `notion_update_page`
+`notion_search`, `notion_list`, `notion_get_page`, `notion_get_page_history`, `notion_create_page`,
+`notion_create_pages_batch`, `notion_create_database`, `notion_update_page`, `notion_update_pages_batch`,
+`notion_update_database`, `notion_sync_content`
 
 ### Mem0
 `mem0_add`, `mem0_add_batch`, `mem0_get`, `mem0_get_history`, `mem0_list`, `mem0_search`,
 `mem0_update`, `mem0_delete`, `mem0_delete_batch`, `mem0_delete_all`
+
+### Context7
+`search_library`, `get_library_docs` — resolve a library/framework name to a Context7 ID, then fetch
+up-to-date, version-specific docs and code examples for it. Works without an API key at low rate
+limits; `CONTEXT7_API_KEY` is optional.
+
+### Sync
+`sync_mem0_to_notion` — one-way sync from Mem0 into a Notion "Memory Index": creates/updates a
+Notion page per Mem0 memory, archives pages for superseded or hard-deleted memories, and leaves any
+manual edits on those pages untouched.
 
 ### Fetch
 `web_fetch` — fetch a public URL and return text/JSON/stripped HTML
@@ -176,7 +189,13 @@ All tokens are optional independently — a connector's tools fail at call time
 | `NOTION_TOKEN` | Notion tools |
 | `MEM0_API_KEY` | Mem0 tools (`MEM0_USER_ID` optional, defaults to `default`) |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
+| `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
 | `DEFAULT_OWNER` | Default GitHub owner when omitted from a call (defaults to `allocsys`) |
+| `GITHUB_MIN_REQUEST_INTERVAL_MS` | Minimum spacing between outgoing GitHub REST requests, to avoid secondary rate limits (default `300`) |
+| `GITHUB_MAX_RETRIES` | Max retries on GitHub secondary-rate-limit/429 responses (default `3`) |
+| `GITHUB_RETRY_BASE_MS` | Fallback backoff base when GitHub omits `Retry-After` (default `1500`, doubles per retry) |
+| `NOTION_INDEX_PAGE_ID` | Page used for entity_id → page_id dedup lookups (has a working default) |
+| `NOTION_SYNC_PARENT_PAGE_ID` | Parent page for pages created by `sync_mem0_to_notion` (has a working default) |
 | `MCP_SHARED_KEY` | Shared-secret auth for `/mcp`. Unset = endpoint is open to anyone with the URL — set this in any real deployment. |
 | `IP_ALLOWLIST_ENABLED` | Set `false` to disable the IP allowlist (default: enabled) |
 | `ALLOWED_IP_RANGES` | Comma-separated CIDR ranges allowed to call `/mcp` (defaults to Anthropic's published connector range) |
