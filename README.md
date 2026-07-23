@@ -138,6 +138,10 @@ Repo management: `list_repos`, `get_repo`, `create_repo`, `delete_repo`, `get_re
 
 Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `search_code`
 
+CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`
+
+Review control: `request_reviewers`, `remove_requested_reviewers`, `get_pr_mergeability`, `add_review_comment`, `get_branch_protection`, `list_notifications`
+
 ### Cloudflare
 D1: `cf_d1_databases_list`, `cf_d1_database_get`, `cf_d1_database_create`, `cf_d1_database_delete`, `cf_d1_database_query`
 
