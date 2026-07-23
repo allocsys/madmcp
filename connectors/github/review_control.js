@@ -78,8 +78,10 @@ export function register(server) {
     },
     async ({ owner = DEFAULT_OWNER, repo, pull_number }) => {
       let pr;
+      let polls = 0;
       for (let attempt = 0; attempt < 4; attempt++) {
         pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
+        polls++;
         if (pr.mergeable !== null) break;
         if (attempt < 3) await new Promise((r) => setTimeout(r, 1200));
       }
@@ -94,9 +96,12 @@ export function register(server) {
         unknown:   "GitHub is still computing mergeability — try again shortly.",
       };
 
+      const mergeableLine = pr.mergeable === null
+        ? `mergeable: still computing (polled ${polls}x, ~${(polls - 1) * 1.2}s — GitHub hasn't finished; try again shortly)`
+        : `mergeable: ${pr.mergeable}${polls > 1 ? ` (resolved after ${polls} poll(s))` : ""}`;
       const text =
         `PR #${pull_number}: ${pr.title}\n` +
-        `mergeable: ${pr.mergeable === null ? "still computing" : pr.mergeable}\n` +
+        `${mergeableLine}\n` +
         `mergeable_state: ${pr.mergeable_state}${stateMeaning[pr.mergeable_state] ? ` — ${stateMeaning[pr.mergeable_state]}` : ""}\n` +
         `rebaseable: ${pr.rebaseable === null ? "unknown" : pr.rebaseable}\n` +
         `${pr.head.label} → ${pr.base.label}`;
@@ -113,16 +118,27 @@ export function register(server) {
       pull_number: z.number().describe("Pull request number"),
       commit_id:   z.string().describe("SHA of the commit being commented on — typically the PR's current head SHA (from get_pull_requests or list_commits)"),
       path:        z.string().describe("File path (relative to repo root) the comment applies to"),
-      line:        z.number().describe("Line number in the file (as shown in the diff) to attach the comment to"),
-      side:        z.enum(["LEFT", "RIGHT"]).optional().describe("Which side of the diff the line refers to — RIGHT for the new/added version, LEFT for the old/removed version (default: RIGHT)"),
+      line:        z.number().describe("Line number in the file (as shown in the diff) to attach the comment to. For a multi-line comment, this is the LAST line of the range."),
+      side:        z.enum(["LEFT", "RIGHT"]).optional().describe("Which side of the diff `line` refers to — RIGHT for the new/added version, LEFT for the old/removed version (default: RIGHT)"),
+      start_line:  z.number().optional().describe("First line of a multi-line comment range. Omit for a single-line comment. Must be on the same side as `line` and less than it."),
+      start_side:  z.enum(["LEFT", "RIGHT"]).optional().describe("Side of the diff `start_line` refers to (default: same as `side`). Only used with `start_line`."),
       body:        z.string().describe("Comment text"),
     },
-    async ({ owner = DEFAULT_OWNER, repo, pull_number, commit_id, path, line, side = "RIGHT", body }) => {
+    async ({ owner = DEFAULT_OWNER, repo, pull_number, commit_id, path, line, side = "RIGHT", start_line, start_side, body }) => {
+      const payload = { commit_id, path, line, side, body };
+      if (start_line !== undefined) {
+        if (start_line >= line) {
+          throw new Error("start_line must be less than line for a multi-line comment.");
+        }
+        payload.start_line = start_line;
+        payload.start_side = start_side || side;
+      }
       const data = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/comments`, {
         method: "POST",
-        body: { commit_id, path, line, side, body },
+        body: payload,
       });
-      return { content: [{ type: "text", text: `Added inline comment on ${path}:${line} (PR #${pull_number}).\n${data.html_url}` }] };
+      const rangeDesc = start_line !== undefined ? `${start_line}-${line}` : `${line}`;
+      return { content: [{ type: "text", text: `Added inline comment on ${path}:${rangeDesc} (PR #${pull_number}).\n${data.html_url}` }] };
     }
   );
 
@@ -139,8 +155,11 @@ export function register(server) {
       try {
         data = await githubRequest(`/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}/protection`);
       } catch (err) {
-        if (/404/.test(err.message)) {
+        if (/\(404\)/.test(err.message)) {
           return { content: [{ type: "text", text: `Branch '${branch}' has no protection rules configured.` }] };
+        }
+        if (/\(403\)/.test(err.message)) {
+          return { content: [{ type: "text", text: `Can't read branch protection for '${branch}': the token lacks permission (403). Branch protection reads require admin access on the repo, even though the rules themselves may be visible in the GitHub UI.` }] };
         }
         throw err;
       }
