@@ -2,7 +2,7 @@
 // connectors/notion/client.js
 // ---------------------------------------------------------------------------
 
-import { NOTION_TOKEN, NOTION_API, NOTION_VERSION } from "../../config.js";
+import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID } from "../../config.js";
 
 export async function notionRequest(path, { method = "GET", body } = {}) {
   if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the Manufact server.");
@@ -186,6 +186,43 @@ export function parseIndexEntryText(text) {
     ? tagsField.slice(INDEX_TAGS_PREFIX.length).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
     : [];
   return { entity_id, page_id, url, tags };
+}
+
+// ---------------------------------------------------------------------------
+// Reads every row of the Entity Index database (NOTION_INDEX_DATABASE_ID),
+// paginated. Added 2026-07-24 alongside the page->database dedup-index
+// migration (see config.js's NOTION_INDEX_DATABASE_ID comment) to give
+// callers that need the FULL set of tracked entities -- not a single
+// entity_id lookup (that's findPageByEntityId in tools.js) -- a supported
+// way to read it. Before this, linking.js's findTagOverlapCandidates and
+// sync/mem0_notion.js's readSyncedIndexEntries both kept reading raw blocks
+// off the old page-based index directly instead, which silently stopped
+// reflecting reality the moment writes moved to the database: new entries
+// were never appended to the old page, so both call sites were scanning an
+// index that could only shrink (relative to ground truth) over time, and
+// broke outright once that old page was archived. Same 10-page/100-row-
+// per-page ceiling as listAllMemories in mem0_notion.js.
+export async function queryAllIndexEntries() {
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 10;
+  const entries = [];
+  let cursor;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const body = { page_size: PAGE_SIZE };
+    if (cursor) body.start_cursor = cursor;
+    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
+    for (const row of data.results || []) {
+      const entity_id = notionRichTextToString(row.properties?.EntityId?.rich_text || []);
+      const page_id   = notionRichTextToString(row.properties?.PageId?.rich_text || []);
+      const url       = row.properties?.Url?.url || "";
+      const tagsRaw   = notionRichTextToString(row.properties?.Tags?.rich_text || []);
+      const tags      = tagsRaw ? tagsRaw.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean) : [];
+      if (entity_id && page_id) entries.push({ entity_id, page_id, url, tags });
+    }
+    if (!data.has_more) break;
+    cursor = data.next_cursor;
+  }
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
