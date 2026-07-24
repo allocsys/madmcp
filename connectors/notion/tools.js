@@ -93,6 +93,21 @@ async function appendIndexEntry({ entity_id, page_id, url, tags }) {
 }
 
 // ---------------------------------------------------------------------------
+// Backfill/repair path (2026-07-24, index reset -- see Notion plan page
+// "Entity Index Migration"). notion_create_page/appendIndexEntry always
+// index the page THEY just created -- there was no way to add an index row
+// for a page that already exists elsewhere (e.g. after the index database
+// was reset empty and existing entity_id-marked pages needed backfilling).
+// Reuses appendIndexEntry unchanged, same idempotent skip-if-present check
+// as doCreatePage, just without also creating a page.
+export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
+  const existing = await findPageByEntityId(entity_id);
+  if (existing) return { skipped: true, existingId: existing.pageId };
+  const error = await appendIndexEntry({ entity_id, page_id, url, tags: tags || [] });
+  return { skipped: false, error };
+}
+
+// ---------------------------------------------------------------------------
 // Shared create-page logic (2026-07-17, gap #6 -- see mem0 entity_id:
 // madmcp-notion-connector-gaps-roadmap). Extracted out of notion_create_page's
 // handler so notion_create_pages_batch can reuse the exact same dedup +
@@ -723,6 +738,31 @@ export function register(server) {
       if (result.action === "created") return { content: [{ type: "text", text: `Created new synced range (${result.blockCount} blocks) on page ${page_id}.` }] };
       if (result.action === "skipped") return { content: [{ type: "text", text: `No changes made — ${result.reason}.` }] };
       return { content: [{ type: "text", text: `Synced range updated on page ${page_id}: ${result.removed} block(s) removed, ${result.added} added (was mem0_synced_at: ${result.previousSyncedAt}, now: ${synced_at}). Content above/below the markers was left untouched.` }] };
+    }
+  );
+
+  server.tool(
+    "notion_index_entries_add_batch",
+    "Backfill/repair tool: add entries to the Entity Index database for pages that already exist and already carry an entity_id marker, but aren't yet recorded in the index (e.g. after the index was reset, or a write silently failed earlier). Skips (no duplicate row) any entity_id already indexed. NOT for normal page creation -- notion_create_page/notion_create_pages_batch already index automatically when you pass entity_id there; use this only to backfill pre-existing pages.",
+    {
+      items: z.array(z.object({
+        entity_id: z.string().describe("The entity_id marker already present on the target page"),
+        page_id:   z.string().describe("Notion page ID of the existing page this entity_id refers to"),
+        url:       z.string().optional().describe("Notion URL of the page"),
+        tags:      z.array(z.string()).optional().describe("Tags for this entity, if any (lowercase, no # prefix)"),
+      })).min(1).describe("List of index entries to backfill"),
+    },
+    async ({ items }) => {
+      const results = await runSequentially(items, upsertIndexEntry);
+      const lines = results.map((r, i) => {
+        const label = items[i].entity_id;
+        if (r.status === "rejected") return `\u2717 [${i}] ${label} \u2014 ${r.reason?.message || r.reason}`;
+        if (r.value.skipped) return `\u23ed [${i}] ${label} \u2014 already indexed (page ${r.value.existingId})`;
+        if (r.value.error) return `\u26a0\ufe0f [${i}] ${label} \u2014 write failed: ${r.value.error}`;
+        return `\u2713 [${i}] ${label} \u2014 indexed`;
+      });
+      const added = results.filter((r) => r.status === "fulfilled" && !r.value.skipped && !r.value.error).length;
+      return { content: [{ type: "text", text: `${added}/${items.length} added.\n\n${lines.join("\n")}` }] };
     }
   );
 
