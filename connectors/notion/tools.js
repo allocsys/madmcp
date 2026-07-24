@@ -7,7 +7,7 @@ import { NOTION_INDEX_DATABASE_ID } from "../../config.js";
 import {
   notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, notionBlockPlainText, parseMarkers,
-  buildIndexEntryText, parseIndexEntryText, buildChangelogEntryText, isChangelogEntryText,
+  buildChangelogEntryText, isChangelogEntryText,
   buildRelationBlocks, parseRelationBlocks,
   buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
 } from "./client.js";
