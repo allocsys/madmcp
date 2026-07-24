@@ -156,11 +156,12 @@ export function parseMarkers(blocks = []) {
   return result;
 }
 
-// Index-entry marker format for the dedicated dedup index page (see
-// NOTION_INDEX_PAGE_ID in config.js). One paragraph block per tracked
-// entity_id: "📇 entity_id | page_id | url". Kept separate from the
-// entity/status marker convention above (those live ON the tracked page
-// itself; this lives on the one central index page).
+// Index-entry marker format -- legacy, from when the dedup index lived on a
+// single page (see NOTION_INDEX_DATABASE_ID's comment in config.js for the
+// 2026-07-24 move to a real database). One paragraph block per tracked
+// entity_id: "📇 entity_id | page_id | url". No longer written anywhere in
+// this codebase (queryAllIndexEntries reads the database instead), but left
+// defined in case any external content still uses this format.
 const INDEX_ENTRY_PREFIX = "📇 ";
 const INDEX_TAGS_PREFIX  = "tags:";
 
