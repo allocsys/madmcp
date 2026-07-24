@@ -41,16 +41,20 @@ export const NOTION_VERSION = "2022-06-28";
 // with a filter on EntityId is just as immediately-consistent as the direct
 // block read (no search-index lag either way, since it's not going through
 // notion_search) but is NOT subject to the 100-block-page limit -- database
-// queries paginate independently of any single page's block count. Old page
-// ID retained below only for the one-time migration of existing entries
-// into database rows; new dedup lookups/writes use NOTION_INDEX_DATABASE_ID.
-export const NOTION_INDEX_PAGE_ID = process.env.NOTION_INDEX_PAGE_ID || "3a045572-b580-81a4-80e8-c9e5460520a6";
-// Entity Index database, created 2026-07-24 under the "Claude" page (id
-// 3a045572-b580-8007-b622-c120958557bf). Properties: Name (title, holds the
-// entity_id for readability in the Notion UI), EntityId (rich_text, the
-// actual filter target), PageId (rich_text), Url (url), Tags (rich_text,
-// comma-separated). Override via env var if this database is ever
-// moved/recreated.
+// queries paginate independently of any single page's block count.
+// UPDATE (2026-07-24, later same day): the old page-based index, its
+// migration tool, and a since-discovered duplicate database were all
+// archived/removed once every remaining reader (linking.js's
+// findTagOverlapCandidates, sync/mem0_notion.js's readSyncedIndexEntries)
+// was moved onto queryAllIndexEntries (client.js), which reads this
+// database directly. NOTION_INDEX_PAGE_ID no longer exists as a config
+// value -- nothing in the codebase reads it anymore. This database was
+// also recreated fresh (new ID below) as part of that same cleanup, with
+// zero rows -- no old entries were migrated in.
+// Entity Index database properties: Name (title, holds the entity_id for
+// readability in the Notion UI), EntityId (rich_text, the actual filter
+// target), PageId (rich_text), Url (url), Tags (rich_text, comma-separated).
+// Override via env var if this database is ever moved/recreated.
 export const NOTION_INDEX_DATABASE_ID = process.env.NOTION_INDEX_DATABASE_ID || "3a745572-b580-8160-856b-cf6544c8ffa8";
 
 // Parent page for new pages created by sync_mem0_to_notion (connectors/sync/
