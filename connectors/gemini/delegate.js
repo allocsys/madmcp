@@ -800,7 +800,7 @@ export async function runInvestigation({ task, max_steps = 6 }) {
 
     const responseParts = [];
     for (const part of functionCalls) {
-      const { name, args } = part.functionCall;
+      const { name, args, id } = part.functionCall;
       const fn = FUNCTIONS.find((f) => f.name === name);
       let resultText;
       if (!fn) {
@@ -813,9 +813,13 @@ export async function runInvestigation({ task, max_steps = 6 }) {
         }
       }
       transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
-      responseParts.push({ functionResponse: { name, response: { result: resultText } } });
+      // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
+      // turns go back with role "user" (NOT "function" -- that was the older doc convention
+      // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
+      // original functionCall.id so the API can thread multi-call turns correctly.
+      responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
     }
-    contents.push({ role: "function", parts: responseParts });
+    contents.push({ role: "user", parts: responseParts });
   }
 
   return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript };
