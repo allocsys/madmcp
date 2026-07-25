@@ -103,7 +103,7 @@
 // content distinct.
 //
 // NOTE on relations (2026-07-13, relational-info step of the anti-bloat plan
-// rev 2 — storage/write-side only, see manufact-mem0-relations-plan):
+// rev 2 — storage/write-side only, see madmcp-mem0-relations-plan):
 // mem0_add/mem0_add_batch/mem0_update accept an optional `relations` array
 // of {to_entity_id, relation}, stored under metadata.relations — same
 // "store in metadata, resolve client-side" mechanism as tags/entity_id/
@@ -143,7 +143,7 @@
 // patched and deleted in the same call, though that's not a real use case).
 //
 // NOTE on relations traversal/read-side (2026-07-13, completes
-// manufact-mem0-relations-plan's relational-info step):
+// madmcp-mem0-relations-plan's relational-info step):
 // Adds findReferencingEntities (reverse lookup — who points AT this
 // entity_id, since relations are stored one-directional on the source
 // memory only), a resolveRelationTarget helper that distinguishes three
@@ -736,7 +736,7 @@ export function register(server) {
       const landed = await verifyLanded({ user_id, agent_id, run_id, entity_id, content });
       const landedNote = landed
         ? ` Confirmed landed (id: ${landed.id}).`
-        : `\n\n⚠ Could not confirm this memory landed after several verification attempts — Mem0's async job may have silently failed (see manufact-mem0-add-silent-failure-diagnostic). Re-run mem0_search/mem0_list shortly to check, and retry mem0_add if it's still missing.`;
+        : `\n\n⚠ Could not confirm this memory landed after several verification attempts — Mem0's async job may have silently failed (see madmcp-mem0-add-silent-failure-diagnostic). Re-run mem0_search/mem0_list shortly to check, and retry mem0_add if it's still missing.`;
       const relationNote = relationWarnings.length ? `\n\n⚠ Relations:\n${relationWarnings.map((w) => `  ${w}`).join("\n")}` : "";
       return {
         content: [{
