@@ -81,6 +81,25 @@ export const CONTEXT7_API     = "https://context7.com/api/v2";
 // any connector tools (GitHub, Notion, Mem0, Fetch) are reachable.
 // If unset, the endpoint remains open (legacy behavior) — set this in
 // production so your tokens/connectors aren't usable by anyone with the URL.
+export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+export const GEMINI_API     = "https://generativelanguage.googleapis.com/v1beta";
+// Default model -- override via env var if this drifts out of date; Google
+// renames/retires Gemini model IDs periodically, so don't assume this stays
+// current without checking https://ai.google.dev/gemini-api/docs/models.
+export const GEMINI_MODEL   = process.env.GEMINI_MODEL || "gemini-flash-latest";
+
+// Read/write isolation for the Gemini connector's Notion access (2026-07-25
+// plan): Gemini tools may READ any page/database reachable via the existing
+// Notion connector (Memory Index, Entity Index, Job Leads, etc.), but may
+// only WRITE under this one page -- deliberately NOT a caller-supplied
+// parameter anywhere in connectors/gemini/, so there is no code path that
+// lets a Gemini tool call target a write anywhere else. A bad or
+// hallucinated Gemini write can only ever land inside this subtree, never
+// inside the Claude-side Memory Index / Entity Index / Job Leads structures
+// that other tools' dedup and sync logic depend on.
+// "Gemini" page, created as a sibling of the "Claude" root page.
+export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID || "3a845572-b580-81d0-8653-f64596e45e58";
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to

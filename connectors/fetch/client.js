@@ -85,6 +85,27 @@ async function assertSafeUrl(urlStr) {
   return parsed;
 }
 
+// Strip HTML tags and collapse whitespace into readable plain text. Lives
+// here (not fetch/tools.js) so other connectors that need the same
+// HTML-to-text step server-side -- e.g. gemini/tools.js's web_fetch_and_ask,
+// which strips a fetched page before handing it to Gemini -- can reuse this
+// instead of duplicating the tag/entity-stripping regexes.
+export function htmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function fetchUrl(url, { method = "GET", headers = {}, body } = {}) {
   let currentUrl = url;
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
