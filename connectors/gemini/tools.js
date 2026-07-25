@@ -99,10 +99,10 @@ export function register(server) {
     {
       task:          z.string().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused)."),
       max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 6, hard cap 20 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
-      log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: true). Write always targets the fixed Gemini root page."),
+      log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial gemini_investigate call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
     },
-    async ({ task, max_steps = 6, log_to_notion = true, resume_run_id }) => {
+    async ({ task, max_steps = 6, log_to_notion = false, resume_run_id }) => {
       let result;
       try {
         result = await runInvestigation({ task, max_steps, resume_run_id });
