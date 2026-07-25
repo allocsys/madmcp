@@ -29,10 +29,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      - name: Lint render.yaml
+      - name: Lint deploy config files
         run: |
           set -e
           npx --yes yaml-lint render.yaml
+          node -e "JSON.parse(require('fs').readFileSync('vercel.json', 'utf8')); console.log('vercel.json is valid JSON.')"
 
       - name: Install dependencies
         run: |
