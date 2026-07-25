@@ -117,6 +117,16 @@ export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "ge
 // "Gemini" page, created as a sibling of the "Claude" root page.
 export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID || "3a845572-b580-81d0-8653-f64596e45e58";
 
+// Redis-backed per-model rate-limit cooldown for the Gemini connector (see
+// connectors/gemini/cooldown.js), provisioned via the Vercel Marketplace
+// Upstash integration ("vercel install upstash", or the Vercel dashboard).
+// Not read as a named export here -- @upstash/redis's Redis.fromEnv() reads
+// UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN directly. Listed here
+// only so they're discoverable alongside every other service's env vars.
+// If unset, cooldown.js fails open (no cross-call rate-limit memory, but
+// never breaks a real Gemini call) -- safe to leave unset until the
+// Marketplace integration is activated.
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to
