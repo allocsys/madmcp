@@ -44,9 +44,9 @@ export function register(server) {
       url:              z.string().url().describe("The URL to fetch"),
       question:         z.string().describe("The specific question to answer using the page's content. Be specific -- vague questions get vague answers."),
       max_source_chars: z.number().optional().describe(`Truncate the fetched page to this many characters before sending to Gemini (default: ${DEFAULT_MAX_SOURCE_CHARS})`),
-      log_to_notion:    z.boolean().optional().describe("Whether to log this URL/question/answer as a page under the Gemini section of Notion (default: true). The write always targets the fixed Gemini root page -- this cannot be redirected elsewhere."),
+      log_to_notion:    z.boolean().optional().describe("Whether to log this URL/question/answer as a page under the Gemini section of Notion (default: false). The write always targets the fixed Gemini root page -- this cannot be redirected elsewhere."),
     },
-    async ({ url, question, max_source_chars = DEFAULT_MAX_SOURCE_CHARS, log_to_notion = true }) => {
+    async ({ url, question, max_source_chars = DEFAULT_MAX_SOURCE_CHARS, log_to_notion = false }) => {
       let fetched;
       try {
         fetched = await fetchUrl(url);
