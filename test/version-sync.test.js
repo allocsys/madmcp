@@ -19,7 +19,7 @@ describe("version sync", () => {
     const logMatch = serverSrc.match(/madmcp-server v([\d.]+) listening/);
 
     expect(mcpServerMatch, "Could not find McpServer({ version: \"...\" }) in server.js -- update this test's regex if that constructor call changed shape.").not.toBeNull();
-    expect(logMatch, "Could not find the 'manufact-mcp-server vX.Y.Z listening' startup log in server.js -- update this test's regex if that message changed.").not.toBeNull();
+    expect(logMatch, "Could not find the 'madmcp-server vX.Y.Z listening' startup log in server.js -- update this test's regex if that message changed.").not.toBeNull();
 
     expect(mcpServerMatch[1]).toBe(pkg.version);
     expect(logMatch[1]).toBe(pkg.version);
