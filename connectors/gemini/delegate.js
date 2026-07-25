@@ -24,7 +24,7 @@ import { geminiChat } from "./client.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
 import { queryTelemetry } from "../cloudflare/observability.js";
-import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle } from "../notion/client.js";
+import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 
 const HARD_MAX_STEPS = 10;
@@ -121,6 +121,29 @@ const FUNCTIONS = [
     execute: async ({ timeframe_from, timeframe_to, script_name, limit }) => {
       const data = await queryTelemetry({ timeframe_from, timeframe_to, script_name, limit });
       return JSON.stringify(data).slice(0, 30000);
+    },
+  },
+  {
+    name: "notion_get_page",
+    description: "Read a Notion page's title and text content by page ID (read-only). Use this after notion_search finds a candidate page, to actually see what's on it -- notion_search only returns titles/ids, not content.",
+    parameters: {
+      type: "object",
+      properties: {
+        page_id: { type: "string", description: "Notion page ID, e.g. from notion_search results" },
+      },
+      required: ["page_id"],
+    },
+    execute: async ({ page_id }) => {
+      const [page, blocksData] = await Promise.all([
+        notionRequest(`/pages/${page_id}`),
+        notionRequest(`/blocks/${page_id}/children?page_size=100`),
+      ]);
+      const title   = notionPageTitle(page);
+      const blocks  = blocksData.results || [];
+      const content = notionBlocksToText(blocks) || "(no content)";
+      const hasMore = blocksData.has_more ? "\n[note: page has more than 100 blocks, only the first 100 are shown]" : "";
+      const text = `# ${title}\n${content}${hasMore}`;
+      return text.length > 20000 ? text.slice(0, 20000) + "\n...[truncated]" : text;
     },
   },
   {
