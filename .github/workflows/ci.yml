@@ -15,7 +15,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
+
+      # Manual cache (not setup-node's built-in `cache: npm`) because that
+      # option errors out at setup time if no lockfile is present -- and a
+      # missing/out-of-sync lockfile is a case we want to survive, not fail
+      # on. hashFiles() silently skips any pattern that matches nothing, so
+      # this works whether or not package-lock.json exists.
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
       - name: Lint render.yaml
         run: |
@@ -23,7 +35,20 @@ jobs:
           npx --yes yaml-lint render.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          set -e
+          if [ -f package-lock.json ]; then
+            if npm ci; then
+              echo "Installed via npm ci (lockfile in sync)."
+            else
+              echo "::warning::package-lock.json is out of sync with package.json -- falling back to npm install so CI can still run. Trigger the 'Generate lockfile' workflow (workflow_dispatch) to regenerate and commit an up-to-date lockfile."
+              rm -rf node_modules
+              npm install
+            fi
+          else
+            echo "::warning::No package-lock.json found -- falling back to npm install so CI can still run. Trigger the 'Generate lockfile' workflow (workflow_dispatch) to generate and commit one."
+            npm install
+          fi
 
       - name: Syntax-check all source files
         run: |
