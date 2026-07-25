@@ -815,7 +815,7 @@ export async function runInvestigation({ task, max_steps = 6 }) {
       transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
       responseParts.push({ functionResponse: { name, response: { result: resultText } } });
     }
-    contents.push({ role: "user", parts: responseParts });
+    contents.push({ role: "function", parts: responseParts });
   }
 
   return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript };
