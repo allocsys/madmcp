@@ -100,7 +100,7 @@ export const GEMINI_MODEL   = process.env.GEMINI_MODEL || "gemini-flash-latest";
 // repeated in this list. See https://ai.google.dev/gemini-api/docs/models for
 // current model IDs/limits -- these drift as Google ships new Flash/Flash-Lite
 // generations.
-export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash-lite,gemini-3-flash")
+export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
