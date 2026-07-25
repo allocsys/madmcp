@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// server.js — HTTP server + MCP bootstrap only.
+// server.js -- HTTP server + MCP bootstrap only.
 // To add a new connector: create connectors/<n>/tools.js and register below.
 // ---------------------------------------------------------------------------
 
@@ -10,6 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS } from "./config.js";
+import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
 import * as notion     from "./connectors/notion/tools.js";
@@ -38,53 +39,13 @@ sync.register(mcpServer);
 //   import * as myThing from "./connectors/myThing/tools.js";
 //   myThing.register(mcpServer);
 
-// Constant-time-ish comparison to avoid trivial timing leaks on the shared key.
-function safeEqual(a, b) {
-  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return mismatch === 0;
-}
-
 // --- IP allowlist -----------------------------------------------------
 // Restricts inbound requests to known client CIDR ranges (e.g. Anthropic's
 // published range for Claude connector traffic) BEFORE the key check runs,
 // so a leaked/guessed MCP_SHARED_KEY alone isn't enough to reach the server
 // from an untrusted network. IPv4 only; extend if you need IPv6 ranges too.
-
-function ipToLong(ip) {
-  return ip.split(".").reduce((acc, octet) => (acc << 8) + (parseInt(octet, 10) & 0xff), 0) >>> 0;
-}
-
-function isIpv4(ip) {
-  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
-}
-
-function isIpInCidr(ip, cidr) {
-  const [range, bitsStr] = cidr.split("/");
-  if (!isIpv4(ip) || !isIpv4(range)) return false;
-  const bits = bitsStr === undefined ? 32 : parseInt(bitsStr, 10);
-  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
-  return (ipToLong(ip) & mask) === (ipToLong(range) & mask);
-}
-
-// Strips the ::ffff: prefix Node sometimes adds to IPv4 addresses on dual-stack sockets.
-function normalizeIp(ip) {
-  if (typeof ip !== "string") return "";
-  return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-}
-
-// Reads the client IP from X-Forwarded-For (leftmost = original client) when
-// present, falling back to the raw socket address. NOTE: this trusts
-// X-Forwarded-For, which is only safe because the deploy platform sits in
-// front of this server as the sole entry point (it overwrites/sets this
-// header itself). If that ever changes, this needs `app.set('trust proxy', ...)`
-// tuned to the actual number of trusted hops, or the header becomes spoofable.
-function getClientIp(req) {
-  const forwarded = req.headers["x-forwarded-for"];
-  const raw = forwarded ? forwarded.split(",")[0].trim() : req.socket.remoteAddress;
-  return normalizeIp(raw || "");
-}
+// (safeEqual, isIpInCidr, getClientIp now live in ./connectors/security.js,
+// covered by test/security.test.js.)
 
 function requireAllowedIp(req, res, next) {
   if (!IP_ALLOWLIST_ENABLED) return next();
@@ -149,7 +110,7 @@ app.use(express.json({ limit: "10mb" }));
 // Gated behind auth: previously exposed which connectors were configured
 // (github/notion/mem0/cloudflare/auth booleans) to anyone with the URL, which
 // is free recon for an attacker probing the server. Now requires a valid key,
-// same as /mcp. /health stays open and info-free for uptime monitoring.
+// same as /mcp. /health stays open and info-free for uptime checks.
 app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
   res.json({
     status: "ok",

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Manual cache keyed on package.json, since no package-lock.json is
+      # committed yet -- setup-node's built-in `cache: npm` requires a
+      # lockfile to hash against. Once generate-lockfile.yml (workflow_dispatch)
+      # has run and committed one, switch this to `cache: npm` on setup-node
+      # (keyed on package-lock.json) + `npm ci` instead of `npm install`.
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Syntax-check all source files
+        run: |
+          set -e
+          find . -name "*.js" -not -path "./node_modules/*" -print0 | xargs -0 -n1 node --check
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Smoke test -- server boots and GET /health responds
+        run: |
+          set -e
+          node server.js &
+          SERVER_PID=$!
+          ok=""
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          kill "$SERVER_PID" || true
+          if [ -z "$ok" ]; then
+            echo "Server did not become healthy in time"
+            exit 1
+          fi
+          echo "Health check passed"
