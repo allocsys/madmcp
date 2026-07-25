@@ -721,6 +721,35 @@ const FUNCTIONS = [
 
   // -- Notion ---------------------------------------------------------------
   {
+    name: "notion_get_database",
+    description: "Get a Notion database's schema (title and property definitions) and basic info. Use this before notion_query_database to see what properties are available and their types.",
+    parameters: { type: "object", properties: { database_id: { type: "string" } }, required: ["database_id"] },
+    execute: async ({ database_id }) => {
+      const data = await notionRequest(`/databases/${database_id}`);
+      const title = notionDatabaseTitle(data);
+      const propLines = Object.entries(data.properties || {}).map(([name, def]) => `  ${name}: ${def.type}`);
+      return `# ${title}\nID: ${data.id}\nURL: ${data.url}\nCreated: ${data.created_time?.slice(0, 10)} | Last edited: ${data.last_edited_time?.slice(0, 10)}\n\nProperties:\n${propLines.join("\n") || "(none)"}`;
+    },
+  },
+  {
+    name: "notion_list",
+    description: "List recent pages and/or databases in the Notion workspace, sorted by most recently edited first -- no search query needed. Use this (not notion_search) when the task is 'find the latest X' or 'what's changed recently in Notion' -- notion_search requires a keyword and doesn't guarantee recency ordering.",
+    parameters: { type: "object", properties: {
+      filter_type: { type: "string", description: "Restrict to 'page' or 'database' (optional, default both)" },
+      page_size:   { type: "number", description: "Number of results (default 10, max 100)" },
+    } },
+    execute: async ({ filter_type, page_size = 10 }) => {
+      const body = { query: "", sort: { direction: "descending", timestamp: "last_edited_time" }, page_size };
+      if (filter_type) body.filter = { value: filter_type, property: "object" };
+      const data = await notionRequest("/search", { method: "POST", body });
+      if (!data.results?.length) return "No pages or databases found.";
+      return data.results.map(r => {
+        const title = r.object === "page" ? notionPageTitle(r) : (notionRichTextToString(r.title) || "(untitled)");
+        return `[${r.object}] ${title} — id: ${r.id} — last edited ${r.last_edited_time?.slice(0, 16)}`;
+      }).join("\n");
+    },
+  },
+  {
     name: "notion_get_page_history",
     description: "Get the changelog/version history entries recorded on a Notion page (read-only; looks for logged changelog blocks, not Notion's native edit history).",
     parameters: { type: "object", properties: { page_id: { type: "string" } }, required: ["page_id"] },
