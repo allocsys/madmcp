@@ -1,10 +1,9 @@
 name: Generate lockfile
 
-# Manual maintenance workflow: this session's sandbox has no network access,
-# so it can't run `npm install` to produce a real package-lock.json. GitHub
-# Actions does have network access, so run this once (and again any time
-# dependencies change) to generate and commit one -- then switch ci.yml over
-# to setup-node's built-in `cache: npm` (keyed on the lockfile) + `npm ci`.
+# Manual maintenance workflow: run this any time package.json's dependencies
+# change, to regenerate and commit package-lock.json. ci.yml already relies
+# on this lockfile (setup-node's `cache: npm` + `npm ci`), so a stale
+# lockfile will fail CI with a clear npm-ci mismatch error until this is run.
 on:
   workflow_dispatch: {}
 
