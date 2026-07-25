@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS } from "./config.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
@@ -18,6 +18,7 @@ import * as mem0       from "./connectors/mem/tools.js";
 import * as fetch      from "./connectors/fetch/tools.js";
 import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
+import * as gemini     from "./connectors/gemini/tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 
 // Build the MCP server once at startup and reuse it across all requests.
@@ -33,6 +34,7 @@ mem0.register(mcpServer);
 fetch.register(mcpServer);
 cloudflare.register(mcpServer);
 context7.register(mcpServer);
+gemini.register(mcpServer);
 sync.register(mcpServer);
 
 // Adding a new connector:
@@ -122,6 +124,7 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       mem0:   Boolean(MEM0_API_KEY),
       cloudflare: Boolean(CLOUDFLARE_API_TOKEN && CLOUDFLARE_ACCOUNT_ID),
       context7: true, // works unauthenticated at lower rate limits, so always "configured"
+      gemini: Boolean(GEMINI_API_KEY),
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });
@@ -154,6 +157,7 @@ app.listen(PORT, () => {
   if (!MEM0_API_KEY)   console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");
   if (!CLOUDFLARE_API_TOKEN || !CLOUDFLARE_ACCOUNT_ID) console.warn("WARNING: CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID not set. Cloudflare tools will fail.");
   if (!CONTEXT7_API_KEY) console.warn("NOTE: CONTEXT7_API_KEY is not set. Context7 tools will work but at lower, unauthenticated rate limits.");
+  if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEY is not set. Gemini tools (web_fetch_and_ask) will fail.");
   if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp, /mcp/:key, and / endpoints are OPEN to anyone who has the URL.");
   console.log(`IP allowlist: ${IP_ALLOWLIST_ENABLED ? `ENABLED (${ALLOWED_IP_RANGES.join(", ")})` : "DISABLED"}`);
 });
