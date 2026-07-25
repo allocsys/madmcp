@@ -1,0 +1,4 @@
+This file was committed to verify that vercel.json's deploymentEnabled setting
+correctly skips builds on branches other than main.
+
+Timestamp: 2026-07-25
