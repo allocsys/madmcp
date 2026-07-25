@@ -15,22 +15,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
-      # Manual cache keyed on package.json, since no package-lock.json is
-      # committed yet -- setup-node's built-in `cache: npm` requires a
-      # lockfile to hash against. Once generate-lockfile.yml (workflow_dispatch)
-      # has run and committed one, switch this to `cache: npm` on setup-node
-      # (keyed on package-lock.json) + `npm ci` instead of `npm install`.
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
+      - name: Lint render.yaml
+        run: |
+          set -e
+          npx --yes yaml-lint render.yaml
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Syntax-check all source files
         run: |
