@@ -5,6 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS } from "../../config.js";
+import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "./cooldown.js";
 
 async function callGenerateContentOnce(body, model) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the Manufact server.");
@@ -49,15 +50,27 @@ async function callGenerateContent(body, requestedModel) {
 
   let lastErr;
   for (let i = 0; i < models.length; i++) {
+    const model = models[i];
+    // Best-effort cross-call memory (see cooldown.js): if this model was 429'd
+    // recently -- possibly in a prior invocation, since Vercel doesn't
+    // guarantee a warm/reused instance between calls -- skip it without
+    // spending a request, same as if it had just failed with a fresh 429.
+    if (await isModelCoolingDown(model)) {
+      lastErr = lastErr || new Error(`Gemini API error (429): model "${model}" is in a recorded cooldown from a recent rate limit.`);
+      continue;
+    }
     try {
-      const data = await callGenerateContentOnce(body, models[i]);
-      if (i > 0) data._fallbackModelUsed = models[i]; // surfaced for logging/debugging, not required by callers
+      const data = await callGenerateContentOnce(body, model);
+      if (i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
       return data;
     } catch (err) {
       lastErr = err;
       const isLast = i === models.length - 1;
       if (err.status !== 429 || isLast) throw err;
-      // else: rate-limited on this model -- fall through to try the next one.
+      // Rate-limited on this model -- record a cooldown (best-effort; never
+      // blocks or throws on its own) so future calls can skip straight past
+      // it, then fall through to try the next model as before.
+      await setModelCooldown(model, parseRetryDelaySeconds(err.message));
     }
   }
   throw lastErr;
