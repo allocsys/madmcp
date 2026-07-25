@@ -20,7 +20,9 @@
 // plan page for the "known constraint" note; unresolved as of writing).
 // ---------------------------------------------------------------------------
 
+import { randomUUID } from "node:crypto";
 import { geminiChat } from "./client.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
 import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
@@ -772,25 +774,74 @@ const SYSTEM_PREAMBLE =
   "function calls. Be specific and cite what you found (file paths, commit SHAs, log entries, page " +
   "titles) rather than speculating.";
 
-// Runs the investigation loop. Returns { answer, steps, transcript } where
-// transcript is a human-readable log of each function call made (for the
-// Notion write in tools.js) and steps is how many model turns it took.
-export async function runInvestigation({ task, max_steps = 6 }) {
+// Runs the investigation loop. Returns { answer, steps, transcript, runId,
+// failed? } where transcript is a human-readable log of each function call
+// made (for the Notion write in tools.js) and steps is how many model turns
+// it took.
+//
+// CHECKPOINTING: after every step that completes its function calls, the
+// full loop state (contents + transcript + stepsDone) is saved to Redis
+// under a per-run UUID (see checkpoint.js). If the NEXT geminiChat() call
+// then fails (429/503/network blip -- exactly what killed a run in testing
+// on 2026-07-25), the already-completed steps are not lost: the caller gets
+// them back plus `runId`, and can pass `resume_run_id` on a follow-up call
+// to continue the same conversation from where it left off instead of
+// re-running (and re-paying for) steps 1..N again. Redis is best-effort
+// (see checkpoint.js) -- if it's unavailable, resumption just isn't
+// possible, same as before this existed; a failure still returns whatever
+// transcript was gathered in-memory this call.
+export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
   const cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
-  const contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
-  const transcript = [];
 
-  for (let step = 1; step <= cappedSteps; step++) {
-    const candidate = await geminiChat(contents, { tools: FUNCTION_DECLARATIONS });
+  let runId = resume_run_id;
+  let contents;
+  let transcript;
+  let startStep = 1;
+
+  const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
+  if (checkpoint) {
+    contents = checkpoint.contents;
+    transcript = checkpoint.transcript;
+    startStep = checkpoint.stepsDone + 1;
+  } else {
+    // Either no resume_run_id was given, or the checkpoint had already
+    // expired/wasn't found -- start a fresh run either way rather than
+    // erroring, since `task` is always available to build one.
+    runId = randomUUID();
+    contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
+    transcript = [];
+    startStep = 1;
+  }
+
+  for (let step = startStep; step <= cappedSteps; step++) {
+    let candidate;
+    try {
+      candidate = await geminiChat(contents, { tools: FUNCTION_DECLARATIONS });
+    } catch (err) {
+      // The step-1..N-1 work already happened and is real -- don't throw it
+      // away. Persist it (redundant with the save at the end of the prior
+      // iteration, but cheap and safe) and hand the caller everything they
+      // need to resume instead of restarting.
+      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1 });
+      return {
+        answer: `(Gemini call failed on step ${step}: ${err.message} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        steps: step - 1,
+        transcript,
+        runId,
+        failed: true,
+      };
+    }
+
     const parts = candidate.content?.parts || [];
     const functionCalls = parts.filter((p) => p.functionCall);
 
     if (!functionCalls.length) {
       const answer = parts.map((p) => p.text || "").join("").trim();
+      await deleteCheckpoint(runId);
       if (!answer) {
-        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})`, steps: step, transcript };
+        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})`, steps: step, transcript, runId };
       }
-      return { answer, steps: step, transcript };
+      return { answer, steps: step, transcript, runId };
     }
 
     // Record the model's turn (including its functionCall parts) before
@@ -820,7 +871,12 @@ export async function runInvestigation({ task, max_steps = 6 }) {
       responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
     }
     contents.push({ role: "user", parts: responseParts });
+
+    // Checkpoint after every fully-completed step, so a failure on the NEXT
+    // Gemini call (or a hosting-platform timeout) doesn't lose this one.
+    await saveCheckpoint(runId, { contents, transcript, stepsDone: step });
   }
 
-  return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript };
+  await deleteCheckpoint(runId);
+  return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript, runId };
 }
