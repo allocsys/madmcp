@@ -50,7 +50,9 @@ function scheduleThrottled(fn) {
 // Only retries responses that indicate pacing problems (secondary rate
 // limit, primary quota exhaustion, or a plain 429) -- any other 4xx/5xx is a
 // real error and is thrown immediately, unretried.
-function isRetryable(res, data) {
+// Exported (previously module-private) so it's directly unit-testable --
+// see test/github-client.test.js.
+export function isRetryable(res, data) {
   if (res.status === 429) return true;
   if (res.status === 403) {
     const msg = (data && (data.message || JSON.stringify(data))) || "";
@@ -60,7 +62,9 @@ function isRetryable(res, data) {
   return false;
 }
 
-function retryDelayMs(res, attempt) {
+// Exported (previously module-private) so it's directly unit-testable --
+// see test/github-client.test.js.
+export function retryDelayMs(res, attempt) {
   const retryAfter = res.headers.get("retry-after");
   if (retryAfter && !Number.isNaN(Number(retryAfter))) {
     return Number(retryAfter) * 1000;

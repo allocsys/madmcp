@@ -240,3 +240,17 @@ npm start
 
 Server listens on `PORT` (default `8080`). MCP endpoint: `POST /mcp`.
 Health check: `GET /health`.
+
+## Testing
+
+```bash
+npm install
+npm test
+```
+
+Runs the unit tests (vitest) covering the IP-allowlist/auth helpers
+(`connectors/security.js`) and the GitHub client's retry/backoff logic
+(`connectors/github/client.js`). CI (`.github/workflows/ci.yml`) runs these
+same tests on every push and PR, plus a syntax check and a boot/`GET /health`
+smoke test, as a merge gate — it does not deploy; Render and Vercel already
+auto-deploy on push via their own GitHub integrations.
