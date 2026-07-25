@@ -78,7 +78,7 @@ async function callGenerateContent(body, requestedModel) {
 
 // Single-turn text generation. Takes a plain prompt string (build any
 // system/user framing into it before calling) and returns the model's text
-// output. Used by web_fetch_and_ask -- a genuine one-shot "here's context,
+// output. Used by Delegate_web_fetch -- a genuine one-shot "here's context,
 // answer this" call with no tool use.
 export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTokens } = {}) {
   const body = {
