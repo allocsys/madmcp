@@ -63,7 +63,7 @@
     font-family:'Courier Prime',monospace;font-size:10px;letter-spacing:0.16em;color:var(--ink-soft);opacity:0.7;
   }
   .checkpoints::after{
-    content:"AGENT → 5 BACKENDS";position:absolute;top:12px;right:20px;
+    content:"AGENT → 6 BACKENDS";position:absolute;top:12px;right:20px;
     font-family:'Courier Prime',monospace;font-size:10px;letter-spacing:0.16em;color:var(--stamp-red);opacity:0.7;
   }
   .route-line{
@@ -228,7 +228,7 @@
     <div class="stamp-chip"><span class="dot"></span>routed live</div>
   </div>
   <h1>madmcp</h1>
-  <p class="sub">One server, six connectors — GitHub, Cloudflare, Notion, Mem0, web fetch, and Gemini-powered delegation — giving an AI agent direct, tool-level access to real infrastructure. <b>Below, a call is routed through each checkpoint</b> the way a single incident actually gets resolved. (This trace shows five stops; Gemini delegation — handing a whole multi-step investigation to <code>gemini_investigate</code> instead of calling each connector by hand — is the sixth.)</p>
+  <p class="sub">One server, six connectors — GitHub, Cloudflare, Notion, Mem0, web fetch, and Gemini-powered delegation — giving an AI agent direct, tool-level access to real infrastructure. <b>Below, a call is routed through each checkpoint</b> the way a single incident actually gets resolved.</p>
   <p class="note">Sample trace for illustration — the org, incident, and code shown are fictional.</p>
 
   <div class="checkpoints">
@@ -238,12 +238,13 @@
       <div class="stop" data-id="no"><div class="stamp">NO</div><div class="name">Notion</div></div>
       <div class="stop" data-id="m0"><div class="stamp">M0</div><div class="name">Mem0</div></div>
       <div class="stop" data-id="wf"><div class="stamp">WF</div><div class="name">Fetch</div></div>
+      <div class="stop" data-id="gm"><div class="stamp">GM</div><div class="name">Gemini</div></div>
     </div>
   </div>
 
   <div class="stage">
     <div class="manifest">
-      <div class="manifest-head"><span>STEP <b id="stepNum">1</b> / 6</span><span id="stepLabel">GITHUB · SEARCH</span></div>
+      <div class="manifest-head"><span>STEP <b id="stepNum">1</b> / 7</span><span id="stepLabel">GITHUB · SEARCH</span></div>
       <div class="manifest-body" id="body"></div>
       <div class="tickets" id="tickets">
         <button class="ticket active" data-step="0"><span class="num">1</span>GH</button>
@@ -252,6 +253,7 @@
         <button class="ticket" data-step="3"><span class="num">4</span>NO</button>
         <button class="ticket" data-step="4"><span class="num">5</span>M0</button>
         <button class="ticket" data-step="5"><span class="num">6</span>WF</button>
+        <button class="ticket" data-step="6"><span class="num">7</span>GM</button>
       </div>
       <div class="controls">
         <button class="play-btn" id="playBtn" type="button">▶ play trace</button>
@@ -267,8 +269,9 @@
       <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update_page · status → In review</p></div>
       <div class="card" data-id="4"><div class="tag-row"><span class="tag">Step 5 · Mem0</span><span class="metric">874ms</span></div><p>Stores the root cause with dedup + relations.</p><p class="tech">mem0_add + mem0_update · dup flagged, 3 relations linked</p></div>
       <div class="card" data-id="5"><div class="tag-row"><span class="tag">Step 6 · Fetch</span><span class="metric">233ms</span></div><p>Confirms the status page reflects the fix.</p><p class="tech">web_fetch · matches Cloudflare baseline</p></div>
+      <div class="card" data-id="6"><div class="tag-row"><span class="tag">Step 7 · Gemini</span><span class="metric">612ms</span></div><p>Delegates the postmortem write-up instead of chaining more manual calls.</p><p class="tech">gemini_investigate · 4 sub-steps run server-side in 1 call</p></div>
       <div class="stats">
-        <div class="row"><span>Connectors touched</span><span id="statConn">1 / 5</span></div>
+        <div class="row"><span>Connectors touched</span><span id="statConn">1 / 6</span></div>
         <div class="row"><span>Total latency</span><span id="statMs">118ms</span></div>
       </div>
     </div>
@@ -329,7 +332,14 @@
       ['call','→ web_fetch({ url: "https://status.acme-labs.dev/incidents/114" })'],
       ['result','"INC-114 — Resolved. Latency back to baseline (~310ms p95)."\nlast updated 09:58 · matches Cloudflare baseline'],
       ['stamped','✓ stamped · 233ms']
-    ], ms:233}
+    ], ms:233},
+    { id:'gm', label:'GEMINI · DELEGATED INVESTIGATION', lines:[
+      ['prompt','> write the postmortem — pull what changed, who reviewed it, and confirm it’s resolved'],
+      ['why','Why: this needs GitHub and Cloudflare context stitched together — hand the whole investigation to Gemini in one call instead of chaining more manual tool calls.'],
+      ['call','→ gemini_investigate({ task: "Summarize PR #482'"'"'s review and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
+      ['result','Gemini ran 4 steps server-side (list_commits, get_pr_reviews, cf_workers_observability_query, get_check_runs)\n→ "PR #482 approved by 2 reviewers, merged 09:52. p95 back to 310ms baseline, checks green."'],
+      ['stamped','✓ stamped · 612ms · 4 sub-steps run by Gemini, 1 call from the agent']
+    ], ms:612}
   ];
 
   const body = document.getElementById('body');
@@ -384,7 +394,7 @@
 
     let totalMs = 0;
     for(let i=0;i<=idx;i++) totalMs += steps[i].ms;
-    statConn.textContent = seen.size + ' / 5';
+    statConn.textContent = seen.size + ' / 6';
     statMs.textContent = totalMs.toLocaleString() + 'ms';
     statusText.textContent = 'step ' + (idx+1) + ' ready';
   }
@@ -422,7 +432,7 @@
 
     let totalMs = 0;
     for(let i=0;i<=idx;i++) totalMs += steps[i].ms;
-    statConn.textContent = seen.size + ' / 5';
+    statConn.textContent = seen.size + ' / 6';
     statMs.textContent = totalMs.toLocaleString() + 'ms';
 
     for(const [cls,text] of step.lines){
@@ -446,7 +456,7 @@
       playing = false;
       playBtn.disabled = false;
       playBtn.textContent = '↺ replay trace';
-      statusText.textContent = 'done — 6 steps, 5 connectors';
+      statusText.textContent = 'done — 7 steps, 6 connectors';
     }
   }
 
