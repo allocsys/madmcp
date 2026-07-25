@@ -28,6 +28,7 @@
 
 import { z } from "zod";
 import { geminiGenerate } from "./client.js";
+import { runInvestigation } from "./delegate.js";
 import { fetchUrl, htmlToText } from "../fetch/client.js";
 import { doCreatePage } from "../notion/tools.js";
 import { GEMINI_NOTION_ROOT_PAGE_ID } from "../../config.js";
@@ -89,6 +90,42 @@ export function register(server) {
       }
 
       return { content: [{ type: "text", text: `${answer}${notionNote}` }] };
+    }
+  );
+
+  server.tool(
+    "gemini_investigate",
+    "Delegate an open-ended, multi-step READ-ONLY investigation to Gemini instead of doing it yourself one tool call at a time. Gemini runs its own loop server-side -- reading GitHub files/trees/commits, Cloudflare Workers logs, and Notion pages/databases across as many turns as it needs (bounded by max_steps) -- and returns one synthesized answer. Use this for things like \"why is CI failing on PR #42\" or \"summarize what changed in this repo over the last week\" where you'd otherwise need 5-10 separate manual tool calls. Not for anything requiring a write -- this tool is read-only by design.",
+    {
+      task:          z.string().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't."),
+      max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 6, hard cap 10 regardless of this value)."),
+      log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: true). Write always targets the fixed Gemini root page."),
+    },
+    async ({ task, max_steps = 6, log_to_notion = true }) => {
+      let result;
+      try {
+        result = await runInvestigation({ task, max_steps });
+      } catch (err) {
+        return { content: [{ type: "text", text: `Investigation failed: ${err.message}` }], isError: true };
+      }
+
+      let notionNote = "";
+      if (log_to_notion) {
+        try {
+          const logged = await doCreatePage({
+            parent_id:   GEMINI_NOTION_ROOT_PAGE_ID,
+            parent_type: "page",
+            title:       `investigate: ${task.slice(0, 80)}`,
+            content:     `Task: ${task}\n\nSteps taken: ${result.steps}\n\nTool calls:\n${result.transcript.join("\n") || "(none)"}\n\nAnswer:\n${result.answer}`,
+            one_off:     true,
+          });
+          notionNote = `\n\n(Logged to Notion: ${logged.url})`;
+        } catch (err) {
+          notionNote = `\n\n(\u26a0\ufe0f Notion logging failed: ${err.message})`;
+        }
+      }
+
+      return { content: [{ type: "text", text: `${result.answer}\n\n(${result.steps} step(s) taken)${notionNote}` }] };
     }
   );
 }
