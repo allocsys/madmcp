@@ -106,6 +106,34 @@ const FUNCTIONS = [
     },
   },
   {
+    name: "github_search_issues",
+    description: "Search issues and pull requests across GitHub using GitHub's issue-search syntax (label:, is:issue, is:open, stars:>N, org:, repo:, -repo:, -org:, no:assignee, etc., combined with spaces as AND). Useful for cross-repo discovery like good-first-issue scanning -- github_read_file/github_get_file_tree only work within a single already-known repo.",
+    parameters: {
+      type: "object",
+      properties: {
+        query:    { type: "string", description: "GitHub issue-search query string, e.g. 'label:\"good first issue\" is:open is:issue no:assignee stars:>2000 -org:someorg'" },
+        sort:     { type: "string", description: "Sort field: created, updated, or comments (default: best-match relevance)" },
+        order:    { type: "string", description: "Sort order: asc or desc (default: desc)" },
+        per_page: { type: "number", description: "Number of results to return, max 100 (default 20)" },
+      },
+      required: ["query"],
+    },
+    execute: async ({ query, sort, order = "desc", per_page = 20 }) => {
+      let path = `/search/issues?q=${encodeURIComponent(query)}&order=${order}&per_page=${Math.min(per_page, 100)}`;
+      if (sort) path += `&sort=${sort}`;
+      const data = await githubRequest(path);
+      if (!data.items?.length) return "No results found.";
+      const lines = data.items.map((item) => {
+        const kind = item.pull_request ? "PR" : "Issue";
+        const labels = item.labels?.length ? ` [${item.labels.map((l) => l.name).join(", ")}]` : "";
+        const assignee = item.assignee ? ` (assigned: ${item.assignee.login})` : " (unassigned)";
+        return `${kind} #${item.number} [${item.state}] ${item.title}${labels}${assignee} -- ${item.repository_url.replace("https://api.github.com/repos/", "")} | created ${item.created_at.slice(0, 10)} | ${item.html_url}`;
+      });
+      const text = `Found ${data.total_count} total result(s), showing ${data.items.length}:\n${lines.join("\n")}`;
+      return text.length > 20000 ? text.slice(0, 20000) + "\n...[truncated]" : text;
+    },
+  },
+  {
     name: "cf_query_logs",
     description: "Query Cloudflare Workers Observability logs/traces/events for a time range.",
     parameters: {
