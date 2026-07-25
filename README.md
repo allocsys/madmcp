@@ -192,14 +192,14 @@ the run outright — pass that id back on a follow-up `delegate_gemini` call
 to continue from the last completed step (checkpoint TTL: 1 hour) rather than
 re-running, and re-paying for, steps already done.
 
-`web_fetch_and_ask` — fetch a single URL and get back Gemini's answer to a
+`Delegate_web_fetch` — fetch a single URL and get back Gemini's answer to a
 specific question about its content, without returning the raw page. Use this
 instead of `web_fetch` when you need a distilled answer rather than exact
 wording to copy.
 
-Both tools log their task/question, step-by-step tool calls, and final answer
-to a Notion page under a fixed Gemini root page by default (`log_to_notion`,
-default `true`).
+Both tools can optionally log their task/question, step-by-step tool calls,
+and final answer to a Notion page under a fixed Gemini root page
+(`log_to_notion`, default `false`).
 
 ### Sync
 `sync_mem0_to_notion` — one-way sync from Mem0 into a Notion "Memory Index": creates/updates a
@@ -221,7 +221,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `MEM0_API_KEY` | Mem0 tools (`MEM0_USER_ID` optional, defaults to `default`) |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
-| `GEMINI_API_KEY` | Gemini tools (`delegate_gemini`, `web_fetch_and_ask`) — required, throws if unset |
+| `GEMINI_API_KEY` | Gemini tools (`delegate_gemini`, `Delegate_web_fetch`) — required, throws if unset |
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
