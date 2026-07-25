@@ -4,9 +4,9 @@
 // Auth header: "x-goog-api-key: <api_key>"
 // ---------------------------------------------------------------------------
 
-import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL } from "../../config.js";
+import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS } from "../../config.js";
 
-async function callGenerateContent(body, model) {
+async function callGenerateContentOnce(body, model) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the Manufact server.");
 
   const res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
@@ -24,9 +24,43 @@ async function callGenerateContent(body, model) {
 
   if (!res.ok) {
     const message = (data && (data.error?.message || JSON.stringify(data))) || res.statusText;
-    throw new Error(`Gemini API error (${res.status}): ${message}`);
+    const err = new Error(`Gemini API error (${res.status}): ${message}`);
+    err.status = res.status;
+    throw err;
   }
   return data;
+}
+
+// Cascades through GEMINI_MODEL + GEMINI_FALLBACK_MODELS, but ONLY on a 429
+// (rate limit exceeded) -- free-tier Gemini quotas are tracked per model, so
+// a fresh model has its own separate RPM bucket, making this a legitimate
+// way to keep going rather than a blind retry. Any other status (400, 500,
+// etc.) is a real failure and surfaces immediately without trying other
+// models, since those aren't quota problems a different model would fix.
+//
+// If the caller passed an explicit `model` that differs from the configured
+// default (GEMINI_MODEL), that choice is honored exactly with no cascade --
+// they asked for that specific model, so silently substituting another one
+// on a 429 would violate that request.
+async function callGenerateContent(body, requestedModel) {
+  const models = requestedModel && requestedModel !== GEMINI_MODEL
+    ? [requestedModel]
+    : [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
+
+  let lastErr;
+  for (let i = 0; i < models.length; i++) {
+    try {
+      const data = await callGenerateContentOnce(body, models[i]);
+      if (i > 0) data._fallbackModelUsed = models[i]; // surfaced for logging/debugging, not required by callers
+      return data;
+    } catch (err) {
+      lastErr = err;
+      const isLast = i === models.length - 1;
+      if (err.status !== 429 || isLast) throw err;
+      // else: rate-limited on this model -- fall through to try the next one.
+    }
+  }
+  throw lastErr;
 }
 
 // Single-turn text generation. Takes a plain prompt string (build any
