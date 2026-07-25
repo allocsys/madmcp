@@ -6,6 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel a superseded run when new commits land on the same branch/PR, so
+# force-pushes and rapid follow-up commits don't pile up redundant in-flight
+# runs competing for runners.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: this workflow only reads the repo and runs tests,
+# it never needs to write anything (unlike generate-lockfile.yml).
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,22 +27,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      # Manual cache keyed on package.json, since no package-lock.json is
-      # committed yet -- setup-node's built-in `cache: npm` requires a
-      # lockfile to hash against. Once generate-lockfile.yml (workflow_dispatch)
-      # has run and committed one, switch this to `cache: npm` on setup-node
-      # (keyed on package-lock.json) + `npm ci` instead of `npm install`.
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
+          # package-lock.json now exists (generate-lockfile.yml, 2026-07-25),
+          # so use setup-node's built-in cache keyed on it, and npm ci for a
+          # reproducible install, instead of the old package.json-keyed
+          # manual actions/cache + npm install workaround.
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Syntax-check all source files
         run: |
@@ -43,7 +47,7 @@ jobs:
       - name: Smoke test -- server boots and GET /health responds
         run: |
           set -e
-          node server.js &
+          node server.js > server.log 2>&1 &
           SERVER_PID=$!
           ok=""
           for i in $(seq 1 10); do
@@ -55,7 +59,8 @@ jobs:
           done
           kill "$SERVER_PID" || true
           if [ -z "$ok" ]; then
-            echo "Server did not become healthy in time"
+            echo "Server did not become healthy in time. Server log:"
+            cat server.log
             exit 1
           fi
           echo "Health check passed"
