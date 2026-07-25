@@ -6,5 +6,5 @@
       "feature/*": false
     }
   },
-  "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(README\\.md|demo\\.html)$\"'"
+  "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(README\\.md|demo\\.html|test/.*|\\.github/.*)$\"'"
 }
