@@ -9,7 +9,7 @@
 // SCOPE: every delegated function below is READ-ONLY. Gemini is never given
 // a write-capable function here -- writes stay confined to the fixed
 // GEMINI_NOTION_ROOT_PAGE_ID path in tools.js, same isolation rule as
-// web_fetch_and_ask. This file only reaches into GitHub/Cloudflare/Notion's
+// Delegate_web_fetch. This file only reaches into GitHub/Cloudflare/Notion's
 // existing client-layer functions (not the MCP tool layer) to avoid
 // round-tripping through the MCP server for its own internal calls.
 //
