@@ -336,7 +336,7 @@
     { id:'gm', label:'GEMINI · DELEGATED INVESTIGATION', lines:[
       ['prompt','> write the postmortem — pull what changed, who reviewed it, and confirm it’s resolved'],
       ['why','Why: this needs GitHub and Cloudflare context stitched together — hand the whole investigation to Gemini in one call instead of chaining more manual tool calls.'],
-      ['call','→ delegate_gemini({ task: "Summarize PR #482'"'"'s review and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
+      ['call','→ delegate_gemini({ task: "Summarize the review on PR #482 and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
       ['result','Gemini ran 4 steps server-side (list_commits, get_pr_reviews, cf_workers_observability_query, get_check_runs)\n→ "PR #482 approved by 2 reviewers, merged 09:52. p95 back to 310ms baseline, checks green."'],
       ['stamped','✓ stamped · 612ms · 4 sub-steps run by Gemini, 1 call from the agent']
     ], ms:612}
