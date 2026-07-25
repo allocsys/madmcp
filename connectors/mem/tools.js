@@ -297,7 +297,7 @@ function filterFlaggedDuplicates(memories, flaggedOnly) {
   return memories.filter((m) => Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length);
 }
 
-// REGRESSION FIX (2026-07-13, see manufact-mem0-relations-plan): the
+// REGRESSION FIX (2026-07-13, see madmcp-mem0-relations-plan): the
 // /v3/memories/ list endpoint does not reliably surface metadata.relations
 // contents, even though it does reliably surface metadata.entity_id (which
 // is why entity_id matching below still works off list results directly).
@@ -374,7 +374,7 @@ async function findByEntityIdAnyScope({ user_id, entity_id }) {
 // single direct lookup. Returns [{ fromEntityId, fromId, relation }, ...].
 // Same ~1000-memory-per-scope pagination ceiling as findByEntityId.
 //
-// REGRESSION FIX (2026-07-13, see manufact-mem0-relations-plan and the note
+// REGRESSION FIX (2026-07-13, see madmcp-mem0-relations-plan and the note
 // above findByEntityId): list-page results can't be trusted for
 // metadata.relations, so every candidate in every page gets refetched via
 // fetchSingleForMetadata (single-get) before its relations are inspected.
@@ -525,7 +525,7 @@ async function findPossibleDuplicates({ user_id, agent_id, run_id, content, thre
   return memories.filter((m) => typeof m.score === "number" && m.score >= threshold);
 }
 
-// NOTE on add-then-verify (2026-07-10, following manufact-mem0-add-silent-
+// NOTE on add-then-verify (2026-07-10, following madmcp-mem0-add-silent-
 // failure-diagnostic): /v3/memories/add/ returning a 2xx with an event_id
 // only means Mem0 ACCEPTED the job, not that its async extraction/indexing
 // pipeline actually materialized the memory — that step has been observed
