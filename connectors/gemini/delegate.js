@@ -4,7 +4,7 @@
 // Lets Gemini run its OWN multi-step tool-use loop server-side (via Gemini
 // function calling) to answer an open-ended question, instead of the
 // calling model doing 5-10 separate manual tool round-trips. One
-// gemini_investigate call in, one synthesized answer out.
+// delegate_gemini call in, one synthesized answer out.
 //
 // SCOPE: every delegated function below is READ-ONLY. Gemini is never given
 // a write-capable function here -- writes stay confined to the fixed
