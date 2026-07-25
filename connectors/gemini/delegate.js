@@ -797,16 +797,29 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
   let contents;
   let transcript;
   let startStep = 1;
+  // The task text actually in effect for this run -- the caller-supplied
+  // one on a fresh run, or the one restored from a resumed checkpoint.
+  // Tracked (and persisted in every checkpoint below) so callers/tools.js
+  // can log/title a resumed run without needing the caller to re-supply
+  // task text the loop itself ignores on resume.
+  let effectiveTask = task;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
   if (checkpoint) {
     contents = checkpoint.contents;
     transcript = checkpoint.transcript;
     startStep = checkpoint.stepsDone + 1;
+    // Prefer the checkpoint's own record of the original task -- `task` is
+    // genuinely ignored on a live resume (see file header), so this is the
+    // only reliable source once a run is past step 1. Checkpoints saved
+    // before this field existed won't have it; fall back to whatever the
+    // caller passed (may be undefined) rather than erroring.
+    effectiveTask = checkpoint.task || task;
   } else {
     // Either no resume_run_id was given, or the checkpoint had already
-    // expired/wasn't found -- start a fresh run either way rather than
-    // erroring, since `task` is always available to build one.
+    // expired/wasn't found -- start a fresh run either way. Requires a real
+    // `task` (the caller-facing tool in tools.js already guards against a
+    // missing task on a non-resumable call, so `task` is trustworthy here).
     runId = randomUUID();
     contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
     transcript = [];
@@ -822,12 +835,13 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       // away. Persist it (redundant with the save at the end of the prior
       // iteration, but cheap and safe) and hand the caller everything they
       // need to resume instead of restarting.
-      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1 });
+      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
       return {
         answer: `(Gemini call failed on step ${step}: ${err.message} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
         steps: step - 1,
         transcript,
         runId,
+        task: effectiveTask,
         failed: true,
       };
     }
@@ -839,9 +853,9 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       const answer = parts.map((p) => p.text || "").join("").trim();
       await deleteCheckpoint(runId);
       if (!answer) {
-        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})`, steps: step, transcript, runId };
+        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})`, steps: step, transcript, runId, task: effectiveTask };
       }
-      return { answer, steps: step, transcript, runId };
+      return { answer, steps: step, transcript, runId, task: effectiveTask };
     }
 
     // Record the model's turn (including its functionCall parts) before
@@ -870,13 +884,30 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       // original functionCall.id so the API can thread multi-call turns correctly.
       responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
     }
+    // Step-budget reminder (added after the 2026-07-26 resume-truncation
+    // bug): SYSTEM_PREAMBLE and the task's own formatting instructions only
+    // ever appear once, in turn 1 -- by the last couple of steps before
+    // cappedSteps, those instructions are many turns back in a long tool-use
+    // history, and a model under a tight remaining budget has an incentive
+    // to produce SOME answer rather than none, which can mean quietly
+    // dropping the originally requested format/exhaustiveness. Surfacing the
+    // remaining-step count explicitly turns a silent quality regression into
+    // an honest one: the model is told to say it couldn't finish, rather
+    // than presenting a rushed, incomplete answer as if it were complete.
+    const remainingAfterThisStep = cappedSteps - step;
+    if (remainingAfterThisStep <= 1) {
+      responseParts.push({
+        text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop. If you cannot fully complete the task -- including any specific format requested (e.g. an exhaustive table, per-item breakdown) -- in the remaining budget, say so explicitly and describe what's missing, rather than presenting a partial or reformatted-for-brevity answer as if it were complete.]`,
+      });
+    }
+
     contents.push({ role: "user", parts: responseParts });
 
     // Checkpoint after every fully-completed step, so a failure on the NEXT
     // Gemini call (or a hosting-platform timeout) doesn't lose this one.
-    await saveCheckpoint(runId, { contents, transcript, stepsDone: step });
+    await saveCheckpoint(runId, { contents, transcript, stepsDone: step, task: effectiveTask });
   }
 
   await deleteCheckpoint(runId);
-  return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript, runId };
+  return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript, runId, task: effectiveTask };
 }
