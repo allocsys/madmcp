@@ -368,7 +368,7 @@ const FUNCTIONS = [
       const qs = new URLSearchParams({ per_page: String(Math.min(per_page, 100)) });
       if (branch) qs.set("branch", branch);
       if (status) qs.set("status", status);
-      const path = workflow_id ? `/repos/${owner}/${repo}/actions/workflows/${workflow_id}/runs?${qs}` : `/repos/${owner}/${repo}/actions/runs?${qs}`;
+      const path = workflow_id ? `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflow_id)}/runs?${qs}` : `/repos/${owner}/${repo}/actions/runs?${qs}`;
       const data = await githubRequest(path);
       return data.workflow_runs.map(r => `#${r.run_number} [${r.status}/${r.conclusion}] ${r.name} on ${r.head_branch} (${r.created_at?.slice(0, 10)}) -- run_id ${r.id}`).join("\n") || "No runs found.";
     },
@@ -401,7 +401,7 @@ const FUNCTIONS = [
         if (!match) return `No job found${job_name ? ` matching "${job_name}"` : ""}.`;
         id = match.id;
       }
-      const logs = await githubRequest(`/repos/${owner}/${repo}/actions/jobs/${id}/logs`);
+      const logs = await githubRequest(`/repos/${owner}/${repo}/actions/jobs/${id}/logs`, { accept: "application/vnd.github+json" });
       const text = typeof logs === "string" ? logs : JSON.stringify(logs);
       return text.length > 25000 ? "...[truncated, showing tail]...\n" + text.slice(-25000) : text;
     },
@@ -486,7 +486,7 @@ const FUNCTIONS = [
     description: "Get the topics/tags set on a repo.",
     parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" } }, required: ["repo"] },
     execute: async ({ owner = DEFAULT_OWNER, repo }) => {
-      const data = await githubRequest(`/repos/${owner}/${repo}/topics`, { headers: { accept: "application/vnd.github.mercy-preview+json" } });
+      const data = await githubRequest(`/repos/${owner}/${repo}/topics`, { accept: "application/vnd.github.mercy-preview+json" });
       return (data.names || []).join(", ") || "No topics set.";
     },
   },
