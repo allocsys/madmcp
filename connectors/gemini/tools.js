@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/gemini/tools.js
 //
-// web_fetch_and_ask: fetches a URL and a question server-side, hands the
+// Delegate_web_fetch: fetches a URL and a question server-side, hands the
 // page content + question to Gemini, and returns ONLY Gemini's answer --
 // not the raw page. This is the actual token-saving mechanism (see plan
 // discussion, 2026-07-25): the existing web_fetch tool returns up to
@@ -38,7 +38,7 @@ const DEFAULT_MAX_SOURCE_CHARS = 300000;
 export function register(server) {
 
   server.tool(
-    "web_fetch_and_ask",
+    "Delegate_web_fetch",
     "Fetch a URL and answer a specific question about its content, WITHOUT returning the raw page. Fetching and reading happen server-side via Gemini -- only Gemini's compact answer is returned to you. Use this instead of web_fetch whenever you need a specific answer from a page rather than the page's exact text (e.g. \"does this doc mention rate limits?\" rather than \"give me this page verbatim\"). Not a substitute for web_fetch when you need exact wording, code snippets to copy, or content to edit.",
     {
       url:              z.string().url().describe("The URL to fetch"),
@@ -77,7 +77,7 @@ export function register(server) {
           const logged = await doCreatePage({
             parent_id:   GEMINI_NOTION_ROOT_PAGE_ID,
             parent_type: "page",
-            title:       `web_fetch_and_ask: ${url}`,
+            title:       `Delegate_web_fetch: ${url}`,
             content:     `URL: ${url}\nQuestion: ${question}\n\nAnswer:\n${answer}`,
             one_off:     true,
           });
