@@ -40,7 +40,7 @@ const DEFAULT_COOLDOWN_SECONDS = 60;
 let redisClient = null;
 let redisInitAttempted = false;
 
-function getRedis() {
+export function getRedis() {
   if (redisInitAttempted) return redisClient;
   redisInitAttempted = true;
   if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
