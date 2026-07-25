@@ -4,6 +4,7 @@
 
 **An MCP server giving Claude (or any MCP client) direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, and the web — one connector, six real backends.**
 
+[![CI](https://github.com/allocsys/madmcp/actions/workflows/ci.yml/badge.svg)](https://github.com/allocsys/madmcp/actions/workflows/ci.yml)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-E8A33D?style=flat-square)](https://modelcontextprotocol.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-6FBF8B?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![Connectors](https://img.shields.io/badge/connectors-GitHub%20%C2%B7%20Cloudflare%20%C2%B7%20Notion%20%C2%B7%20Mem0%20%C2%B7%20Context7%20%C2%B7%20Fetch-7CA6D6?style=flat-square)](#connectors--tools)
