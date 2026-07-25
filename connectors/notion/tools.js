@@ -180,13 +180,40 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
     method: "POST",
     body: { parent, properties, children: firstBatch },
   });
+
+  // If a later batch fails (rate limit, network blip), the page ITSELF
+  // still exists on Notion at this point -- letting the error propagate
+  // immediately, before the index write below, would orphan it from the
+  // dedup index. A retry with the same entity_id would then find nothing
+  // and create a genuine duplicate page, exactly the failure mode the index
+  // exists to prevent. So: capture the failure, still record the index
+  // entry (the page really was created), then surface the partial-content
+  // failure with the page's id/url so the caller can finish it via
+  // notion_update_page instead of losing track of it.
+  let batchError = null;
   for (const batch of remainingBatches) {
-    await notionRequest(`/blocks/${data.id}/children`, { method: "PATCH", body: { children: batch } });
+    try {
+      await notionRequest(`/blocks/${data.id}/children`, { method: "PATCH", body: { children: batch } });
+    } catch (err) {
+      batchError = err;
+      break;
+    }
   }
+
   let indexError = null;
   if (entity_id) {
     indexError = await appendIndexEntry({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")] });
   }
+
+  if (batchError) {
+    throw new Error(
+      `Page "${title}" was created (id: ${data.id}, url: ${data.url}) but is missing some content -- a later content batch failed: ${batchError.message}. ` +
+      (entity_id
+        ? `It IS recorded in the dedup index${indexError ? ` (though that index write also failed: ${indexError})` : ""}, so retrying notion_create_page with the same entity_id will find this page rather than creating a duplicate -- use notion_update_page (append_content) on id ${data.id} to add the missing content instead.`
+        : `No entity_id was set, so there's no dedup protection -- check the page at the URL above before retrying, to avoid creating a duplicate, and use notion_update_page (append_content) on id ${data.id} to add the missing content.`)
+    );
+  }
+
   return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError, linkCandidates, autoRelations };
 }
 
