@@ -185,6 +185,13 @@ answer. Falls through an ordered model cascade (`GEMINI_MODEL` →
 `GEMINI_FALLBACK_MODELS`) on rate limits, with Redis-backed per-model cooldown
 so already-limited models are skipped rather than retried.
 
+Progress is checkpointed to Redis after every completed step. If the Gemini
+API call itself fails partway through (429/503/network blip), the response
+includes a `resume_run_id` and everything gathered so far instead of losing
+the run outright — pass that id back on a follow-up `gemini_investigate` call
+to continue from the last completed step (checkpoint TTL: 1 hour) rather than
+re-running, and re-paying for, steps already done.
+
 `web_fetch_and_ask` — fetch a single URL and get back Gemini's answer to a
 specific question about its content, without returning the raw page. Use this
 instead of `web_fetch` when you need a distilled answer rather than exact
