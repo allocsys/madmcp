@@ -126,7 +126,17 @@ export function register(server) {
         }
       }
 
-      return { content: [{ type: "text", text: `${result.answer}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: !!result.failed };
+      // On a failed/partial run, the tool calls already completed are real
+      // work (and already checkpointed to Redis -- see runInvestigation's
+      // comment) that shouldn't be thrown away. Print them here instead of
+      // just a step count, so the caller can see what was actually found
+      // before the failure without needing a resume_run_id round-trip or
+      // log_to_notion just to inspect them.
+      const transcriptBlock = result.failed && result.transcript?.length
+        ? `\n\nTool calls completed before the failure:\n${result.transcript.join("\n")}`
+        : "";
+
+      return { content: [{ type: "text", text: `${result.answer}${transcriptBlock}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: !!result.failed };
     }
   );
 }
