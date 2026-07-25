@@ -97,12 +97,25 @@ export function register(server) {
     "delegate_gemini",
     "Delegate an open-ended, multi-step READ-ONLY investigation to Gemini instead of doing it yourself one tool call at a time. Gemini runs its own loop server-side -- reading GitHub files/trees/commits, Cloudflare Workers logs, and Notion pages/databases across as many turns as it needs (bounded by max_steps) -- and returns one synthesized answer. Use this for things like \"why is CI failing on PR #42\" or \"summarize what changed in this repo over the last week\" where you'd otherwise need 5-10 separate manual tool calls. Not for anything requiring a write -- this tool is read-only by design. If a run fails partway through (e.g. Gemini rate-limited), the response includes a resume_run_id -- pass it back on a follow-up call to continue from the last completed step instead of starting over. (Formerly named gemini_investigate.)",
     {
-      task:          z.string().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused)."),
+      task:          z.string().optional().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused). Optional ONLY when resume_run_id is given and its checkpoint is still live; required otherwise -- omitting it on a fresh run (no resume_run_id, or an expired one) returns an error rather than silently proceeding with no task."),
       max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 6, hard cap 20 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial gemini_investigate call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
     },
     async ({ task, max_steps = 6, log_to_notion = false, resume_run_id }) => {
+      // task is only genuinely optional when resuming a live checkpoint --
+      // runInvestigation ignores task entirely in that branch (it rebuilds
+      // `contents` straight from the saved checkpoint). On a fresh run (no
+      // resume_run_id, or one whose checkpoint already expired), there is no
+      // saved task to fall back on, so fail loudly here rather than letting
+      // runInvestigation start a conversation with an undefined task.
+      if (!task && !resume_run_id) {
+        return {
+          content: [{ type: "text", text: "Missing required argument: task must be provided unless resuming a live checkpoint via resume_run_id." }],
+          isError: true,
+        };
+      }
+
       let result;
       try {
         result = await runInvestigation({ task, max_steps, resume_run_id });
@@ -110,14 +123,20 @@ export function register(server) {
         return { content: [{ type: "text", text: `Investigation failed: ${err.message}` }], isError: true };
       }
 
+      // On a resumed run, `task` may be undefined here (a fresh run always has
+      // it, per the guard above) -- runInvestigation returns the effective
+      // task text it actually used (the caller-supplied one, or the one
+      // restored from the checkpoint) so logging/titling never has to guess.
+      const effectiveTask = task || result.task || "(resumed run)";
+
       let notionNote = "";
       if (log_to_notion) {
         try {
           const logged = await doCreatePage({
             parent_id:   GEMINI_NOTION_ROOT_PAGE_ID,
             parent_type: "page",
-            title:       `${result.failed ? "investigate (partial): " : "investigate: "}${task.slice(0, 80)}`,
-            content:     `Task: ${task}\n\nrunId: ${result.runId}${result.failed ? " (resumable)" : ""}\n\nSteps taken: ${result.steps}\n\nTool calls:\n${result.transcript.join("\n") || "(none)"}\n\nAnswer:\n${result.answer}`,
+            title:       `${result.failed ? "investigate (partial): " : "investigate: "}${effectiveTask.slice(0, 80)}`,
+            content:     `Task: ${effectiveTask}\n\nrunId: ${result.runId}${result.failed ? " (resumable)" : ""}\n\nSteps taken: ${result.steps}\n\nTool calls:\n${result.transcript.join("\n") || "(none)"}\n\nAnswer:\n${result.answer}`,
             one_off:     true,
           });
           notionNote = `\n\n(Logged to Notion: ${logged.url})`;
