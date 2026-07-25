@@ -8,7 +8,7 @@ import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS } from
 import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "./cooldown.js";
 
 async function callGenerateContentOnce(body, model) {
-  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the Manufact server.");
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the madmcp server.");
 
   const res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
     method: "POST",
