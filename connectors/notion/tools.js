@@ -163,10 +163,26 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
     ? content.split("\n").filter(Boolean).map(textBlock)
     : [];
   const children = [...markerBlocks, ...relationBlocks, ...contentBlocks];
+
+  // Notion's page-create endpoint rejects more than 100 children blocks in
+  // a single call (live failure 2026-07-25: a long delegate_gemini
+  // transcript produced 199 blocks and got a 400 "body.children.length
+  // should be <= 100"). Create the page with the first 100, then PATCH the
+  // rest on afterward in further batches of <=100 -- same post-creation
+  // append pattern appendChangelogEntry/replaceSyncedRange already use --
+  // instead of silently truncating long content.
+  const firstBatch = children.slice(0, 100);
+  const remainingBatches = [];
+  for (let i = 100; i < children.length; i += 100) {
+    remainingBatches.push(children.slice(i, i + 100));
+  }
   const data = await notionRequest("/pages", {
     method: "POST",
-    body: { parent, properties, children },
+    body: { parent, properties, children: firstBatch },
   });
+  for (const batch of remainingBatches) {
+    await notionRequest(`/blocks/${data.id}/children`, { method: "PATCH", body: { children: batch } });
+  }
   let indexError = null;
   if (entity_id) {
     indexError = await appendIndexEntry({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")] });
