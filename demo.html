@@ -70,6 +70,11 @@
     position:relative;display:flex;justify-content:space-between;align-items:center;max-width:600px;margin:0 auto;
     border-top:2px dashed var(--line);padding-top:0;
   }
+  .route-line::before{
+    content:"";position:absolute;top:-2px;left:0;
+    width:var(--progress,0%);border-top:2px solid var(--stamp-red);
+    transition:width .3s ease;pointer-events:none;
+  }
   .stop{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;flex:1;min-width:0;}
   .stop::before{content:"";position:absolute;top:-2px;left:50%;transform:translate(-50%,-50%);width:8px;height:8px;border-radius:50%;background:var(--paper);border:2px solid var(--line);}
   .stop .stamp{
