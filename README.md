@@ -176,7 +176,7 @@ up-to-date, version-specific docs and code examples for it. Works without an API
 limits; `CONTEXT7_API_KEY` is optional.
 
 ### Gemini (delegation)
-`gemini_investigate` — hand an open-ended, multi-step, read-only investigation
+`delegate_gemini` — hand an open-ended, multi-step, read-only investigation
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
 the last week") to Gemini instead of making 5-10 separate manual tool calls.
 Gemini runs its own loop server-side across GitHub, Cloudflare, and Notion
@@ -188,7 +188,7 @@ so already-limited models are skipped rather than retried.
 Progress is checkpointed to Redis after every completed step. If the Gemini
 API call itself fails partway through (429/503/network blip), the response
 includes a `resume_run_id` and everything gathered so far instead of losing
-the run outright — pass that id back on a follow-up `gemini_investigate` call
+the run outright — pass that id back on a follow-up `delegate_gemini` call
 to continue from the last completed step (checkpoint TTL: 1 hour) rather than
 re-running, and re-paying for, steps already done.
 
@@ -221,7 +221,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `MEM0_API_KEY` | Mem0 tools (`MEM0_USER_ID` optional, defaults to `default`) |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
-| `GEMINI_API_KEY` | Gemini tools (`gemini_investigate`, `web_fetch_and_ask`) — required, throws if unset |
+| `GEMINI_API_KEY` | Gemini tools (`delegate_gemini`, `web_fetch_and_ask`) — required, throws if unset |
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
