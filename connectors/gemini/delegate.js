@@ -27,7 +27,7 @@ import { queryTelemetry } from "../cloudflare/observability.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 
-const HARD_MAX_STEPS = 10;
+const HARD_MAX_STEPS = 20;
 
 // ---------------------------------------------------------------------------
 // Delegated function declarations -- Gemini's "tools" param (a subset of
