@@ -95,9 +95,14 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 // single flattened string can't represent.
 //
 // `contents` follows Gemini's REST shape: an array of
-// { role: "user"|"model"|"function", parts: [...] } turns. Function-call
-// results are fed back as a "function" role turn containing a
-// functionResponse part -- see delegate.js for how a turn is built.
+// { role: "user"|"model", parts: [...] } turns. CORRECTED 2026-07-25: an
+// earlier version of this comment said function-call results go back as a
+// distinct "function" role -- that was true of an older multi-turn doc
+// example, but current Gemini 3 models (see the generateContent docs) expect
+// function results back as role: "user" wrapping a functionResponse part,
+// with functionResponse.id echoing the originating functionCall.id. See
+// delegate.js for how a turn is actually built -- don't "fix" it back to
+// role: "function" without re-checking current docs against the model in use.
 export async function geminiChat(contents, { model = GEMINI_MODEL, tools, maxOutputTokens } = {}) {
   const body = { contents };
   if (tools) body.tools = tools;
