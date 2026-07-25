@@ -6,19 +6,8 @@
 
 import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL } from "../../config.js";
 
-// Single-turn text generation. Takes a plain prompt string (build any
-// system/user framing into it before calling) and returns the model's text
-// output. Kept deliberately minimal -- no chat history, no tool use -- since
-// every current use case (web_fetch_and_ask) is a one-shot "here's context,
-// answer this" call. Extend with a `contents` array param if a future tool
-// needs multi-turn or function-calling.
-export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTokens } = {}) {
+async function callGenerateContent(body, model) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the Manufact server.");
-
-  const body = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-  };
-  if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
 
   const res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
     method: "POST",
@@ -37,7 +26,20 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
     const message = (data && (data.error?.message || JSON.stringify(data))) || res.statusText;
     throw new Error(`Gemini API error (${res.status}): ${message}`);
   }
+  return data;
+}
 
+// Single-turn text generation. Takes a plain prompt string (build any
+// system/user framing into it before calling) and returns the model's text
+// output. Used by web_fetch_and_ask -- a genuine one-shot "here's context,
+// answer this" call with no tool use.
+export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTokens } = {}) {
+  const body = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+  };
+  if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
+
+  const data = await callGenerateContent(body, model);
   const candidate = data?.candidates?.[0];
   const finishReason = candidate?.finishReason;
   const parts = candidate?.content?.parts || [];
@@ -49,4 +51,28 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
     throw new Error(`Gemini returned no text output (finishReason: ${finishReason || "unknown"}).`);
   }
   return output;
+}
+
+// Multi-turn call WITH function-calling support -- used by
+// connectors/gemini/delegate.js's investigation loop. Unlike geminiGenerate,
+// this takes/returns the raw `contents` conversation array and the raw
+// candidate, since the caller (delegate.js) needs to inspect whether the
+// response is a functionCall (keep looping) or plain text (done), which a
+// single flattened string can't represent.
+//
+// `contents` follows Gemini's REST shape: an array of
+// { role: "user"|"model"|"function", parts: [...] } turns. Function-call
+// results are fed back as a "function" role turn containing a
+// functionResponse part -- see delegate.js for how a turn is built.
+export async function geminiChat(contents, { model = GEMINI_MODEL, tools, maxOutputTokens } = {}) {
+  const body = { contents };
+  if (tools) body.tools = tools;
+  if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
+
+  const data = await callGenerateContent(body, model);
+  const candidate = data?.candidates?.[0];
+  if (!candidate) {
+    throw new Error("Gemini returned no candidates.");
+  }
+  return candidate; // { content: { role, parts }, finishReason, ... }
 }
