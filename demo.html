@@ -228,7 +228,7 @@
     <div class="stamp-chip"><span class="dot"></span>routed live</div>
   </div>
   <h1>madmcp</h1>
-  <p class="sub">One server, five connectors — GitHub, Cloudflare, Notion, Mem0, and web fetch — giving an AI agent direct, tool-level access to real infrastructure. <b>Below, a call is routed through each checkpoint</b> the way a single incident actually gets resolved.</p>
+  <p class="sub">One server, six connectors — GitHub, Cloudflare, Notion, Mem0, web fetch, and Gemini-powered delegation — giving an AI agent direct, tool-level access to real infrastructure. <b>Below, a call is routed through each checkpoint</b> the way a single incident actually gets resolved. (This trace shows five stops; Gemini delegation — handing a whole multi-step investigation to <code>gemini_investigate</code> instead of calling each connector by hand — is the sixth.)</p>
   <p class="note">Sample trace for illustration — the org, incident, and code shown are fictional.</p>
 
   <div class="checkpoints">
@@ -277,7 +277,7 @@
   <footer>
     <div class="seal">MCP<br>·SVC·</div>
     <div class="text">
-      <div class="stack">Node.js · Express · MCP protocol · GitHub REST · Cloudflare API · Notion API · Mem0</div>
+      <div class="stack">Node.js · Express · MCP protocol · GitHub REST · Cloudflare API · Notion API · Mem0 · Gemini API</div>
       Full source: <a href="https://github.com/allocsys/madmcp" target="_blank" rel="noopener">github.com/allocsys/madmcp</a>
     </div>
   </footer>
