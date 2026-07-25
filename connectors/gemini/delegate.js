@@ -24,10 +24,40 @@ import { geminiChat } from "./client.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
 import { queryTelemetry } from "../cloudflare/observability.js";
+import { cfAccountRequest } from "../cloudflare/client.js";
+import { context7Request } from "../context7/client.js";
+import { mem0Request } from "../mem/client.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 
 const HARD_MAX_STEPS = 20;
+
+// Minimal line-based diff (LCS backtrace) -- good enough for investigation
+// summaries, not a full unified-diff implementation. Capped so a huge file
+// pair can't blow up the O(n*m) table.
+function simpleLineDiff(aText, bText) {
+  const a = aText.split("\n");
+  const b = bText.split("\n");
+  if (a.length > 2000 || b.length > 2000) {
+    return a.join("\n") === b.join("\n") ? "(files identical)" : "(files differ -- too large for line diff, showing lengths only: " + a.length + " vs " + b.length + " lines)";
+  }
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const lines = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { lines.push(`-${a[i]}`); i++; }
+    else { lines.push(`+${b[j]}`); j++; }
+  }
+  while (i < a.length) { lines.push(`-${a[i]}`); i++; }
+  while (j < b.length) { lines.push(`+${b[j]}`); j++; }
+  return lines.length ? lines.join("\n") : "(files identical)";
+}
 
 // ---------------------------------------------------------------------------
 // Delegated function declarations -- Gemini's "tools" param (a subset of
@@ -219,6 +249,485 @@ const FUNCTIONS = [
         }).join(" | ");
         return `- ${props}`;
       }).join("\n");
+    },
+  },
+
+  // -- GitHub: issues / PRs --------------------------------------------
+  {
+    name: "github_get_issue",
+    description: "Read a single GitHub issue's full body, labels, assignees, and (optionally) comments.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, issue_number: { type: "number" },
+      include_comments: { type: "boolean" },
+    }, required: ["repo", "issue_number"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, issue_number, include_comments = false }) => {
+      const issue = await githubRequest(`/repos/${owner}/${repo}/issues/${issue_number}`);
+      let text = `#${issue.number} [${issue.state}] ${issue.title}\nLabels: ${(issue.labels || []).map(l => l.name).join(", ") || "none"}\nAssignees: ${(issue.assignees || []).map(a => a.login).join(", ") || "none"}\n\n${issue.body || "(no body)"}`;
+      if (include_comments && issue.comments > 0) {
+        const comments = await githubRequest(`/repos/${owner}/${repo}/issues/${issue_number}/comments?per_page=50`);
+        text += "\n\n--- comments ---\n" + comments.map(c => `${c.user?.login}: ${c.body}`).join("\n---\n");
+      }
+      return text.length > 20000 ? text.slice(0, 20000) + "\n...[truncated]" : text;
+    },
+  },
+  {
+    name: "github_list_pull_requests",
+    description: "List pull requests in a repo, optionally filtered by state.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, state: { type: "string", description: "open, closed, or all (default open)" }, per_page: { type: "number" },
+    }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, state = "open", per_page = 20 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/pulls?state=${state}&per_page=${Math.min(per_page, 100)}`);
+      return data.map(pr => `#${pr.number} [${pr.state}${pr.draft ? " draft" : ""}] ${pr.title} (${pr.head?.ref} -> ${pr.base?.ref}) by ${pr.user?.login}`).join("\n") || "No pull requests found.";
+    },
+  },
+  {
+    name: "github_get_pull_request",
+    description: "Get a single pull request's details, optionally including comments, reviews, and commits.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, pull_number: { type: "number" },
+      include_comments: { type: "boolean" }, include_reviews: { type: "boolean" }, include_commits: { type: "boolean" },
+    }, required: ["repo", "pull_number"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, pull_number, include_comments, include_reviews, include_commits }) => {
+      const pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
+      let text = `#${pr.number} [${pr.state}] ${pr.title}\n${pr.head?.ref} -> ${pr.base?.ref} by ${pr.user?.login}\nMergeable: ${pr.mergeable} (${pr.mergeable_state})\n\n${pr.body || "(no body)"}`;
+      if (include_comments) {
+        const c = await githubRequest(`/repos/${owner}/${repo}/issues/${pull_number}/comments?per_page=50`);
+        text += "\n\n--- comments ---\n" + c.map(x => `${x.user?.login}: ${x.body}`).join("\n---\n");
+      }
+      if (include_reviews) {
+        const r = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/reviews?per_page=50`);
+        text += "\n\n--- reviews ---\n" + r.map(x => `${x.user?.login}: ${x.state} -- ${x.body || "(no comment)"}`).join("\n");
+      }
+      if (include_commits) {
+        const cm = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/commits?per_page=50`);
+        text += "\n\n--- commits ---\n" + cm.map(x => `${x.sha.slice(0, 7)} ${x.commit.message.split("\n")[0]}`).join("\n");
+      }
+      return text.length > 25000 ? text.slice(0, 25000) + "\n...[truncated]" : text;
+    },
+  },
+  {
+    name: "github_get_pr_comments",
+    description: "Get the conversation comments on a pull request.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, pull_number: { type: "number" }, per_page: { type: "number" } }, required: ["repo", "pull_number"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, pull_number, per_page = 50 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/issues/${pull_number}/comments?per_page=${Math.min(per_page, 100)}`);
+      return data.map(c => `${c.user?.login} (${c.created_at?.slice(0, 10)}): ${c.body}`).join("\n---\n") || "No comments.";
+    },
+  },
+  {
+    name: "github_get_pr_reviews",
+    description: "Get the formal reviews (approve/request-changes/comment) on a pull request.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, pull_number: { type: "number" }, per_page: { type: "number" } }, required: ["repo", "pull_number"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, pull_number, per_page = 50 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/reviews?per_page=${Math.min(per_page, 100)}`);
+      return data.map(r => `${r.user?.login}: ${r.state} -- ${r.body || "(no comment)"}`).join("\n") || "No reviews.";
+    },
+  },
+  {
+    name: "github_get_pr_mergeability",
+    description: "Check whether a pull request can be merged (mergeable state, conflicts). GitHub computes this async, so this retries briefly if the result isn't ready yet.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, pull_number: { type: "number" } }, required: ["repo", "pull_number"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, pull_number }) => {
+      let pr;
+      for (let i = 0; i < 3; i++) {
+        pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
+        if (pr.mergeable !== null) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      return `mergeable: ${pr.mergeable}\nmergeable_state: ${pr.mergeable_state}\nrebaseable: ${pr.rebaseable}`;
+    },
+  },
+
+  // -- GitHub: CI / checks -----------------------------------------------
+  {
+    name: "github_get_check_runs",
+    description: "Get CI check-run results (pass/fail dots) for a commit or ref.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, per_page: { type: "number" } }, required: ["repo", "ref"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, ref, per_page = 50 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/commits/${ref}/check-runs?per_page=${Math.min(per_page, 100)}`);
+      return `${data.total_count} check run(s):\n` + data.check_runs.map(c => `${c.name}: ${c.status}/${c.conclusion}`).join("\n");
+    },
+  },
+  {
+    name: "github_get_combined_status",
+    description: "Get the combined commit status (overall pass/fail/pending rollup) for a ref.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, ref: { type: "string" } }, required: ["repo", "ref"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, ref }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/commits/${ref}/status`);
+      return `Overall state: ${data.state} (${data.total_count} statuses)\n` + (data.statuses || []).map(s => `${s.context}: ${s.state} -- ${s.description || ""}`).join("\n");
+    },
+  },
+  {
+    name: "github_list_workflow_runs",
+    description: "List recent GitHub Actions workflow runs for a repo, optionally scoped to one workflow.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, workflow_id: { type: "string" }, branch: { type: "string" }, status: { type: "string" }, per_page: { type: "number" },
+    }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, workflow_id, branch, status, per_page = 20 }) => {
+      const qs = new URLSearchParams({ per_page: String(Math.min(per_page, 100)) });
+      if (branch) qs.set("branch", branch);
+      if (status) qs.set("status", status);
+      const path = workflow_id ? `/repos/${owner}/${repo}/actions/workflows/${workflow_id}/runs?${qs}` : `/repos/${owner}/${repo}/actions/runs?${qs}`;
+      const data = await githubRequest(path);
+      return data.workflow_runs.map(r => `#${r.run_number} [${r.status}/${r.conclusion}] ${r.name} on ${r.head_branch} (${r.created_at?.slice(0, 10)}) -- run_id ${r.id}`).join("\n") || "No runs found.";
+    },
+  },
+  {
+    name: "github_get_workflow_run_logs",
+    description: "Get a summary of a workflow run's jobs and steps (status/conclusion per step). For raw log text, use github_get_job_logs with a job_id from this result.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, run_id: { type: "number" } }, required: ["repo", "run_id"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, run_id }) => {
+      const [run, jobsData] = await Promise.all([
+        githubRequest(`/repos/${owner}/${repo}/actions/runs/${run_id}`),
+        githubRequest(`/repos/${owner}/${repo}/actions/runs/${run_id}/jobs`),
+      ]);
+      let text = `Run #${run.run_number} [${run.status}/${run.conclusion}] ${run.name} on ${run.head_branch}\n\n`;
+      text += jobsData.jobs.map(j => `Job ${j.id} "${j.name}": ${j.status}/${j.conclusion}\n` + (j.steps || []).map(s => `  - ${s.name}: ${s.status}/${s.conclusion}`).join("\n")).join("\n\n");
+      return text.length > 20000 ? text.slice(0, 20000) + "\n...[truncated]" : text;
+    },
+  },
+  {
+    name: "github_get_job_logs",
+    description: "Get raw log text for a specific workflow job (find the job_id via github_get_workflow_run_logs first, or pass job_name to look it up).",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, run_id: { type: "number" }, job_id: { type: "number" }, job_name: { type: "string" },
+    }, required: ["repo", "run_id"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, run_id, job_id, job_name }) => {
+      let id = job_id;
+      if (!id) {
+        const jobsData = await githubRequest(`/repos/${owner}/${repo}/actions/runs/${run_id}/jobs`);
+        const match = job_name ? jobsData.jobs.find(j => j.name === job_name) : jobsData.jobs[0];
+        if (!match) return `No job found${job_name ? ` matching "${job_name}"` : ""}.`;
+        id = match.id;
+      }
+      const logs = await githubRequest(`/repos/${owner}/${repo}/actions/jobs/${id}/logs`);
+      const text = typeof logs === "string" ? logs : JSON.stringify(logs);
+      return text.length > 25000 ? "...[truncated, showing tail]...\n" + text.slice(-25000) : text;
+    },
+  },
+
+  // -- GitHub: repo metadata / discovery ----------------------------------
+  {
+    name: "github_list_issues",
+    description: "List issues in a repo (excludes pull requests), optionally filtered by state/labels/assignee.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, state: { type: "string" }, labels: { type: "string" }, assignee: { type: "string" }, per_page: { type: "number" },
+    }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, state = "open", labels, assignee, per_page = 20 }) => {
+      const qs = new URLSearchParams({ state, per_page: String(Math.min(per_page, 100)) });
+      if (labels) qs.set("labels", labels);
+      if (assignee) qs.set("assignee", assignee);
+      const data = await githubRequest(`/repos/${owner}/${repo}/issues?${qs}`);
+      const issues = data.filter(i => !i.pull_request);
+      return issues.map(i => `#${i.number} [${i.state}] ${i.title}`).join("\n") || "No issues found.";
+    },
+  },
+  {
+    name: "github_list_releases",
+    description: "List releases in a repo.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, per_page: { type: "number" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, per_page = 10 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/releases?per_page=${Math.min(per_page, 100)}`);
+      return data.map(r => `${r.tag_name}${r.name ? ` (${r.name})` : ""} -- ${r.prerelease ? "prerelease" : r.draft ? "draft" : "release"}, published ${r.published_at?.slice(0, 10) || "n/a"}`).join("\n") || "No releases found.";
+    },
+  },
+  {
+    name: "github_list_tags",
+    description: "List tags in a repo.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, per_page: { type: "number" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, per_page = 20 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/tags?per_page=${Math.min(per_page, 100)}`);
+      return data.map(t => `${t.name} -- ${t.commit?.sha?.slice(0, 7)}`).join("\n") || "No tags found.";
+    },
+  },
+  {
+    name: "github_list_contributors",
+    description: "List contributors to a repo with commit counts.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, per_page: { type: "number" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, per_page = 20 }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/contributors?per_page=${Math.min(per_page, 100)}`);
+      return data.map(c => `${c.login}: ${c.contributions} commits`).join("\n") || "No contributors found.";
+    },
+  },
+  {
+    name: "github_get_repo",
+    description: "Get repo metadata: description, default branch, language, stars, topics, etc.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo }) => {
+      const r = await githubRequest(`/repos/${owner}/${repo}`);
+      return `${r.full_name} (${r.visibility})\n${r.description || "(no description)"}\nDefault branch: ${r.default_branch} | Language: ${r.language} | Stars: ${r.stargazers_count} | Forks: ${r.forks_count} | Open issues: ${r.open_issues_count}\nTopics: ${(r.topics || []).join(", ") || "none"}\nURL: ${r.html_url}`;
+    },
+  },
+  {
+    name: "github_get_branch_protection",
+    description: "Get branch protection rules for a branch (required checks, required reviews, etc.). Returns a note if the branch is unprotected or the caller lacks access.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, branch: { type: "string" } }, required: ["repo", "branch"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, branch }) => {
+      try {
+        const data = await githubRequest(`/repos/${owner}/${repo}/branches/${branch}/protection`);
+        return JSON.stringify(data, null, 2).slice(0, 8000);
+      } catch (err) {
+        return `No accessible branch protection for "${branch}": ${err.message}`;
+      }
+    },
+  },
+  {
+    name: "github_list_branches",
+    description: "List branches in a repo.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/branches`);
+      return data.map(b => `${b.name}${b.protected ? " (protected)" : ""}`).join("\n") || "No branches found.";
+    },
+  },
+  {
+    name: "github_get_repo_topics",
+    description: "Get the topics/tags set on a repo.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo }) => {
+      const data = await githubRequest(`/repos/${owner}/${repo}/topics`, { headers: { accept: "application/vnd.github.mercy-preview+json" } });
+      return (data.names || []).join(", ") || "No topics set.";
+    },
+  },
+  {
+    name: "github_list_directory",
+    description: "List files and folders at a specific path in a repo (non-recursive; use github_get_file_tree for the full recursive tree).",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, path: { type: "string" }, ref: { type: "string" } }, required: ["repo"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, path = "", ref }) => {
+      const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+      const data = await githubRequest(`/repos/${owner}/${repo}/contents/${path}${qs}`);
+      const entries = Array.isArray(data) ? data : [data];
+      return entries.map(e => `${e.type === "dir" ? "dir " : "file"} ${e.path}`).join("\n") || "(empty)";
+    },
+  },
+
+  // -- GitHub: commits / diffs / code search ------------------------------
+  {
+    name: "github_get_commit",
+    description: "Get a commit's message, author, and changed files.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, sha: { type: "string" } }, required: ["repo", "sha"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, sha }) => {
+      const c = await githubRequest(`/repos/${owner}/${repo}/commits/${sha}`);
+      const files = (c.files || []).map(f => `  ${f.status} ${f.filename} (+${f.additions}/-${f.deletions})`).join("\n");
+      return `${c.sha.slice(0, 7)} by ${c.commit.author?.name} on ${c.commit.author?.date?.slice(0, 10)}\n${c.commit.message}\n\nFiles changed:\n${files || "(none)"}`;
+    },
+  },
+  {
+    name: "github_get_file_at_commit",
+    description: "Read a file's contents as it existed at a specific commit SHA.",
+    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, path: { type: "string" }, commit: { type: "string" } }, required: ["repo", "path", "commit"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, path, commit }) => {
+      const content = await readFileViaBlob(owner, repo, path, commit);
+      return content.length > 30000 ? content.slice(0, 30000) + "\n...[truncated]" : content;
+    },
+  },
+  {
+    name: "github_diff_files",
+    description: "Compare the same file (or two different files) between two refs/branches/commits and return a line-based diff.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, path: { type: "string", description: "File path (used for both sides unless base_path/head_path given)" },
+      base_ref: { type: "string" }, head_ref: { type: "string" }, base_path: { type: "string" }, head_path: { type: "string" },
+    }, required: ["repo", "path", "base_ref", "head_ref"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, path, base_ref, head_ref, base_path, head_path }) => {
+      const [a, b] = await Promise.all([
+        readFileViaBlob(owner, repo, base_path || path, base_ref),
+        readFileViaBlob(owner, repo, head_path || path, head_ref),
+      ]);
+      const diff = simpleLineDiff(a, b);
+      return diff.length > 20000 ? diff.slice(0, 20000) + "\n...[truncated]" : diff;
+    },
+  },
+  {
+    name: "github_search_code",
+    description: "Search code across GitHub using GitHub's code-search syntax (e.g. 'foo repo:owner/name', 'extension:js useState').",
+    parameters: { type: "object", properties: { query: { type: "string" }, per_page: { type: "number" } }, required: ["query"] },
+    execute: async ({ query, per_page = 20 }) => {
+      const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${Math.min(per_page, 100)}`);
+      if (!data.items?.length) return "No results found.";
+      const text = `Found ${data.total_count} total, showing ${data.items.length}:\n` + data.items.map(i => `${i.repository.full_name}: ${i.path}`).join("\n");
+      return text.length > 15000 ? text.slice(0, 15000) + "\n...[truncated]" : text;
+    },
+  },
+
+  // -- Cloudflare: Workers / D1 / KV / R2 / Hyperdrive ---------------------
+  {
+    name: "cf_workers_list",
+    description: "List all Cloudflare Workers scripts in the account.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      const data = await cfAccountRequest("/workers/scripts");
+      return (data || []).map(w => `${w.id} (modified ${w.modified_on?.slice(0, 10)})`).join("\n") || "No workers found.";
+    },
+  },
+  {
+    name: "cf_workers_get_worker",
+    description: "Get settings/metadata for a single Cloudflare Worker.",
+    parameters: { type: "object", properties: { scriptName: { type: "string" } }, required: ["scriptName"] },
+    execute: async ({ scriptName }) => JSON.stringify(await cfAccountRequest(`/workers/scripts/${scriptName}/settings`), null, 2).slice(0, 8000),
+  },
+  {
+    name: "cf_workers_get_worker_code",
+    description: "Get the source code of a Cloudflare Worker.",
+    parameters: { type: "object", properties: { scriptName: { type: "string" } }, required: ["scriptName"] },
+    execute: async ({ scriptName }) => {
+      const data = await cfAccountRequest(`/workers/scripts/${scriptName}`);
+      const text = typeof data === "string" ? data : JSON.stringify(data);
+      return text.length > 30000 ? text.slice(0, 30000) + "\n...[truncated]" : text;
+    },
+  },
+  {
+    name: "cf_d1_databases_list",
+    description: "List D1 databases in the account.",
+    parameters: { type: "object", properties: { name: { type: "string" } } },
+    execute: async ({ name }) => {
+      const qs = name ? `?name=${encodeURIComponent(name)}` : "";
+      const data = await cfAccountRequest(`/d1/database${qs}`);
+      return (data || []).map(d => `${d.name} -- ${d.uuid}`).join("\n") || "No databases found.";
+    },
+  },
+  {
+    name: "cf_d1_database_get",
+    description: "Get details for a single D1 database.",
+    parameters: { type: "object", properties: { database_id: { type: "string" } }, required: ["database_id"] },
+    execute: async ({ database_id }) => JSON.stringify(await cfAccountRequest(`/d1/database/${database_id}`), null, 2).slice(0, 5000),
+  },
+  {
+    name: "cf_kv_namespaces_list",
+    description: "List KV namespaces in the account.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      const data = await cfAccountRequest("/storage/kv/namespaces");
+      return (data || []).map(n => `${n.title} -- ${n.id}`).join("\n") || "No namespaces found.";
+    },
+  },
+  {
+    name: "cf_kv_namespace_get",
+    description: "Get details for a single KV namespace.",
+    parameters: { type: "object", properties: { namespace_id: { type: "string" } }, required: ["namespace_id"] },
+    execute: async ({ namespace_id }) => JSON.stringify(await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`), null, 2).slice(0, 5000),
+  },
+  {
+    name: "cf_r2_buckets_list",
+    description: "List R2 buckets in the account.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      const data = await cfAccountRequest("/r2/buckets");
+      return (data?.buckets || data || []).map(b => `${b.name} (created ${b.creation_date?.slice(0, 10) || "n/a"})`).join("\n") || "No buckets found.";
+    },
+  },
+  {
+    name: "cf_r2_bucket_get",
+    description: "Get details for a single R2 bucket.",
+    parameters: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+    execute: async ({ name }) => JSON.stringify(await cfAccountRequest(`/r2/buckets/${name}`), null, 2).slice(0, 5000),
+  },
+  {
+    name: "cf_hyperdrive_configs_list",
+    description: "List Hyperdrive configurations in the account.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      const data = await cfAccountRequest("/hyperdrive/configs");
+      return (data || []).map(h => `${h.name} -- ${h.id}`).join("\n") || "No Hyperdrive configs found.";
+    },
+  },
+  {
+    name: "cf_hyperdrive_config_get",
+    description: "Get details for a single Hyperdrive configuration.",
+    parameters: { type: "object", properties: { hyperdrive_id: { type: "string" } }, required: ["hyperdrive_id"] },
+    execute: async ({ hyperdrive_id }) => JSON.stringify(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`), null, 2).slice(0, 5000),
+  },
+  {
+    name: "cf_workers_observability_keys",
+    description: "List available telemetry keys (log/trace/event fields) for a time range.",
+    parameters: { type: "object", properties: { timeframe_from: { type: "string" }, timeframe_to: { type: "string" }, dataset: { type: "string" } }, required: ["timeframe_from", "timeframe_to"] },
+    execute: async ({ timeframe_from, timeframe_to, dataset = "cloudflare-workers" }) => {
+      const data = await cfAccountRequest("/workers/observability/telemetry/keys", { method: "POST", body: { dataset, timeframe: { from: timeframe_from, to: timeframe_to } } });
+      return JSON.stringify(data).slice(0, 8000);
+    },
+  },
+  {
+    name: "cf_workers_observability_values",
+    description: "List the distinct values seen for a given telemetry key over a time range.",
+    parameters: { type: "object", properties: {
+      key: { type: "string" }, timeframe_from: { type: "string" }, timeframe_to: { type: "string" }, dataset: { type: "string" }, valueType: { type: "string", description: "string, boolean, or number (default string)" },
+    }, required: ["key", "timeframe_from", "timeframe_to"] },
+    execute: async ({ key, timeframe_from, timeframe_to, dataset = "cloudflare-workers", valueType = "string" }) => {
+      const data = await cfAccountRequest("/workers/observability/telemetry/values", { method: "POST", body: { datasets: [dataset], key, type: valueType, timeframe: { from: timeframe_from, to: timeframe_to } } });
+      return JSON.stringify(data).slice(0, 8000);
+    },
+  },
+
+  // -- Context7 -----------------------------------------------------------
+  {
+    name: "context7_search_library",
+    description: "Search Context7's index for a library/framework by name to get its library ID.",
+    parameters: { type: "object", properties: { libraryName: { type: "string" }, query: { type: "string" } }, required: ["libraryName", "query"] },
+    execute: async ({ libraryName, query }) => {
+      const data = await context7Request("/libs/search", { libraryName, query });
+      return (data.results || []).map(r => `${r.id} -- ${r.title} (trust ${r.trustScore})`).join("\n") || "No libraries found.";
+    },
+  },
+  {
+    name: "context7_get_library_docs",
+    description: "Fetch version-specific documentation and code examples for a library by its Context7 library ID (from context7_search_library).",
+    parameters: { type: "object", properties: { libraryId: { type: "string" }, query: { type: "string" }, tokens: { type: "number" } }, required: ["libraryId", "query"] },
+    execute: async ({ libraryId, query, tokens }) => {
+      const data = await context7Request("/context", { libraryId, query, tokens });
+      const text = typeof data === "string" ? data : (data.context || data.text || JSON.stringify(data));
+      return text.length > 25000 ? text.slice(0, 25000) + "\n...[truncated]" : text;
+    },
+  },
+
+  // -- Mem0 -----------------------------------------------------------------
+  {
+    name: "mem0_search",
+    description: "Search memories in the Mem0 workspace using hybrid semantic + keyword retrieval.",
+    parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
+    execute: async ({ query, limit = 10 }) => {
+      const data = await mem0Request("/v3/memories/search/", { method: "POST", body: { query, limit } });
+      const results = data.results || data || [];
+      return results.map(m => `[${m.score?.toFixed?.(2) ?? "?"}] ${m.memory || m.content}`).join("\n---\n") || "No memories found.";
+    },
+  },
+  {
+    name: "mem0_list",
+    description: "List recent memories from the Mem0 workspace.",
+    parameters: { type: "object", properties: { page_size: { type: "number" } } },
+    execute: async ({ page_size = 20 }) => {
+      const data = await mem0Request("/v3/memories/", { method: "POST", body: { page_size } });
+      const results = data.results || data.memories || data || [];
+      return results.map(m => `${m.id}: ${m.memory || m.content}`).join("\n") || "No memories found.";
+    },
+  },
+  {
+    name: "mem0_get",
+    description: "Get the full content of a specific Mem0 memory by ID.",
+    parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    execute: async ({ id }) => {
+      const m = await mem0Request(`/v1/memories/${id}/`);
+      return `${m.memory}\ncreated: ${m.created_at} | updated: ${m.updated_at}\nmetadata: ${JSON.stringify(m.metadata || {})}`;
+    },
+  },
+  {
+    name: "mem0_get_history",
+    description: "Get the version/audit history of a Mem0 memory by ID.",
+    parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    execute: async ({ id }) => {
+      const data = await mem0Request(`/v1/memories/${id}/history/`);
+      return (data || []).map(h => `${h.event} @ ${h.timestamp}: ${h.old_memory || ""} -> ${h.new_memory || ""}`).join("\n") || "No history found.";
+    },
+  },
+
+  // -- Notion ---------------------------------------------------------------
+  {
+    name: "notion_get_page_history",
+    description: "Get the changelog/version history entries recorded on a Notion page (read-only; looks for logged changelog blocks, not Notion's native edit history).",
+    parameters: { type: "object", properties: { page_id: { type: "string" } }, required: ["page_id"] },
+    execute: async ({ page_id }) => {
+      const data = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
+      const text = notionBlocksToText(data.results || []) || "(no content)";
+      return text.length > 10000 ? text.slice(0, 10000) + "\n...[truncated]" : text;
     },
   },
 ];
