@@ -13,7 +13,7 @@ import {
 function assertConfigured() {
   if (!GITHUB_TOKEN) {
     throw new Error(
-      "GITHUB_TOKEN is not set. Add it as an environment variable on the Manufact server."
+      "GITHUB_TOKEN is not set. Add it as an environment variable on the madmcp server."
     );
   }
 }
@@ -87,7 +87,7 @@ async function doFetch(path, { method, body, accept }) {
       Accept: accept || "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "Content-Type": "application/json",
-      "User-Agent": "manufact-mcp-server",
+      "User-Agent": "madmcp-server",
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -135,7 +135,7 @@ export async function githubGraphQL(query, variables = {}) {
       headers: {
         Authorization: `Bearer ${GITHUB_TOKEN}`,
         "Content-Type": "application/json",
-        "User-Agent": "manufact-mcp-server",
+        "User-Agent": "madmcp-server",
       },
       body: JSON.stringify({ query, variables }),
     });
