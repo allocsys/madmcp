@@ -23,7 +23,7 @@
 import { geminiChat } from "./client.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
-import { queryTelemetry } from "../cloudflare/observability.js";
+import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
 import { cfAccountRequest } from "../cloudflare/client.js";
 import { context7Request } from "../context7/client.js";
 import { mem0Request } from "../mem/client.js";
@@ -642,7 +642,7 @@ const FUNCTIONS = [
     description: "List available telemetry keys (log/trace/event fields) for a time range.",
     parameters: { type: "object", properties: { timeframe_from: { type: "string" }, timeframe_to: { type: "string" }, dataset: { type: "string" } }, required: ["timeframe_from", "timeframe_to"] },
     execute: async ({ timeframe_from, timeframe_to, dataset = "cloudflare-workers" }) => {
-      const data = await cfAccountRequest("/workers/observability/telemetry/keys", { method: "POST", body: { dataset, timeframe: { from: timeframe_from, to: timeframe_to } } });
+      const data = await cfAccountRequest("/workers/observability/telemetry/keys", { method: "POST", body: { dataset, timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) } } });
       return JSON.stringify(data).slice(0, 8000);
     },
   },
@@ -653,7 +653,7 @@ const FUNCTIONS = [
       key: { type: "string" }, timeframe_from: { type: "string" }, timeframe_to: { type: "string" }, dataset: { type: "string" }, valueType: { type: "string", description: "string, boolean, or number (default string)" },
     }, required: ["key", "timeframe_from", "timeframe_to"] },
     execute: async ({ key, timeframe_from, timeframe_to, dataset = "cloudflare-workers", valueType = "string" }) => {
-      const data = await cfAccountRequest("/workers/observability/telemetry/values", { method: "POST", body: { datasets: [dataset], key, type: valueType, timeframe: { from: timeframe_from, to: timeframe_to } } });
+      const data = await cfAccountRequest("/workers/observability/telemetry/values", { method: "POST", body: { datasets: [dataset], key, type: valueType, timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) } } });
       return JSON.stringify(data).slice(0, 8000);
     },
   },
