@@ -88,6 +88,23 @@ export const GEMINI_API     = "https://generativelanguage.googleapis.com/v1beta"
 // current without checking https://ai.google.dev/gemini-api/docs/models.
 export const GEMINI_MODEL   = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
+// Fallback model cascade for rate-limit (429) errors. Free-tier Gemini quotas
+// are tracked PER MODEL, so a different model has its own separate RPM
+// bucket -- on a 429 from GEMINI_MODEL, client.js retries the same request
+// against the next model here instead of failing the whole call/investigation
+// outright. This multiplies effective free-tier throughput without enabling
+// billing. Order matters: put higher-RPM/lower-capability models later, since
+// they're only used once the primary model's quota is exhausted for the
+// current window. Override via env var as a comma-separated list of model
+// IDs; GEMINI_MODEL is always tried first regardless of whether it's
+// repeated in this list. See https://ai.google.dev/gemini-api/docs/models for
+// current model IDs/limits -- these drift as Google ships new Flash/Flash-Lite
+// generations.
+export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash-lite,gemini-3-flash")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 // Read/write isolation for the Gemini connector's Notion access (2026-07-25
 // plan): Gemini tools may READ any page/database reachable via the existing
 // Notion connector (Memory Index, Entity Index, Job Leads, etc.), but may
