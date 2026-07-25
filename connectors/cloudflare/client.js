@@ -10,12 +10,12 @@ import { CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API } from "../
 function assertConfigured() {
   if (!CLOUDFLARE_API_TOKEN) {
     throw new Error(
-      "CLOUDFLARE_API_TOKEN is not set. Add it as an environment variable on the Manufact server."
+      "CLOUDFLARE_API_TOKEN is not set. Add it as an environment variable on the madmcp server."
     );
   }
   if (!CLOUDFLARE_ACCOUNT_ID) {
     throw new Error(
-      "CLOUDFLARE_ACCOUNT_ID is not set. Add it as an environment variable on the Manufact server."
+      "CLOUDFLARE_ACCOUNT_ID is not set. Add it as an environment variable on the madmcp server."
     );
   }
 }
@@ -29,7 +29,7 @@ export async function cfRequest(path, { method = "GET", body, accept } = {}) {
       Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
       Accept: accept || "application/json",
       "Content-Type": "application/json",
-      "User-Agent": "manufact-mcp-server",
+      "User-Agent": "madmcp-server",
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
