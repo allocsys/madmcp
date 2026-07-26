@@ -51,7 +51,7 @@ export function register(server) {
       try {
         fetched = await fetchUrl(url);
       } catch (err) {
-        return { content: [{ type: "text", text: `Fetch failed: ${err.message}` }], isError: true };
+        return { content: [{ type: "text", text: `Fetch failed: ${err?.message ?? String(err)}` }], isError: true };
       }
 
       let sourceText = fetched.contentType.includes("text/html") ? htmlToText(fetched.text) : fetched.text;
@@ -68,7 +68,7 @@ export function register(server) {
       try {
         answer = await geminiGenerate(prompt);
       } catch (err) {
-        return { content: [{ type: "text", text: `Gemini call failed: ${err.message}` }], isError: true };
+        return { content: [{ type: "text", text: `Gemini call failed: ${err?.message ?? String(err)}` }], isError: true };
       }
 
       let notionNote = "";
@@ -116,11 +116,24 @@ export function register(server) {
         };
       }
 
+      // max_steps has no floor in its Zod type (z.number().optional() accepts
+      // 0, negatives, and non-integers), but runInvestigation's loop is a
+      // `for (step = startStep; step <= cappedSteps; ...)` that simply never
+      // executes when cappedSteps < startStep -- silently "succeeding" with
+      // zero Gemini calls made and a confusing "reached the step cap of 0"
+      // answer instead of surfacing that the input itself was invalid.
+      if (max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
+        return {
+          content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 20 regardless of a larger value.` }],
+          isError: true,
+        };
+      }
+
       let result;
       try {
         result = await runInvestigation({ task, max_steps, resume_run_id });
       } catch (err) {
-        return { content: [{ type: "text", text: `Investigation failed: ${err.message}` }], isError: true };
+        return { content: [{ type: "text", text: `Investigation failed: ${err?.message ?? String(err)}` }], isError: true };
       }
 
       // On a resumed run, `task` may be undefined here (a fresh run always has

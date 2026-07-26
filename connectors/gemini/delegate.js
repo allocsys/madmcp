@@ -34,6 +34,18 @@ import { DEFAULT_OWNER } from "../../config.js";
 
 const HARD_MAX_STEPS = 20;
 
+// 429 (rate limit) and 503 (overloaded/high demand) are the only cases
+// documented as transient -- see client.js's own model-fallback cascade,
+// which deliberately only retries a different model on a 429 for the same
+// reason. Everything else (400 malformed request, 401/403 auth, 404 unknown
+// model, or no err.status at all -- e.g. "GEMINI_API_KEY is not set" thrown
+// locally in client.js, or "Gemini returned no candidates" from a
+// safety/recitation block) is a config or request problem that will
+// reproduce identically on a resume, not something retrying fixes.
+function isTransientGeminiError(err) {
+  return err?.status === 429 || err?.status === 503;
+}
+
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
 // summaries, not a full unified-diff implementation. Capped so a huge file
 // pair can't blow up the O(n*m) table.
@@ -848,6 +860,28 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     startStep = 1;
   }
 
+  // Resuming with a max_steps ceiling that's already been met or exceeded
+  // by the checkpoint's own stepsDone (e.g. a checkpoint has 5 completed
+  // steps and the caller resumes with max_steps: 2) -- there's no budget
+  // left to take even one more step. Don't fall into the loop-and-fall-
+  // through path below: that unconditionally deletes the checkpoint via
+  // deleteCheckpoint(runId) once the loop exits, which would throw away a
+  // still-good, still-resumable checkpoint for no reason (the loop body
+  // simply never executes when startStep > cappedSteps), and the generic
+  // step-cap message doesn't explain that anything was actually completed.
+  // Leave the checkpoint alone -- it's still resumable with a higher
+  // max_steps -- and say so explicitly instead.
+  if (checkpoint && startStep > cappedSteps) {
+    return {
+      answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call gemini_investigate again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
+      steps: startStep - 1,
+      transcript,
+      runId,
+      task: effectiveTask,
+      failed: true,
+    };
+  }
+
   for (let step = startStep; step <= cappedSteps; step++) {
     // On the final allowed step, withhold the function-calling tools
     // entirely instead of just reminding the model to wrap up: a text-only
@@ -867,8 +901,12 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       // iteration, but cheap and safe) and hand the caller everything they
       // need to resume instead of restarting.
       await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
+      const errMessage = err?.message ?? String(err);
+      const resumeHint = isTransientGeminiError(err)
+        ? ` ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
+        : ` This does not look like a transient error (not a 429/503) -- resuming with resume_run_id: "${runId}" will likely reproduce the same failure, so check the underlying cause (e.g. GEMINI_API_KEY, request format, safety/recitation block) before retrying. The ${transcript.length} tool call(s) already completed are still saved if you want to resume anyway.`;
       return {
-        answer: `(Gemini call failed on step ${step}: ${err.message} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Gemini call failed on step ${step}: ${errMessage} --${resumeHint})`,
         steps: step - 1,
         transcript,
         runId,
@@ -895,25 +933,56 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     contents.push({ role: "model", parts });
 
     const responseParts = [];
-    for (const part of functionCalls) {
-      const { name, args, id } = part.functionCall;
-      const fn = FUNCTIONS.find((f) => f.name === name);
-      let resultText;
-      if (!fn) {
-        resultText = `Error: unknown function "${name}".`;
-      } else {
-        try {
-          resultText = await fn.execute(args || {});
-        } catch (err) {
-          resultText = `Error: ${err.message}`;
+    try {
+      for (const part of functionCalls) {
+        const { name, args, id } = part.functionCall;
+        const fn = FUNCTIONS.find((f) => f.name === name);
+        let resultText;
+        if (!fn) {
+          resultText = `Error: unknown function "${name}".`;
+        } else {
+          try {
+            resultText = await fn.execute(args || {});
+          } catch (err) {
+            resultText = `Error: ${err?.message ?? String(err)}`;
+          }
         }
+        // Defensive: every FUNCTIONS[].execute() is expected to return a
+        // string. Guard against a future one accidentally returning
+        // something else (object, undefined, etc.) so this can't throw
+        // mid-transcript and take down the whole step -- see the outer
+        // catch below for why that matters.
+        if (typeof resultText !== "string") {
+          resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
+        }
+        transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
+        // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
+        // turns go back with role "user" (NOT "function" -- that was the older doc convention
+        // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
+        // original functionCall.id so the API can thread multi-call turns correctly.
+        responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
       }
-      transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
-      // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
-      // turns go back with role "user" (NOT "function" -- that was the older doc convention
-      // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
-      // original functionCall.id so the API can thread multi-call turns correctly.
-      responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
+    } catch (err) {
+      // Belt-and-suspenders: nothing inside the loop above should throw past
+      // its own per-call try/catch or the typeof guard anymore, but if
+      // something still does (a bug in a future function, an unexpected
+      // JSON.stringify(args) failure on a circular/exotic args shape, etc.),
+      // don't let it escape runInvestigation and land in tools.js's generic
+      // catch, which has no runId to offer -- that would silently lose this
+      // step's (and any prior steps') completed work. Checkpoint what's
+      // already done (this step's model turn was already pushed to
+      // `contents` above) and return the same resumable-failure shape as a
+      // geminiChat failure.
+      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
+      const errMessage = err?.message ?? String(err);
+      return {
+        answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        steps: step - 1,
+        transcript,
+        runId,
+        task: effectiveTask,
+        failed: true,
+      };
     }
     // Step-budget reminder (added after the 2026-07-26 resume-truncation
     // bug): SYSTEM_PREAMBLE and the task's own formatting instructions only
