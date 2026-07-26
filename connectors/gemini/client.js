@@ -32,12 +32,15 @@ async function callGenerateContentOnce(body, model) {
   return data;
 }
 
-// Cascades through GEMINI_MODEL + GEMINI_FALLBACK_MODELS, but ONLY on a 429
-// (rate limit exceeded) -- free-tier Gemini quotas are tracked per model, so
-// a fresh model has its own separate RPM bucket, making this a legitimate
-// way to keep going rather than a blind retry. Any other status (400, 500,
-// etc.) is a real failure and surfaces immediately without trying other
-// models, since those aren't quota problems a different model would fix.
+// Cascades through GEMINI_MODEL + GEMINI_FALLBACK_MODELS on a 429 (rate
+// limit exceeded) OR a 503 (overloaded/high demand). Free-tier Gemini
+// quotas are tracked per model, so a fresh model has its own separate RPM
+// bucket on a 429, making cascade a legitimate way to keep going rather
+// than a blind retry. A 503 isn't a quota signal, but each model is still a
+// separate backend deployment, so one being overloaded doesn't mean the
+// next is -- worth trying before failing the whole call. Any other status
+// (400, 500, etc.) is a real failure and surfaces immediately without
+// trying other models, since those aren't problems a different model would fix.
 //
 // If the caller passed an explicit `model` that differs from the configured
 // default (GEMINI_MODEL), that choice is honored exactly with no cascade --
@@ -66,11 +69,18 @@ async function callGenerateContent(body, requestedModel) {
     } catch (err) {
       lastErr = err;
       const isLast = i === models.length - 1;
-      if (err.status !== 429 || isLast) throw err;
-      // Rate-limited on this model -- record a cooldown (best-effort; never
-      // blocks or throws on its own) so future calls can skip straight past
-      // it, then fall through to try the next model as before.
-      await setModelCooldown(model, parseRetryDelaySeconds(err.message));
+      const isRateLimited = err.status === 429;
+      const isOverloaded  = err.status === 503;
+      if ((!isRateLimited && !isOverloaded) || isLast) throw err;
+      if (isRateLimited) {
+        // Rate-limited on this model -- record a cooldown (best-effort; never
+        // blocks or throws on its own) so future calls can skip straight past
+        // it. No equivalent recording for 503: there's no per-model quota
+        // hint to parse, and an overload isn't reliably tied to this model
+        // specifically the way a 429 is.
+        await setModelCooldown(model, parseRetryDelaySeconds(err.message));
+      }
+      // Fall through to try the next model either way.
     }
   }
   throw lastErr;
