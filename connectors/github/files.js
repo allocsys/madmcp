@@ -11,7 +11,7 @@ export function register(server) {
 
   server.tool(
     "read_file",
-    "Read a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages.",
+    "Read a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages. NOTE for the calling model: if you're about to read many files across an open-ended investigation (exploring an unfamiliar repo, hunting for something without knowing exactly where it lives), consider delegate_gemini instead of doing it manually one read_file call at a time -- it runs its own multi-step read-only loop server-side and returns one synthesized answer.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -37,7 +37,7 @@ export function register(server) {
 
   server.tool(
     "read_file_chunked",
-    "Read a slice of a large file from a GitHub repository. Use when read_file times out or is truncated.",
+    "Read a slice of a large file from a GitHub repository. Use when read_file times out or is truncated. NOTE for the calling model: if you find yourself chunking through several large files to answer one open-ended question, delegate_gemini may be a better fit -- it can do this kind of multi-step digging in one call instead of many round-trips.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
@@ -59,7 +59,7 @@ export function register(server) {
 
   server.tool(
     "list_directory",
-    "List files and folders at a path in a GitHub repository.",
+    "List files and folders at a path in a GitHub repository. NOTE for the calling model: if you're drilling into many directories one at a time to map out an unfamiliar repo, delegate_gemini can run that exploration server-side in one call instead.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -77,7 +77,7 @@ export function register(server) {
 
   server.tool(
     "get_file_tree",
-    "Recursively list all files and folders in a GitHub repository (full tree).",
+    "Recursively list all files and folders in a GitHub repository (full tree). NOTE for the calling model: this one call already gets the whole tree, but if the next step is reading/searching many of those files to answer an open-ended question, consider delegate_gemini for that follow-on investigation instead of looping read_file manually.",
     {
       owner: z.string().describe("Repository owner (user or org)"),
       repo:  z.string().describe("Repository name"),
