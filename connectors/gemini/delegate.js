@@ -1214,7 +1214,20 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
 
     // Checkpoint after every fully-completed step, so a failure on the NEXT
     // Gemini call (or a hosting-platform timeout) doesn't lose this one.
-    await saveCheckpoint(runId, { contents, transcript, stepsDone: step, task: effectiveTask });
+    // newContents/contentsCheckpointedUpTo implement fix #5 (append-delta
+    // instead of overwrite-whole-blob): only the turns added THIS step (the
+    // model's turn + the function-response turn, normally 2 entries) are
+    // pushed, not the whole conversation so far -- write cost is O(delta),
+    // not O(total run length).
+    await saveCheckpoint(runId, {
+      newContents: contents.slice(contentsCheckpointedUpTo),
+      transcript,
+      stepsDone: step,
+      task: effectiveTask,
+      repeatCounts: Object.fromEntries(repeatCounts),
+      consecutiveAllRepeatSteps,
+    });
+    contentsCheckpointedUpTo = contents.length;
   }
 
   await deleteCheckpoint(runId);
