@@ -1161,7 +1161,15 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       // already done (this step's model turn was already pushed to
       // `contents` above) and return the same resumable-failure shape as a
       // geminiChat failure.
-      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
+      await saveCheckpoint(runId, {
+        newContents: contents.slice(contentsCheckpointedUpTo),
+        transcript,
+        stepsDone: step - 1,
+        task: effectiveTask,
+        repeatCounts: Object.fromEntries(repeatCounts),
+        consecutiveAllRepeatSteps,
+      });
+      contentsCheckpointedUpTo = contents.length;
       const errMessage = err?.message ?? String(err);
       return {
         answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call delegate_gemini again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
