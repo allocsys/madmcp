@@ -342,12 +342,12 @@
       ['result','"INC-114 — Resolved. Latency back to baseline (~310ms p95)."\nlast updated 09:58 · matches Cloudflare baseline'],
       ['stamped','✓ stamped · 233ms']
     ], ms:233},
-    { id:'gm', label:'GEMINI · DELEGATED INVESTIGATION', lines:[
+    { id:'gm', label:'⭐ GEMINI · DELEGATED INVESTIGATION (CAPSTONE)', lines:[
       ['prompt','> write the postmortem — pull what changed, who reviewed it, and confirm it’s resolved'],
-      ['why','Why: this needs GitHub and Cloudflare context stitched together — hand the whole investigation to Gemini in one call instead of chaining more manual tool calls.'],
+      ['why','Why: this needs GitHub and Cloudflare context stitched together. Doing it manually here would mean 4 more separate tool calls — instead, hand the whole investigation to Gemini in one call and let it run its own loop server-side. This delegation pattern is what the whole server is built around.'],
       ['call','→ delegate_gemini({ task: "Summarize the review on PR #482 and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
       ['result','Gemini ran 4 steps server-side (list_commits, get_pr_reviews, cf_workers_observability_query, get_check_runs)\n→ "PR #482 approved by 2 reviewers, merged 09:52. p95 back to 310ms baseline, checks green."'],
-      ['stamped','✓ stamped · 612ms · 4 sub-steps run by Gemini, 1 call from the agent']
+      ['stamped','✓ stamped · 612ms · 4 sub-steps run by Gemini, 1 call from the agent — 3 manual round-trips saved']
     ], ms:612}
   ];
 
