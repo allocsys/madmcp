@@ -1016,8 +1016,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
         // enum value, since "try a higher max_steps" is the fix and the
         // caller has no way to infer that from "MALFORMED_FUNCTION_CALL"
         // alone.
-        const starvationNote = isFinalStep && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
-          ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${cappedSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+        const starvationNote = withholdTools && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+          ? (isFinalStep
+              ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${cappedSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+              : ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls (same function + arguments already tried this run) -- fix #4's stuck-loop guard forces a text-only answer the same way the final step does, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`)
           : "";
         return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask };
       }
