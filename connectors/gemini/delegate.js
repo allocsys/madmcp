@@ -879,8 +879,12 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       // iteration, but cheap and safe) and hand the caller everything they
       // need to resume instead of restarting.
       await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
+      const errMessage = err?.message ?? String(err);
+      const resumeHint = isTransientGeminiError(err)
+        ? ` ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
+        : ` This does not look like a transient error (not a 429/503) -- resuming with resume_run_id: "${runId}" will likely reproduce the same failure, so check the underlying cause (e.g. GEMINI_API_KEY, request format, safety/recitation block) before retrying. The ${transcript.length} tool call(s) already completed are still saved if you want to resume anyway.`;
       return {
-        answer: `(Gemini call failed on step ${step}: ${err.message} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Gemini call failed on step ${step}: ${errMessage} --${resumeHint})`,
         steps: step - 1,
         transcript,
         runId,
