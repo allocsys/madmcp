@@ -23,6 +23,7 @@
 import { randomUUID } from "node:crypto";
 import { geminiChat } from "./client.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.js";
+import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
 import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
@@ -845,8 +846,13 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     // a legitimate defensive-caller pattern (passing the task as a fallback
     // even on a resume call), kept intentionally per the fix plan.
     throw new Error(
-      `resume_run_id "${resume_run_id}" has no live checkpoint -- it may have expired (1 hour TTL), Redis may be unavailable, or the id may be wrong. ` +
-      `There is no saved task to resume from. Start a new investigation by calling again with a task and no resume_run_id.`
+      isRedisConfigured()
+        ? `resume_run_id "${resume_run_id}" has no live checkpoint -- it may have expired (1 hour TTL) or the id may be wrong. ` +
+          `There is no saved task to resume from. Start a new investigation by calling again with a task and no resume_run_id.`
+        : `resume_run_id "${resume_run_id}" has no live checkpoint -- and Redis is NOT configured in this environment ` +
+          `(UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN unset or unreachable), so no checkpoint could ever have been saved to resume from, ` +
+          `regardless of the runId or how recently the original call failed. Retrying resume_run_id again will not help -- ` +
+          `start a new investigation with a task instead, and expect that a future transient failure won't be resumable either until Redis is configured.`
     );
   } else {
     // Either no resume_run_id was given, or one was given with its checkpoint
@@ -902,9 +908,13 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       // need to resume instead of restarting.
       await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
       const errMessage = err?.message ?? String(err);
+      const redisOk = isRedisConfigured();
       const resumeHint = isTransientGeminiError(err)
-        ? ` ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
-        : ` This does not look like a transient error (not a 429/503) -- resuming with resume_run_id: "${runId}" will likely reproduce the same failure, so check the underlying cause (e.g. GEMINI_API_KEY, request format, safety/recitation block) before retrying. The ${transcript.length} tool call(s) already completed are still saved if you want to resume anyway.`;
+        ? (redisOk
+            ? ` ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
+            : ` ${transcript.length} tool call(s) were completed this run, but Redis is NOT configured in this environment, so nothing was actually saved -- resume_run_id: "${runId}" will NOT work no matter how soon you retry. ` +
+              `The completed tool calls are listed in this run's transcript/Notion log (if log_to_notion was set) for manual reference, but the only way to continue is a fresh call with the full task text.`)
+        : ` This does not look like a transient error (not a 429/503) -- resuming with resume_run_id: "${runId}" will likely reproduce the same failure, so check the underlying cause (e.g. GEMINI_API_KEY, request format, safety/recitation block) before retrying. The ${transcript.length} tool call(s) already completed are still saved if you want to resume anyway${redisOk ? "" : " (though note: Redis is NOT configured in this environment, so nothing was actually saved regardless)"}.`;
       return {
         answer: `(Gemini call failed on step ${step}: ${errMessage} --${resumeHint})`,
         steps: step - 1,
