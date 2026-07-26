@@ -2,6 +2,8 @@
 // config.js
 // Central place for all environment variables and shared constants.
 // ---------------------------------------------------------------------------
+// (test commit: verifying the Vercel deploy check after removing the
+// legacy "Manufact"-named deployment -- no functional change)
 
 export const GITHUB_TOKEN   = process.env.GITHUB_TOKEN;
 export const GITHUB_API     = "https://api.github.com";
