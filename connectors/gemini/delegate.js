@@ -13,6 +13,24 @@
 // existing client-layer functions (not the MCP tool layer) to avoid
 // round-tripping through the MCP server for its own internal calls.
 //
+// IMPORTANT -- INDEPENDENT FROM THE MCP-FACING TOOL DESCRIPTIONS:
+// The `description` strings on FUNCTIONS below are what GEMINI sees during
+// its own tool-calling loop. They are entirely separate from the
+// server.tool(...) descriptions the CALLING MODEL (e.g. Claude) sees for
+// read_file/get_file_tree/list_directory/etc. in connectors/github/files.js
+// (and equivalents in other connectors/*/tools.js files). Editing one set
+// does NOT affect the other -- they are different objects read by different
+// models for different purposes.
+// Concretely: connectors/github/files.js's read_file/get_file_tree descriptions
+// carry "RULE for the calling model: ... use delegate_gemini instead" text
+// aimed at steering Claude away from manual multi-file loops. Do NOT copy
+// that kind of "use delegate_gemini instead" language onto github_read_file/
+// github_get_file_tree/etc. below -- Gemini calling one of these FUNCTIONS
+// *is* delegate_gemini already running; a self-referential "delegate to
+// delegate_gemini" hint here would be nonsensical and could confuse Gemini
+// into stalling instead of just calling the function. Keep these
+// descriptions plain and factual, matching what they actually do.
+//
 // STEP CAP: HARD_MAX_STEPS bounds the loop regardless of the caller's
 // max_steps argument -- both to bound Gemini API cost and because a
 // synchronous madmcp tool call has to fit inside the hosting platform's
