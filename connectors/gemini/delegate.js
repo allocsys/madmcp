@@ -965,8 +965,20 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
       // iteration, but cheap and safe) and hand the caller everything they
-      // need to resume instead of restarting.
-      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
+      // need to resume instead of restarting. newContents is usually empty
+      // here (this failure happens before this step's model turn is ever
+      // pushed to `contents`) -- saveCheckpoint just re-writes the small
+      // meta blob in that case, which is exactly the O(delta) behavior fix
+      // #5 is for.
+      await saveCheckpoint(runId, {
+        newContents: contents.slice(contentsCheckpointedUpTo),
+        transcript,
+        stepsDone: step - 1,
+        task: effectiveTask,
+        repeatCounts: Object.fromEntries(repeatCounts),
+        consecutiveAllRepeatSteps,
+      });
+      contentsCheckpointedUpTo = contents.length;
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
       const resumeHint = isTransientGeminiError(err)
