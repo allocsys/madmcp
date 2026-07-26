@@ -926,7 +926,14 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     // an honest one: the model is told to say it couldn't finish, rather
     // than presenting a rushed, incomplete answer as if it were complete.
     const remainingAfterThisStep = cappedSteps - step;
-    if (remainingAfterThisStep <= 1) {
+    if (remainingAfterThisStep === 2) {
+      // Earlier, softer nudge -- gives the model a chance to steer toward
+      // synthesis before the hard cutoff two notes down, instead of only
+      // finding out at the last possible moment.
+      responseParts.push({
+        text: `[SYSTEM NOTE: only 2 step(s) remain after this one. Start wrapping up -- prioritize synthesizing what you've already found over opening new lines of investigation.]`,
+      });
+    } else if (remainingAfterThisStep <= 1) {
       // When remainingAfterThisStep is 0, the NEXT turn is the final step,
       // which is called with no tools at all (see isFinalStep above) -- so
       // this note can say so as a fact, not just a suggestion to wrap up.
