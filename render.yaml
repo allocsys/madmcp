@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: manufact-mcp-server
+    name: madmcp-server
     runtime: node
     plan: free
     buildCommand: npm install

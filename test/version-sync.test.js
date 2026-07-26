@@ -16,10 +16,10 @@ describe("version sync", () => {
     // and not the other (or to server.js but not package.json) fails CI
     // immediately instead of silently drifting again.
     const mcpServerMatch = serverSrc.match(/new McpServer\(\{[^}]*version:\s*"([^"]+)"/s);
-    const logMatch = serverSrc.match(/manufact-mcp-server v([\d.]+) listening/);
+    const logMatch = serverSrc.match(/madmcp-server v([\d.]+) listening/);
 
     expect(mcpServerMatch, "Could not find McpServer({ version: \"...\" }) in server.js -- update this test's regex if that constructor call changed shape.").not.toBeNull();
-    expect(logMatch, "Could not find the 'manufact-mcp-server vX.Y.Z listening' startup log in server.js -- update this test's regex if that message changed.").not.toBeNull();
+    expect(logMatch, "Could not find the 'madmcp-server vX.Y.Z listening' startup log in server.js -- update this test's regex if that message changed.").not.toBeNull();
 
     expect(mcpServerMatch[1]).toBe(pkg.version);
     expect(logMatch[1]).toBe(pkg.version);

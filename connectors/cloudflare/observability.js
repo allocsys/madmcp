@@ -78,7 +78,7 @@ export async function queryTelemetry({
   const allFilters = rawFilters.map(normalizeFilter);
 
   const body = {
-    queryId: query_id || `manufact-${Date.now()}`,
+    queryId: query_id || `madmcp-${Date.now()}`,
     view,
     datasets: [dataset],
     timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },

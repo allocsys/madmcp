@@ -1,5 +1,5 @@
 {
-  "name": "manufact",
+  "name": "madmcp",
   "version": "2.1.0",
   "description": "MCP server with GitHub, Cloudflare, Notion, Mem0, Context7, Gemini-powered delegation, and Fetch connectors.",
   "main": "server.js",

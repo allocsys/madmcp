@@ -1,0 +1,51 @@
+name: Generate lockfile
+
+# Manual, on-demand regeneration of package-lock.json.
+#
+# History: an earlier version of this workflow (removed in PR #10) pushed
+# the regenerated lockfile straight to main using the built-in GITHUB_TOKEN.
+# That's broken by design: GITHUB_TOKEN-authored pushes do NOT trigger other
+# workflow runs (a deliberate GitHub Actions anti-recursion safeguard), so
+# the branch ruleset's required "test" check never ran on those commits --
+# meaning the bot's own pushes were likely to get blocked by the very
+# ruleset meant to protect main. This version avoids that by opening a PR
+# instead of pushing directly: a PR created by GITHUB_TOKEN DOES trigger the
+# normal push/pull_request CI workflow on its branch, so the required check
+# runs like it would for any human-authored change, and the PR merges (or
+# not) through the normal ruleset-gated path.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Regenerate package-lock.json
+        run: |
+          set -e
+          rm -f package-lock.json
+          npm install
+
+      - name: Open PR with the regenerated lockfile
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: regenerate package-lock.json"
+          branch: chore/regenerate-lockfile
+          delete-branch: true
+          title: "chore: regenerate package-lock.json"
+          body: |
+            Automated lockfile regeneration, triggered manually via the "Generate lockfile" workflow.
+
+            Opened as a PR (not pushed directly to main) so the required CI check runs on these commits before they merge -- see the workflow file's header comment for why the old push-to-main version couldn't do that.
+          labels: dependencies

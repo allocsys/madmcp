@@ -7,7 +7,7 @@
 import { MEM0_API_KEY, MEM0_API } from "../../config.js";
 
 export async function mem0Request(path, { method = "GET", body } = {}) {
-  if (!MEM0_API_KEY) throw new Error("MEM0_API_KEY is not set. Add it as an environment variable on the Manufact server.");
+  if (!MEM0_API_KEY) throw new Error("MEM0_API_KEY is not set. Add it as an environment variable on the madmcp server.");
   const res = await fetch(`${MEM0_API}${path}`, {
     method,
     headers: {

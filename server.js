@@ -23,7 +23,7 @@ import * as sync       from "./connectors/sync/mem0_notion.js";
 
 // Build the MCP server once at startup and reuse it across all requests.
 const mcpServer = new McpServer({
-  name: "manufact-mcp-server",
+  name: "madmcp-server",
   version: "2.1.0",
 });
 
@@ -116,7 +116,7 @@ app.use(express.json({ limit: "10mb" }));
 app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
   res.json({
     status: "ok",
-    service: "manufact-mcp-server",
+    service: "madmcp-server",
     version: "2.1.0",
     configured: {
       github: Boolean(GITHUB_TOKEN),
@@ -151,7 +151,7 @@ app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`manufact-mcp-server v2.1.0 listening on port ${PORT}`);
+  console.log(`madmcp-server v2.1.0 listening on port ${PORT}`);
   if (!GITHUB_TOKEN)   console.warn("WARNING: GITHUB_TOKEN is not set.");
   if (!NOTION_TOKEN)   console.warn("WARNING: NOTION_TOKEN is not set. Notion tools will fail.");
   if (!MEM0_API_KEY)   console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");

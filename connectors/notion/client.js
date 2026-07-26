@@ -5,7 +5,7 @@
 import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID } from "../../config.js";
 
 export async function notionRequest(path, { method = "GET", body } = {}) {
-  if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the Manufact server.");
+  if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the madmcp server.");
   const res = await fetch(`${NOTION_API}${path}`, {
     method,
     headers: {
