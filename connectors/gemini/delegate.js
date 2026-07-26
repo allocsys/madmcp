@@ -879,7 +879,7 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
   // max_steps -- and say so explicitly instead.
   if (checkpoint && startStep > cappedSteps) {
     return {
-      answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call gemini_investigate again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
+      answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call delegate_gemini again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
       steps: startStep - 1,
       transcript,
       runId,
@@ -911,7 +911,7 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       const redisOk = isRedisConfigured();
       const resumeHint = isTransientGeminiError(err)
         ? (redisOk
-            ? ` ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
+            ? ` ${transcript.length} tool call(s) already completed this run are saved. Call delegate_gemini again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
             : ` ${transcript.length} tool call(s) were completed this run, but Redis is NOT configured in this environment, so nothing was actually saved -- resume_run_id: "${runId}" will NOT work no matter how soon you retry. ` +
               `The completed tool calls are listed in this run's transcript/Notion log (if log_to_notion was set) for manual reference, but the only way to continue is a fresh call with the full task text.`)
         : ` This does not look like a transient error (not a 429/503) -- resuming with resume_run_id: "${runId}" will likely reproduce the same failure, so check the underlying cause (e.g. GEMINI_API_KEY, request format, safety/recitation block) before retrying. The ${transcript.length} tool call(s) already completed are still saved if you want to resume anyway${redisOk ? "" : " (though note: Redis is NOT configured in this environment, so nothing was actually saved regardless)"}.`;
@@ -1032,7 +1032,7 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
       const errMessage = err?.message ?? String(err);
       return {
-        answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call delegate_gemini again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
         steps: step - 1,
         transcript,
         runId,
