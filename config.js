@@ -31,6 +31,16 @@ export const NOTION_TOKEN   = process.env.NOTION_TOKEN;
 export const NOTION_API     = "https://api.notion.com/v1";
 export const NOTION_VERSION = "2022-06-28";
 
+// Throttle + retry for the Notion API (fix #3 -- rate-limit asymmetry,
+// 2026-07-27). Notion's documented average rate limit is ~3 requests/second
+// per integration; this spacing keeps a single madmcp instance comfortably
+// under that even when several Notion calls land in the same parallelized
+// delegate_gemini step. Mirrors GITHUB_MIN_REQUEST_INTERVAL_MS/
+// GITHUB_MAX_RETRIES/GITHUB_RETRY_BASE_MS above -- same override pattern.
+export const NOTION_MIN_REQUEST_INTERVAL_MS = Number(process.env.NOTION_MIN_REQUEST_INTERVAL_MS) || 350;
+export const NOTION_MAX_RETRIES             = Number(process.env.NOTION_MAX_RETRIES) || 3;
+export const NOTION_RETRY_BASE_MS           = Number(process.env.NOTION_RETRY_BASE_MS) || 1000;
+
 // Dedicated index DATABASE used for entity_id -> page_id dedup lookups.
 // SUPERSEDES the original page-based index (2026-07-17 fix for gap #1, see
 // mem0 entity_id: madmcp-notion-connector-gaps-roadmap): that fix solved the
@@ -68,6 +78,14 @@ export const NOTION_SYNC_PARENT_PAGE_ID = process.env.NOTION_SYNC_PARENT_PAGE_ID
 export const MEM0_API_KEY   = process.env.MEM0_API_KEY;
 export const MEM0_API       = "https://api.mem0.ai";
 export const MEM0_USER_ID   = process.env.MEM0_USER_ID || "default";
+
+// Throttle + retry for the Mem0 API (fix #3 -- rate-limit asymmetry,
+// 2026-07-27). Mem0 doesn't publish a hard per-second limit the way GitHub
+// and Notion do, so this is a conservative default rather than a figure
+// tied to a documented threshold -- same override pattern as the others.
+export const MEM0_MIN_REQUEST_INTERVAL_MS = Number(process.env.MEM0_MIN_REQUEST_INTERVAL_MS) || 300;
+export const MEM0_MAX_RETRIES             = Number(process.env.MEM0_MAX_RETRIES) || 3;
+export const MEM0_RETRY_BASE_MS           = Number(process.env.MEM0_RETRY_BASE_MS) || 1000;
 
 export const CLOUDFLARE_API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
 export const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
