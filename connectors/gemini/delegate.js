@@ -811,8 +811,12 @@ const SYSTEM_PREAMBLE =
 // it took.
 //
 // CHECKPOINTING: after every step that completes its function calls, the
-// full loop state (contents + transcript + stepsDone) is saved to Redis
-// under a per-run UUID (see checkpoint.js). If the NEXT geminiChat() call
+// NEW turns added this step are appended to Redis under a per-run UUID
+// (see checkpoint.js's fix #5 -- append-delta, not a full-array overwrite;
+// write cost is O(turns added this step), not O(conversation so far).
+// stepsDone/transcript/task and fix #4's repeat-tracking state are small
+// and get rewritten in full each time, which is cheap regardless of run
+// length). If the NEXT geminiChat() call
 // then fails (429/503/network blip -- exactly what killed a run in testing
 // on 2026-07-25), the already-completed steps are not lost: the caller gets
 // them back plus `runId`, and can pass `resume_run_id` on a follow-up call
