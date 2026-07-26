@@ -920,8 +920,14 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     // than presenting a rushed, incomplete answer as if it were complete.
     const remainingAfterThisStep = cappedSteps - step;
     if (remainingAfterThisStep <= 1) {
+      // When remainingAfterThisStep is 0, the NEXT turn is the final step,
+      // which is called with no tools at all (see isFinalStep above) -- so
+      // this note can say so as a fact, not just a suggestion to wrap up.
+      const noToolsNote = remainingAfterThisStep === 0
+        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
+        : "";
       responseParts.push({
-        text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop. If you cannot fully complete the task -- including any specific format requested (e.g. an exhaustive table, per-item breakdown) -- in the remaining budget, say so explicitly and describe what's missing, rather than presenting a partial or reformatted-for-brevity answer as if it were complete.]`,
+        text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} If you cannot fully complete the task -- including any specific format requested (e.g. an exhaustive table, per-item breakdown) -- in the remaining budget, say so explicitly and describe what's missing, rather than presenting a partial or reformatted-for-brevity answer as if it were complete.]`,
       });
     }
 
