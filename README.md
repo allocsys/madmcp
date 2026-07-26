@@ -228,7 +228,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
-| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | Optional — persists per-model rate-limit cooldowns across invocations; fails open if unset |
+| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) | Optional — persists per-model rate-limit cooldowns and `delegate_gemini` resume checkpoints across invocations; fails open if neither pair is set. Either naming works — the raw Upstash Marketplace integration names them `UPSTASH_REDIS_REST_*`, Vercel's own "KV" product (also Upstash-backed) names them `KV_REST_API_*`. |
 | `DEFAULT_OWNER` | Default GitHub owner when omitted from a call (defaults to `allocsys`) |
 | `GITHUB_MIN_REQUEST_INTERVAL_MS` | Minimum spacing between outgoing GitHub REST requests, to avoid secondary rate limits (default `300`) |
 | `GITHUB_MAX_RETRIES` | Max retries on GitHub secondary-rate-limit/429 responses (default `3`) |
