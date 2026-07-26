@@ -1121,12 +1121,34 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       }));
 
       for (const r of results) {
-        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})}) -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
+        const cacheNote = r.servedFromCache ? " [CACHED -- identical call already made this run, not re-executed]" : "";
+        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})})${cacheNote} -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
         // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
         // turns go back with role "user" (NOT "function" -- that was the older doc convention
         // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
         // original functionCall.id so the API can thread multi-call turns correctly.
         responseParts.push({ functionResponse: { name: r.name, id: r.id, response: { result: r.resultText } } });
+      }
+
+      // Stuck-loop bookkeeping (fix #4): only counts as a stuck step if
+      // EVERY call this step was an exact repeat -- see isRepeat's comment
+      // above for why a partial repeat doesn't count.
+      const allRepeatsThisStep = results.length > 0 && results.every((r) => r.isRepeat);
+      consecutiveAllRepeatSteps = allRepeatsThisStep ? consecutiveAllRepeatSteps + 1 : 0;
+      if (consecutiveAllRepeatSteps === 2) {
+        // Earlier, softer nudge -- same two-steps-ahead pattern as the
+        // step-budget reminder below, giving the model a chance to steer
+        // away before the hard stop one step down.
+        responseParts.push({
+          text: `[SYSTEM NOTE: you're re-requesting information you already have -- the last 2 steps consisted entirely of repeat calls (same function + arguments as something already tried this run). Either try a different angle (a different file, query, or function) or answer now with what you've got.]`,
+        });
+      } else if (consecutiveAllRepeatSteps >= 3) {
+        // Matches reality: withholdTools (computed at the top of the loop)
+        // will be true next iteration because consecutiveAllRepeatSteps >= 3
+        // here, so the next turn genuinely won't have tools available.
+        responseParts.push({
+          text: `[SYSTEM NOTE: 3 consecutive steps have consisted entirely of repeat calls. The next turn will NOT include any tools -- you must answer now in plain text with whatever you've already found, since repeating the same calls further will not surface new information.]`,
+        });
       }
     } catch (err) {
       // Belt-and-suspenders: nothing inside the loop above should throw past
