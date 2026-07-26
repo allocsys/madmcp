@@ -101,8 +101,9 @@ export function register(server) {
       max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 6, hard cap 20 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial gemini_investigate call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
+      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
     },
-    async ({ task, max_steps = 6, log_to_notion = false, resume_run_id }) => {
+    async ({ task, max_steps = 6, log_to_notion = false, resume_run_id, show_transcript = false }) => {
       // task is only genuinely optional when resuming a live checkpoint --
       // runInvestigation ignores task entirely in that branch (it rebuilds
       // `contents` straight from the saved checkpoint). On a fresh run (no
@@ -164,8 +165,8 @@ export function register(server) {
       // just a step count, so the caller can see what was actually found
       // before the failure without needing a resume_run_id round-trip or
       // log_to_notion just to inspect them.
-      const transcriptBlock = result.failed && result.transcript?.length
-        ? `\n\nTool calls completed before the failure:\n${result.transcript.join("\n")}`
+      const transcriptBlock = result.transcript?.length && (result.failed || show_transcript)
+        ? `\n\n${result.failed ? "Tool calls completed before the failure" : "Tool call transcript"}:\n${result.transcript.join("\n")}`
         : "";
 
       return { content: [{ type: "text", text: `${result.answer}${transcriptBlock}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: !!result.failed };
