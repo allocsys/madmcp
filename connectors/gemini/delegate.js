@@ -51,7 +51,7 @@ import { mem0Request } from "../mem/client.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 
-const HARD_MAX_STEPS = 25;
+const HARD_MAX_STEPS = 30;
 
 // 429 (rate limit) and 503 (overloaded/high demand) are the only cases
 // documented as transient -- see client.js's own model-fallback cascade,
@@ -821,7 +821,7 @@ const SYSTEM_PREAMBLE =
 // (see checkpoint.js) -- if it's unavailable, resumption just isn't
 // possible, same as before this existed; a failure still returns whatever
 // transcript was gathered in-memory this call.
-export async function runInvestigation({ task, max_steps = 10, resume_run_id }) {
+export async function runInvestigation({ task, max_steps = 20, resume_run_id }) {
   const cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
 
   let runId = resume_run_id;
