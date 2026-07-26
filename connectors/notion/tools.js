@@ -567,7 +567,7 @@ export function register(server) {
 
   server.tool(
     "notion_create_page",
-    "Create a new Notion page inside a parent page or database. Pass entity_id to get upsert-style dedup protection (mirrors mem0_add): if a page already carries that entity_id marker, this refuses to create a duplicate and returns the existing page instead. Recommended whenever this page represents a stable, ongoing thing (a tracked PR, an issue, a recurring report) rather than a genuine one-off.",
+    "Create a new Notion page inside a parent page or database. Pass entity_id to get upsert-style dedup protection (mirrors mem0_add): if a page already carries that entity_id marker, this refuses to create a duplicate and returns the existing page instead. Recommended whenever this page represents a stable, ongoing thing (a tracked PR, an issue, a recurring report) rather than a genuine one-off. When parent_type is 'database', pass `properties` to set real database column values (select/rich_text/url/etc) -- see notion_get_database first for the schema.",
     {
       parent_id:   z.string().describe("ID of the parent page or database"),
       parent_type: z.enum(["page", "database"]).describe("Whether the parent is a page or a database"),
@@ -620,7 +620,7 @@ export function register(server) {
 
   server.tool(
     "notion_create_pages_batch",
-    "Create multiple Notion pages in a single call, to reduce round trips. Each item is created independently -- entity_id dedup, marker blocks, and dedup-index recording all apply per item exactly as in notion_create_page. One item failing (e.g. bad parent_id) does not block the others.",
+    "Create multiple Notion pages in a single call, to reduce round trips. Each item is created independently -- entity_id dedup, marker blocks, dedup-index recording, and database `properties` all apply per item exactly as in notion_create_page. One item failing (e.g. bad parent_id) does not block the others.",
     {
       items: z.array(z.object({
         parent_id:   z.string().describe("ID of the parent page or database"),
@@ -744,7 +744,7 @@ export function register(server) {
 
   server.tool(
     "notion_update_page",
-    "Update a Notion page's title or properties, append text content to it, make a targeted in-place edit to an existing block (replacements), or change its lifecycle status marker.",
+    "Update a Notion page's title, append text content to it, make a targeted in-place edit to an existing block (replacements), change its lifecycle status marker, or set real database column values via `properties` (select/rich_text/url/etc, if this page is a row in a database).",
     {
       page_id:        z.string().describe("Notion page ID to update"),
       title:          z.string().optional().describe("New title for the page"),
@@ -820,7 +820,7 @@ export function register(server) {
 
   server.tool(
     "notion_update_pages_batch",
-    "Update multiple Notion pages in a single call, to reduce round trips. Each item supports the same title/append_content/archived/replacements/status behavior as notion_update_page. One item failing (e.g. an ambiguous replacement match) does not block the others.",
+    "Update multiple Notion pages in a single call, to reduce round trips. Each item supports the same title/append_content/archived/replacements/status/properties behavior as notion_update_page. One item failing (e.g. an ambiguous replacement match) does not block the others.",
     {
       items: z.array(z.object({
         page_id:        z.string().describe("Notion page ID to update"),
