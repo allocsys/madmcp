@@ -21,7 +21,7 @@ export function register(server) {
 
   server.tool(
     "read_file",
-    "RULE for the calling model: only call read_file directly for a single, specifically-named file. If the task will need reading more than 2 files to answer, or you don't already know the exact single file path you need, use delegate_gemini instead -- do not loop read_file manually across an open-ended investigation. Tool description: reads a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages.",
+    "RULE for the calling model: only call read_file directly for a single, specifically-named file whose exact path you already know. If you'll need to read more than 2 files, or the request asks you to understand, review, or summarize a whole repo or directory -- regardless of how it's phrased ('read the repo', 'dig into it', 'get up to speed', 'get the full scope', etc. all count) -- use delegate_gemini instead of calling read_file repeatedly. Tool description: reads a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -87,7 +87,7 @@ export function register(server) {
 
   server.tool(
     "get_file_tree",
-    "RULE for the calling model: use this only to get a single tree snapshot. If your next step would be reading or searching multiple files from that tree, stop -- call delegate_gemini for the whole investigation instead of chaining get_file_tree into manual read_file loops. Tool description: recursively lists all files and folders in a GitHub repository (full tree).",
+    "RULE for the calling model: use this only to get a single tree snapshot. If the tree comes back with more than roughly 10 files, or your next step would be reading or searching multiple files from it, stop -- call delegate_gemini for the whole investigation instead of chaining get_file_tree into manual read_file loops. This applies no matter how the request is worded -- a 'thorough read', 'quick look', 'full understanding', or 'dig deeper' into a repo are all the same underlying task. Tool description: recursively lists all files and folders in a GitHub repository (full tree).",
     {
       owner: z.string().describe("Repository owner (user or org)"),
       repo:  z.string().describe("Repository name"),
