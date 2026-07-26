@@ -98,12 +98,12 @@ export function register(server) {
     "Default choice for any multi-file or open-ended GitHub/Notion/Cloudflare investigation -- prefer this over manual read_file/get_file_tree/list_directory loops unless you need exactly one named file. Delegate an open-ended, multi-step READ-ONLY investigation to Gemini instead of doing it yourself one tool call at a time. Gemini runs its own loop server-side -- reading GitHub files/trees/commits, Cloudflare Workers logs, and Notion pages/databases across as many turns as it needs (bounded by max_steps) -- and returns one synthesized answer. Use this for things like \"why is CI failing on PR #42\" or \"summarize what changed in this repo over the last week\" where you'd otherwise need 5-10 separate manual tool calls. Not for anything requiring a write -- this tool is read-only by design. If a run fails partway through (e.g. Gemini rate-limited), the response includes a resume_run_id -- pass it back on a follow-up call to continue from the last completed step instead of starting over.",
     {
       task:          z.string().optional().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused). Optional ONLY when resume_run_id is given and its checkpoint is still live; required otherwise -- omitting it on a fresh run (no resume_run_id, or an expired one) returns an error rather than silently proceeding with no task."),
-      max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 6, hard cap 20 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
+      max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 10, hard cap 25 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_gemini call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
     },
-    async ({ task, max_steps = 6, log_to_notion = false, resume_run_id, show_transcript = false }) => {
+    async ({ task, max_steps = 10, log_to_notion = false, resume_run_id, show_transcript = false }) => {
       // task is only genuinely optional when resuming a live checkpoint --
       // runInvestigation ignores task entirely in that branch (it rebuilds
       // `contents` straight from the saved checkpoint). On a fresh run (no
@@ -125,7 +125,7 @@ export function register(server) {
       // answer instead of surfacing that the input itself was invalid.
       if (max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
         return {
-          content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 20 regardless of a larger value.` }],
+          content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 25 regardless of a larger value.` }],
           isError: true,
         };
       }
