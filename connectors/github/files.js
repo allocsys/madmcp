@@ -11,7 +11,7 @@ export function register(server) {
 
   server.tool(
     "read_file",
-    "Read a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages. NOTE for the calling model: if you're about to read many files across an open-ended investigation (exploring an unfamiliar repo, hunting for something without knowing exactly where it lives), consider delegate_gemini instead of doing it manually one read_file call at a time -- it runs its own multi-step read-only loop server-side and returns one synthesized answer.",
+    "Read a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages. RULE for the calling model: if the task will need reading more than 2 files to answer, or you don't already know the exact single file path you need, use delegate_gemini instead -- do not loop read_file manually across an open-ended investigation. Only call read_file directly for a single, specifically-named file.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -77,7 +77,7 @@ export function register(server) {
 
   server.tool(
     "get_file_tree",
-    "Recursively list all files and folders in a GitHub repository (full tree). NOTE for the calling model: this one call already gets the whole tree, but if the next step is reading/searching many of those files to answer an open-ended question, consider delegate_gemini for that follow-on investigation instead of looping read_file manually.",
+    "Recursively list all files and folders in a GitHub repository (full tree). RULE for the calling model: use this only to get a single tree snapshot. If your next step would be reading or searching multiple files from that tree, stop -- call delegate_gemini for the whole investigation instead of chaining get_file_tree into manual read_file loops.",
     {
       owner: z.string().describe("Repository owner (user or org)"),
       repo:  z.string().describe("Repository name"),
