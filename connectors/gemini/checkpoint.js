@@ -4,6 +4,17 @@
 // (Gemini 503/429, network blip, function timeout) doesn't lose every tool
 // call it already made.
 //
+// STORAGE SHAPE (fix #5, 2026-07-27 -- append-delta instead of overwrite-
+// whole-blob): the conversation `contents` array is the part of loop state
+// that grows every step and can get large (tool outputs up to ~30k chars
+// each) -- it lives in its own Redis LIST, and callers only ever RPUSH the
+// turns added since the last checkpoint (see saveCheckpoint's `newContents`
+// param), not the whole array. Write cost is therefore O(delta per step),
+// not O(total conversation so far). Everything else (transcript, stepsDone,
+// task, and fix #4's repeat-signature tracking state) stays small and cheap
+// regardless of run length, so it's kept as one JSON blob under a separate
+// key -- no benefit to splitting that up further.
+//
 // SAME FAIL-OPEN CONTRACT AS cooldown.js: if Redis isn't configured or a
 // call fails, every function here no-ops / returns null. A missing Redis
 // must never be the reason an investigation can't run -- it only means a
@@ -17,38 +28,78 @@ const CHECKPOINT_KEY_PREFIX = "gemini:checkpoint:";
 // with resume_run_id -- not to become a permanent store.
 const CHECKPOINT_TTL_SECONDS = 3600;
 
-// Persists the current loop state (conversation contents + transcript +
-// how many steps are done) after a step completes. Fails open -- never
-// throws.
-export async function saveCheckpoint(runId, state) {
+function contentsKey(runId) {
+  return `${CHECKPOINT_KEY_PREFIX}${runId}:contents`;
+}
+function metaKey(runId) {
+  return `${CHECKPOINT_KEY_PREFIX}${runId}:meta`;
+}
+
+// Persists loop state after a step completes:
+//   - newContents: ONLY the turn(s) added to `contents` since the last
+//     saveCheckpoint call for this runId (may be an empty array -- e.g. a
+//     geminiChat failure that happens before any new turn was pushed --
+//     in which case the list simply isn't touched this call, only meta is).
+//     The caller (delegate.js) is responsible for tracking which slice of
+//     its in-memory `contents` array is new; this function has no way to
+//     know that on its own since it never sees the full array.
+//   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
+//     small stuff, always written in full (cheap regardless of run length).
+// Fails open -- never throws.
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps }) {
   const client = getRedis();
   if (!client) return;
   try {
-    await client.set(CHECKPOINT_KEY_PREFIX + runId, JSON.stringify(state), { ex: CHECKPOINT_TTL_SECONDS });
+    const ops = [];
+    if (newContents.length) {
+      ops.push(client.rpush(contentsKey(runId), ...newContents.map((c) => JSON.stringify(c))));
+      // EXPIRE (not a per-SET `ex` option, since RPUSH has no TTL param of
+      // its own) re-armed on every push so the list's TTL tracks the meta
+      // key's, rather than being set once and left to whatever it was at
+      // list-creation time.
+      ops.push(client.expire(contentsKey(runId), CHECKPOINT_TTL_SECONDS));
+    }
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps });
+    ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
+    await Promise.all(ops);
   } catch {
     // best-effort -- see file header
   }
 }
 
 // Loads a previously saved checkpoint, or null if missing/expired/Redis is
-// unavailable/the stored value doesn't parse.
+// unavailable/either stored value doesn't parse. Reconstructs `contents` by
+// concatenating every entry in the list (LRANGE 0 -1) -- this is the one
+// place read cost is still O(total run length), but it only happens once
+// per resume, not once per step (see file header).
 //
 // A genuine exception here (network blip, malformed JSON, etc.) is logged
 // as a warning before returning null -- distinct from the ordinary "key
-// doesn't exist" case (raw == null), which is expected and silent. Both
-// cases still return null to the caller (delegate.js can't do anything
-// different with either -- see its header), so this doesn't change
-// behavior, only observability: without it, a Redis outage and an expired
-// checkpoint look identical in the logs.
+// doesn't exist" case (empty list / null meta), which is expected and
+// silent. Both cases still return null to the caller (delegate.js can't do
+// anything different with either -- see its header), so this doesn't
+// change behavior, only observability: without it, a Redis outage and an
+// expired checkpoint look identical in the logs.
 export async function loadCheckpoint(runId) {
   const client = getRedis();
   if (!client) return null;
   try {
-    const raw = await client.get(CHECKPOINT_KEY_PREFIX + runId);
-    if (raw == null) return null;
+    const [rawList, rawMeta] = await Promise.all([
+      client.lrange(contentsKey(runId), 0, -1),
+      client.get(metaKey(runId)),
+    ]);
+    // A live checkpoint always has both a non-empty contents list AND meta
+    // (they're written together every step) -- either being missing means
+    // there's nothing usable to resume (expired, never existed, or a
+    // partial/corrupted write), same as the old single-key "raw == null"
+    // check.
+    if (!rawList || !rawList.length || rawMeta == null) return null;
     // Upstash's client auto-parses JSON-looking values in some SDK versions
-    // and returns a raw string in others -- guard both.
-    return typeof raw === "string" ? JSON.parse(raw) : raw;
+    // and returns a raw string in others -- guard both, same as the old
+    // single-key version did.
+    const contents = rawList.map((entry) => (typeof entry === "string" ? JSON.parse(entry) : entry));
+    const meta = typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta;
+    return { contents, ...meta };
   } catch (err) {
     console.warn(`loadCheckpoint(${runId}) failed -- treating as no checkpoint:`, err?.message ?? err);
     return null;
@@ -56,12 +107,12 @@ export async function loadCheckpoint(runId) {
 }
 
 // Deletes a checkpoint once a run finishes (a final answer, or the model
-// stops issuing function calls) -- nothing left to resume.
+// stops issuing function calls) -- nothing left to resume. Clears both keys.
 export async function deleteCheckpoint(runId) {
   const client = getRedis();
   if (!client) return;
   try {
-    await client.del(CHECKPOINT_KEY_PREFIX + runId);
+    await Promise.all([client.del(contentsKey(runId)), client.del(metaKey(runId))]);
   } catch {
     // best-effort
   }
