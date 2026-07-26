@@ -944,7 +944,49 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
 
     const responseParts = [];
     try {
-      for (const part of functionCalls) {
+      // PARALLELIZED (2026-07-26, confirmed via live show_transcript testing
+      // that Gemini routinely batches several independent calls into one
+      // turn -- e.g. file tree + commit list + issue list all landing in the
+      // same step). These calls were previously await'd one at a time in a
+      // for-loop for no real reason: within a single turn, Gemini already
+      // committed to every one of these calls before seeing ANY of their
+      // results, so none of them can depend on another's output -- executing
+      // them concurrently changes wall-clock time only, not what information
+      // is available to what call. Cross-step sequencing (the real
+      // plan->act->observe->re-plan loop) is untouched: that dependency
+      // chain lives between steps, not within one.
+      //
+      // Results are collected here and then pushed to transcript/
+      // responseParts below in ORIGINAL (input) order, not completion order --
+      // so the transcript and the conversation history sent back to Gemini
+      // are byte-for-byte the same shape they'd be under sequential
+      // execution, just produced faster. functionResponse.id (not array
+      // position) is what actually threads each result back to its call on
+      // Gemini's side, so reordering here would be safe even without this,
+      // but keeping input order makes the transcript's own readability not
+      // regress either.
+      //
+      // NOTE ON "BLIND" BATCHING: calls sharing a step number are, by
+      // definition, decided without seeing each other's results -- that was
+      // true before this change too (sequential execution didn't feed call
+      // N's result to call N+1's args; Gemini had already written both calls
+      // in the same turn). This just makes that pre-existing fact match the
+      // wall-clock reality instead of an execution order that only
+      // coincidentally looked sequential.
+      //
+      // RATE-LIMIT NOTE: connectors/github/client.js has its own burst-safe
+      // throttle queue (scheduleThrottled) specifically built to absorb
+      // concurrent GitHub calls, so parallelizing those is fully safe.
+      // Notion (connectors/notion/client.js) and Mem0 (connectors/mem/
+      // client.js) have no equivalent throttle/retry/backoff -- a step that
+      // batches several Notion or Mem0 calls together is now more likely to
+      // trip those APIs' own rate limits than under sequential execution.
+      // Not a correctness risk (every call below is already individually
+      // try/caught into an error string, same as before), just a new-ish
+      // source of noisier per-call failures under heavier batching that's
+      // worth watching for in practice rather than something this change
+      // guards against.
+      const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
         const fn = FUNCTIONS.find((f) => f.name === name);
         let resultText;
@@ -965,12 +1007,16 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
         if (typeof resultText !== "string") {
           resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
         }
-        transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
+        return { name, args, id, resultText };
+      }));
+
+      for (const r of results) {
+        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})}) -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
         // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
         // turns go back with role "user" (NOT "function" -- that was the older doc convention
         // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
         // original functionCall.id so the API can thread multi-call turns correctly.
-        responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
+        responseParts.push({ functionResponse: { name: r.name, id: r.id, response: { result: r.resultText } } });
       }
     } catch (err) {
       // Belt-and-suspenders: nothing inside the loop above should throw past
