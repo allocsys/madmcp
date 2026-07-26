@@ -40,24 +40,38 @@ const DEFAULT_COOLDOWN_SECONDS = 60;
 let redisClient = null;
 let redisInitAttempted = false;
 
+// NAMING: @upstash/redis's own Redis.fromEnv() only ever reads
+// UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN -- but Vercel's own KV
+// product (Marketplace "KV" / "Upstash for Redis" depending on how it was
+// provisioned) names the exact same underlying Upstash REST credentials
+// KV_REST_API_URL/KV_REST_API_TOKEN instead. Discovered 2026-07-26: Redis
+// was fully provisioned and reachable, but getRedis() reported it as
+// unconfigured on every call because Redis.fromEnv() was silently looking
+// for env vars that were never going to exist under this integration --
+// not a connectivity or credentials problem, a naming mismatch. Built the
+// client manually with an explicit fallback so either naming convention
+// works, rather than requiring the operator to duplicate env vars under
+// both names.
 export function getRedis() {
   if (redisInitAttempted) return redisClient;
   redisInitAttempted = true;
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    return null; // Marketplace integration not activated yet -- fine, just no cross-call memory.
+  const url   = process.env.UPSTASH_REDIS_REST_URL   || process.env.KV_REST_API_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (!url || !token) {
+    return null; // Neither naming convention is set -- fine, just no cross-call memory.
   }
   try {
-    redisClient = Redis.fromEnv();
+    redisClient = new Redis({ url, token });
   } catch (err) {
     // Distinct from the "env vars simply unset" branch above, which is
-    // expected and silent -- this means UPSTASH_REDIS_REST_URL/TOKEN ARE
-    // present but Redis.fromEnv() itself rejected them (malformed URL,
-    // wrong format, etc). Previously silent, which made a genuine
-    // misconfiguration indistinguishable from Redis just not being set up
-    // -- isModelCoolingDown/isRedisConfigured/etc all report the same
-    // "not configured" either way, so this warning is the only place that
-    // fact ever surfaces.
-    console.warn("Redis.fromEnv() failed -- UPSTASH_REDIS_REST_URL/TOKEN may be set but malformed; treating Redis as unconfigured:", err?.message ?? err);
+    // expected and silent -- this means credentials WERE found under one of
+    // the two naming conventions but the Redis client constructor itself
+    // rejected them (malformed URL, wrong format, etc). Previously silent,
+    // which made a genuine misconfiguration indistinguishable from Redis
+    // just not being set up -- isModelCoolingDown/isRedisConfigured/etc all
+    // report the same "not configured" either way, so this warning is the
+    // only place that fact ever surfaces.
+    console.warn("Redis client construction failed -- URL/token were found but rejected; treating Redis as unconfigured:", err?.message ?? err);
     redisClient = null;
   }
   return redisClient;
