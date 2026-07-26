@@ -932,7 +932,22 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
       const answer = parts.map((p) => p.text || "").join("").trim();
       await deleteCheckpoint(runId);
       if (!answer) {
-        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})`, steps: step, transcript, runId, task: effectiveTask };
+        // MALFORMED_FUNCTION_CALL on the final step specifically means: this
+        // step had NO tools in the request (isFinalStep withholds them
+        // entirely, see above), but the model tried to make a function call
+        // anyway -- Gemini rejects that as malformed rather than falling
+        // back to text. Observed concretely with max_steps: 1 on a task that
+        // genuinely needed a file read: the model had no way to answer
+        // without a tool, no tools were offered, and the result was this
+        // opaque finishReason with zero explanation of why (2026-07-26
+        // stress test). Surface the actual cause instead of just the raw
+        // enum value, since "try a higher max_steps" is the fix and the
+        // caller has no way to infer that from "MALFORMED_FUNCTION_CALL"
+        // alone.
+        const starvationNote = isFinalStep && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+          ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${cappedSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+          : "";
+        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask };
       }
       return { answer, steps: step, transcript, runId, task: effectiveTask };
     }
