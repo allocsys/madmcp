@@ -122,12 +122,19 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // Redis-backed per-model rate-limit cooldown for the Gemini connector (see
 // connectors/gemini/cooldown.js), provisioned via the Vercel Marketplace
 // Upstash integration ("vercel install upstash", or the Vercel dashboard).
-// Not read as a named export here -- @upstash/redis's Redis.fromEnv() reads
-// UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN directly. Listed here
-// only so they're discoverable alongside every other service's env vars.
-// If unset, cooldown.js fails open (no cross-call rate-limit memory, but
-// never breaks a real Gemini call) -- safe to leave unset until the
-// Marketplace integration is activated.
+// Not read as named exports here -- connectors/gemini/cooldown.js reads the
+// env vars directly, and accepts EITHER naming convention Vercel might hand
+// you depending on how the integration was provisioned:
+//   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN  (raw Upstash Marketplace integration)
+//   KV_REST_API_URL / KV_REST_API_TOKEN                (Vercel's own "KV" product, Upstash-backed)
+// Discovered 2026-07-26: a deployment with the latter names set had Redis
+// fully provisioned and reachable, but every cooldown/checkpoint call
+// reported "not configured" anyway, because the code only checked for the
+// UPSTASH_* names at the time. Listed here only so both are discoverable
+// alongside every other service's env vars, not because config.js exports
+// them. If neither pair is set, cooldown.js fails open (no cross-call
+// rate-limit memory, but never breaks a real Gemini call) -- safe to leave
+// both unset until an integration is activated.
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
