@@ -834,12 +834,45 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
   // can log/title a resumed run without needing the caller to re-supply
   // task text the loop itself ignores on resume.
   let effectiveTask = task;
+  // Stuck-loop detection (fix #4, 2026-07-27): repeatCounts tracks how many
+  // times each exact (function name + JSON-stringified args) signature has
+  // been called THIS RUN, persisted across resumes (see checkpoint.js) so a
+  // resumed run doesn't forget what it already tried. resultCache holds the
+  // actual result text per signature -- deliberately NOT persisted in the
+  // checkpoint (only counts are, to keep checkpoint writes small per fix
+  // #5): on a resume, an exact-repeat call that was cached in a prior
+  // in-memory run simply re-executes once more and gets re-cached, which is
+  // a correctness no-op (same call, same result), not worth the extra
+  // checkpoint weight of persisting every cached result string.
+  // consecutiveAllRepeatSteps counts how many steps IN A ROW consisted
+  // ENTIRELY of repeat calls -- the real stuck-loop signal (a single repeat
+  // mixed with new calls is normal exploration, not a stuck loop).
+  let repeatCounts = new Map();
+  let resultCache = new Map();
+  let consecutiveAllRepeatSteps = 0;
+  // How many entries of `contents` have already been pushed to the Redis
+  // checkpoint list (fix #5) -- saveCheckpoint only ever needs the SLICE
+  // added since the last checkpoint, not the whole array, so this cursor is
+  // what makes that possible without checkpoint.js needing to diff arrays
+  // itself.
+  let contentsCheckpointedUpTo = 0;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
   if (checkpoint) {
     contents = checkpoint.contents;
     transcript = checkpoint.transcript;
     startStep = checkpoint.stepsDone + 1;
+    // Every entry loadCheckpoint returned in `contents` was already RPUSHed
+    // to Redis in a prior call -- nothing new to push until this run adds
+    // more turns, so the cursor starts at the end of what was loaded.
+    contentsCheckpointedUpTo = contents.length;
+    // Maps aren't JSON-serializable, so saveCheckpoint stores repeatCounts
+    // as a plain object and this reconstructs the Map on load. Checkpoints
+    // saved before fix #4 existed won't have this field -- fall back to an
+    // empty Map rather than erroring, same defensive pattern as
+    // `checkpoint.task || task` below.
+    repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
+    consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
     // Prefer the checkpoint's own record of the original task -- `task` is
     // genuinely ignored on a live resume (see file header), so this is the
     // only reliable source once a run is past step 1. Checkpoints saved
