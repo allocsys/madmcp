@@ -933,25 +933,56 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     contents.push({ role: "model", parts });
 
     const responseParts = [];
-    for (const part of functionCalls) {
-      const { name, args, id } = part.functionCall;
-      const fn = FUNCTIONS.find((f) => f.name === name);
-      let resultText;
-      if (!fn) {
-        resultText = `Error: unknown function "${name}".`;
-      } else {
-        try {
-          resultText = await fn.execute(args || {});
-        } catch (err) {
-          resultText = `Error: ${err.message}`;
+    try {
+      for (const part of functionCalls) {
+        const { name, args, id } = part.functionCall;
+        const fn = FUNCTIONS.find((f) => f.name === name);
+        let resultText;
+        if (!fn) {
+          resultText = `Error: unknown function "${name}".`;
+        } else {
+          try {
+            resultText = await fn.execute(args || {});
+          } catch (err) {
+            resultText = `Error: ${err?.message ?? String(err)}`;
+          }
         }
+        // Defensive: every FUNCTIONS[].execute() is expected to return a
+        // string. Guard against a future one accidentally returning
+        // something else (object, undefined, etc.) so this can't throw
+        // mid-transcript and take down the whole step -- see the outer
+        // catch below for why that matters.
+        if (typeof resultText !== "string") {
+          resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
+        }
+        transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
+        // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
+        // turns go back with role "user" (NOT "function" -- that was the older doc convention
+        // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
+        // original functionCall.id so the API can thread multi-call turns correctly.
+        responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
       }
-      transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) -> ${resultText.length > 300 ? resultText.slice(0, 300) + "…" : resultText}`);
-      // Gemini 3 (current generateContent contract, verified 2026-07-25): function-result
-      // turns go back with role "user" (NOT "function" -- that was the older doc convention
-      // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
-      // original functionCall.id so the API can thread multi-call turns correctly.
-      responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
+    } catch (err) {
+      // Belt-and-suspenders: nothing inside the loop above should throw past
+      // its own per-call try/catch or the typeof guard anymore, but if
+      // something still does (a bug in a future function, an unexpected
+      // JSON.stringify(args) failure on a circular/exotic args shape, etc.),
+      // don't let it escape runInvestigation and land in tools.js's generic
+      // catch, which has no runId to offer -- that would silently lose this
+      // step's (and any prior steps') completed work. Checkpoint what's
+      // already done (this step's model turn was already pushed to
+      // `contents` above) and return the same resumable-failure shape as a
+      // geminiChat failure.
+      await saveCheckpoint(runId, { contents, transcript, stepsDone: step - 1, task: effectiveTask });
+      const errMessage = err?.message ?? String(err);
+      return {
+        answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call gemini_investigate again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        steps: step - 1,
+        transcript,
+        runId,
+        task: effectiveTask,
+        failed: true,
+      };
     }
     // Step-budget reminder (added after the 2026-07-26 resume-truncation
     // bug): SYSTEM_PREAMBLE and the task's own formatting instructions only
