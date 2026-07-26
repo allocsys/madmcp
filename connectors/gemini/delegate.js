@@ -949,9 +949,18 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
     // structurally cannot return a functionCall part here, so this step is
     // guaranteed to be a real text-answer attempt rather than another read.
     const isFinalStep = step === cappedSteps;
+    // Stuck-loop forced-answer (fix #4): once 3 consecutive steps have
+    // consisted ENTIRELY of repeat calls (consecutiveAllRepeatSteps, updated
+    // at the end of each step below), withhold tools the same way the final
+    // step already does -- a text-only SYSTEM NOTE alone wasn't trusted to
+    // reliably stop a model that keeps re-issuing the same call (same
+    // lesson as isFinalStep's own history, see its comment above), so this
+    // reuses that structural fix instead of a new mechanism.
+    const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
+    const withholdTools = isFinalStep || stuckLoopForce;
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: isFinalStep ? undefined : FUNCTION_DECLARATIONS });
+      candidate = await geminiChat(contents, { tools: withholdTools ? undefined : FUNCTION_DECLARATIONS });
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
