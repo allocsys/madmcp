@@ -32,6 +32,14 @@ export async function saveCheckpoint(runId, state) {
 
 // Loads a previously saved checkpoint, or null if missing/expired/Redis is
 // unavailable/the stored value doesn't parse.
+//
+// A genuine exception here (network blip, malformed JSON, etc.) is logged
+// as a warning before returning null -- distinct from the ordinary "key
+// doesn't exist" case (raw == null), which is expected and silent. Both
+// cases still return null to the caller (delegate.js can't do anything
+// different with either -- see its header), so this doesn't change
+// behavior, only observability: without it, a Redis outage and an expired
+// checkpoint look identical in the logs.
 export async function loadCheckpoint(runId) {
   const client = getRedis();
   if (!client) return null;
@@ -41,7 +49,8 @@ export async function loadCheckpoint(runId) {
     // Upstash's client auto-parses JSON-looking values in some SDK versions
     // and returns a raw string in others -- guard both.
     return typeof raw === "string" ? JSON.parse(raw) : raw;
-  } catch {
+  } catch (err) {
+    console.warn(`loadCheckpoint(${runId}) failed -- treating as no checkpoint:`, err?.message ?? err);
     return null;
   }
 }
