@@ -1077,26 +1077,47 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       // guards against.
       const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
-        const fn = FUNCTIONS.find((f) => f.name === name);
+        // Stuck-loop detection (fix #4): a signature identifies an exact
+        // repeat of a call already made this run. `isRepeat` reflects
+        // whether this signature has been SEEN before (checked before the
+        // increment below); repeatCounts itself is incremented regardless
+        // of whether it's a repeat, purely for observability/debugging --
+        // only the boolean matters to the stuck-loop logic further down.
+        const signature = `${name}:${JSON.stringify(args || {})}`;
+        const isRepeat = repeatCounts.has(signature);
+        repeatCounts.set(signature, (repeatCounts.get(signature) || 0) + 1);
+
         let resultText;
-        if (!fn) {
-          resultText = `Error: unknown function "${name}".`;
+        let servedFromCache = false;
+        if (isRepeat && resultCache.has(signature)) {
+          // Exact repeat -- don't re-execute at all, just return what this
+          // same call returned last time. This is the free win: no network
+          // call, no wasted budget, regardless of whether the run as a
+          // whole turns out to be stuck (see allRepeatsThisStep below).
+          resultText = resultCache.get(signature);
+          servedFromCache = true;
         } else {
-          try {
-            resultText = await fn.execute(args || {});
-          } catch (err) {
-            resultText = `Error: ${err?.message ?? String(err)}`;
+          const fn = FUNCTIONS.find((f) => f.name === name);
+          if (!fn) {
+            resultText = `Error: unknown function "${name}".`;
+          } else {
+            try {
+              resultText = await fn.execute(args || {});
+            } catch (err) {
+              resultText = `Error: ${err?.message ?? String(err)}`;
+            }
           }
+          // Defensive: every FUNCTIONS[].execute() is expected to return a
+          // string. Guard against a future one accidentally returning
+          // something else (object, undefined, etc.) so this can't throw
+          // mid-transcript and take down the whole step -- see the outer
+          // catch below for why that matters.
+          if (typeof resultText !== "string") {
+            resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
+          }
+          resultCache.set(signature, resultText);
         }
-        // Defensive: every FUNCTIONS[].execute() is expected to return a
-        // string. Guard against a future one accidentally returning
-        // something else (object, undefined, etc.) so this can't throw
-        // mid-transcript and take down the whole step -- see the outer
-        // catch below for why that matters.
-        if (typeof resultText !== "string") {
-          resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
-        }
-        return { name, args, id, resultText };
+        return { name, args, id, resultText, isRepeat, servedFromCache };
       }));
 
       for (const r of results) {
