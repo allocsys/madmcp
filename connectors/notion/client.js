@@ -2,10 +2,30 @@
 // connectors/notion/client.js
 // ---------------------------------------------------------------------------
 
-import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID } from "../../config.js";
+import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID, NOTION_MIN_REQUEST_INTERVAL_MS, NOTION_MAX_RETRIES, NOTION_RETRY_BASE_MS } from "../../config.js";
+import { createThrottle, sleep, defaultRetryDelayMs } from "../shared/rate-limit.js";
 
-export async function notionRequest(path, { method = "GET", body } = {}) {
-  if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the madmcp server.");
+// --- Throttle + retry (fix #3, 2026-07-27) ----------------------------------
+// One shared queue for the whole process -- see createThrottle's own header
+// for why a fresh throttle per call would be pointless. Spaces out every
+// outgoing Notion request (even ones issued concurrently, e.g. several
+// Notion calls in the same parallelized delegate_gemini step) by at least
+// NOTION_MIN_REQUEST_INTERVAL_MS, and retries 429/transient-5xx responses
+// with backoff instead of throwing on the first hit. Mirrors
+// connectors/github/client.js's scheduleThrottled + retry loop, which Notion
+// (and Mem0, see connectors/mem/client.js) previously had no equivalent of.
+const scheduleThrottled = createThrottle(NOTION_MIN_REQUEST_INTERVAL_MS);
+
+// 429 is Notion's documented rate-limit response. 502/503/504 are treated as
+// transient upstream/proxy hiccups worth one retry, same spirit as GitHub's
+// isRetryable -- anything else (400 malformed request, 401/403 auth, 404
+// unknown resource) is a real error and should surface immediately,
+// unretried.
+function isRetryableNotion(res) {
+  return res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+}
+
+async function doNotionFetch(path, { method, body }) {
   const res = await fetch(`${NOTION_API}${path}`, {
     method,
     headers: {
@@ -18,11 +38,30 @@ export async function notionRequest(path, { method = "GET", body } = {}) {
   const text = await res.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!res.ok) {
+  return { res, data };
+}
+
+export async function notionRequest(path, { method = "GET", body } = {}) {
+  if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the madmcp server.");
+
+  let lastErr;
+  for (let attempt = 0; attempt <= NOTION_MAX_RETRIES; attempt++) {
+    const { res, data } = await scheduleThrottled(() => doNotionFetch(path, { method, body }));
+
+    if (res.ok) return data;
+
+    if (isRetryableNotion(res) && attempt < NOTION_MAX_RETRIES) {
+      await sleep(defaultRetryDelayMs(res, attempt, NOTION_RETRY_BASE_MS));
+      lastErr = res;
+      continue;
+    }
+
     const message = (data && (data.message || JSON.stringify(data))) || res.statusText;
     throw new Error(`Notion API error (${res.status}): ${message}`);
   }
-  return data;
+
+  // Exhausted retries.
+  throw new Error(`Notion API error (${lastErr ? lastErr.status : 429}): rate limited -- exhausted ${NOTION_MAX_RETRIES} retries`);
 }
 
 export function notionRichTextToString(richText = []) {
