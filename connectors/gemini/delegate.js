@@ -842,9 +842,18 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
   }
 
   for (let step = startStep; step <= cappedSteps; step++) {
+    // On the final allowed step, withhold the function-calling tools
+    // entirely instead of just reminding the model to wrap up: a text-only
+    // reminder wasn't reliable enough on its own (found via the 2026-07-26
+    // test -- the model spent its very last step on another tool call
+    // anyway, and the run hit the cap with zero synthesized answer, not
+    // even an incomplete one). Without `tools` in the request body, Gemini
+    // structurally cannot return a functionCall part here, so this step is
+    // guaranteed to be a real text-answer attempt rather than another read.
+    const isFinalStep = step === cappedSteps;
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: FUNCTION_DECLARATIONS });
+      candidate = await geminiChat(contents, { tools: isFinalStep ? undefined : FUNCTION_DECLARATIONS });
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
