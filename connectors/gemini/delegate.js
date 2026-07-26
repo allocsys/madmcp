@@ -860,6 +860,28 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     startStep = 1;
   }
 
+  // Resuming with a max_steps ceiling that's already been met or exceeded
+  // by the checkpoint's own stepsDone (e.g. a checkpoint has 5 completed
+  // steps and the caller resumes with max_steps: 2) -- there's no budget
+  // left to take even one more step. Don't fall into the loop-and-fall-
+  // through path below: that unconditionally deletes the checkpoint via
+  // deleteCheckpoint(runId) once the loop exits, which would throw away a
+  // still-good, still-resumable checkpoint for no reason (the loop body
+  // simply never executes when startStep > cappedSteps), and the generic
+  // step-cap message doesn't explain that anything was actually completed.
+  // Leave the checkpoint alone -- it's still resumable with a higher
+  // max_steps -- and say so explicitly instead.
+  if (checkpoint && startStep > cappedSteps) {
+    return {
+      answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call gemini_investigate again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
+      steps: startStep - 1,
+      transcript,
+      runId,
+      task: effectiveTask,
+      failed: true,
+    };
+  }
+
   for (let step = startStep; step <= cappedSteps; step++) {
     // On the final allowed step, withhold the function-calling tools
     // entirely instead of just reminding the model to wrap up: a text-only
