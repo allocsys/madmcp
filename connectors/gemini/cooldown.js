@@ -48,7 +48,16 @@ export function getRedis() {
   }
   try {
     redisClient = Redis.fromEnv();
-  } catch {
+  } catch (err) {
+    // Distinct from the "env vars simply unset" branch above, which is
+    // expected and silent -- this means UPSTASH_REDIS_REST_URL/TOKEN ARE
+    // present but Redis.fromEnv() itself rejected them (malformed URL,
+    // wrong format, etc). Previously silent, which made a genuine
+    // misconfiguration indistinguishable from Redis just not being set up
+    // -- isModelCoolingDown/isRedisConfigured/etc all report the same
+    // "not configured" either way, so this warning is the only place that
+    // fact ever surfaces.
+    console.warn("Redis.fromEnv() failed -- UPSTASH_REDIS_REST_URL/TOKEN may be set but malformed; treating Redis as unconfigured:", err?.message ?? err);
     redisClient = null;
   }
   return redisClient;
