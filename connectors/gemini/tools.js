@@ -51,7 +51,7 @@ export function register(server) {
       try {
         fetched = await fetchUrl(url);
       } catch (err) {
-        return { content: [{ type: "text", text: `Fetch failed: ${err.message}` }], isError: true };
+        return { content: [{ type: "text", text: `Fetch failed: ${err?.message ?? String(err)}` }], isError: true };
       }
 
       let sourceText = fetched.contentType.includes("text/html") ? htmlToText(fetched.text) : fetched.text;
@@ -68,7 +68,7 @@ export function register(server) {
       try {
         answer = await geminiGenerate(prompt);
       } catch (err) {
-        return { content: [{ type: "text", text: `Gemini call failed: ${err.message}` }], isError: true };
+        return { content: [{ type: "text", text: `Gemini call failed: ${err?.message ?? String(err)}` }], isError: true };
       }
 
       let notionNote = "";
