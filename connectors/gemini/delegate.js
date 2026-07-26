@@ -815,9 +815,24 @@ export async function runInvestigation({ task, max_steps = 6, resume_run_id }) {
     // before this field existed won't have it; fall back to whatever the
     // caller passed (may be undefined) rather than erroring.
     effectiveTask = checkpoint.task || task;
+  } else if (resume_run_id) {
+    // A resume WAS requested but its checkpoint didn't load -- expired past
+    // the 1-hour TTL, Redis unavailable (checkpoint.js is deliberately
+    // fail-open, see its header), or an invalid/typo'd runId. This must
+    // NEVER be silently treated as "no resume was requested" and fall
+    // through to a fresh run: that previously produced a conversation
+    // seeded with `Task: undefined` (task is genuinely ignored on a live
+    // resume, so callers legitimately omit it), and the model burned several
+    // steps hunting blind for context instead of investigating (found via
+    // the 2026-07-26 checkpoint-miss test). Fail loudly and distinctly
+    // instead, so the caller can tell "your resume target is gone" apart
+    // from any other failure and decide whether to retry with a task.
+    throw new Error(
+      `resume_run_id "${resume_run_id}" has no live checkpoint -- it may have expired (1 hour TTL), Redis may be unavailable, or the id may be wrong. ` +
+      `There is no saved task to resume from. Start a new investigation by calling again with a task and no resume_run_id.`
+    );
   } else {
-    // Either no resume_run_id was given, or the checkpoint had already
-    // expired/wasn't found -- start a fresh run either way. Requires a real
+    // No resume_run_id was given -- start a fresh run. Requires a real
     // `task` (the caller-facing tool in tools.js already guards against a
     // missing task on a non-resumable call, so `task` is trustworthy here).
     runId = randomUUID();
