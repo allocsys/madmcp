@@ -34,6 +34,18 @@ import { DEFAULT_OWNER } from "../../config.js";
 
 const HARD_MAX_STEPS = 20;
 
+// 429 (rate limit) and 503 (overloaded/high demand) are the only cases
+// documented as transient -- see client.js's own model-fallback cascade,
+// which deliberately only retries a different model on a 429 for the same
+// reason. Everything else (400 malformed request, 401/403 auth, 404 unknown
+// model, or no err.status at all -- e.g. "GEMINI_API_KEY is not set" thrown
+// locally in client.js, or "Gemini returned no candidates" from a
+// safety/recitation block) is a config or request problem that will
+// reproduce identically on a resume, not something retrying fixes.
+function isTransientGeminiError(err) {
+  return err?.status === 429 || err?.status === 503;
+}
+
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
 // summaries, not a full unified-diff implementation. Capped so a huge file
 // pair can't blow up the O(n*m) table.
