@@ -25,6 +25,8 @@ services:
         sync: false
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
 
       # IP_ALLOWLIST_ENABLED and ALLOWED_IP_RANGES are intentionally omitted
       # here so config.js's defaults apply (allowlist ON, pre-set to
