@@ -2,7 +2,7 @@
 
 # 🔌 madmcp
 
-**An MCP server giving Claude (or any MCP client) direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, Gemini-powered delegation, and the web — one connector, seven real backends.**
+**An MCP server built around Gemini-powered delegation — hand Claude an open-ended, multi-step investigation instead of chaining 5-10 manual tool calls — plus direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, and the web.**
 
 [![CI](https://github.com/allocsys/madmcp/actions/workflows/ci.yml/badge.svg)](https://github.com/allocsys/madmcp/actions/workflows/ci.yml)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-E8A33D?style=flat-square)](https://modelcontextprotocol.io)
@@ -22,14 +22,17 @@
 
 ## What this is
 
-`madmcp` is a single MCP server that gives an AI agent tool-level access to
-real infrastructure — GitHub, Cloudflare, Notion, Mem0, and arbitrary web
-pages — so agent workflows can read and write directly instead of relying on
-manual copy/paste between tabs. It also exposes a **delegation** connector:
-rather than making 5-10 manual tool calls itself, an agent can hand an
-open-ended, read-only investigation (or a single page + question) to Gemini,
-which runs its own tool-use loop server-side and returns one synthesized
-answer.
+`madmcp`'s core idea is **delegation**: instead of an agent making 5-10
+manual tool calls to run an investigation itself, it can hand an open-ended,
+read-only investigation (or a single page + question) to Gemini, which runs
+its own tool-use loop server-side — across GitHub, Cloudflare, and Notion —
+and returns one synthesized answer. That's `delegate_gemini` and
+`Delegate_web_fetch`, described first under Connectors & tools below.
+
+On top of that, the server also gives an AI agent direct tool-level access
+to real infrastructure — GitHub, Cloudflare, Notion, Mem0, Context7, and
+arbitrary web pages — so agent workflows can read and write directly instead
+of relying on manual copy/paste between tabs.
 
 ## Live demo
 
@@ -127,6 +130,32 @@ See **Configuration** below for the full variable reference.
 
 ## Connectors & tools
 
+### ⭐ Gemini (delegation) — the flagship feature
+`delegate_gemini` — hand an open-ended, multi-step, read-only investigation
+(e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
+the last week") to Gemini instead of making 5-10 separate manual tool calls.
+Gemini runs its own loop server-side across GitHub, Cloudflare, and Notion
+(bounded by `max_steps`, default 6, hard cap 20) and returns one synthesized
+answer. Falls through an ordered model cascade (`GEMINI_MODEL` →
+`GEMINI_FALLBACK_MODELS`) on rate limits, with Redis-backed per-model cooldown
+so already-limited models are skipped rather than retried.
+
+Progress is checkpointed to Redis after every completed step. If the Gemini
+API call itself fails partway through (429/503/network blip), the response
+includes a `resume_run_id` and everything gathered so far instead of losing
+the run outright — pass that id back on a follow-up `delegate_gemini` call
+to continue from the last completed step (checkpoint TTL: 1 hour) rather than
+re-running, and re-paying for, steps already done.
+
+`Delegate_web_fetch` — fetch a single URL and get back Gemini's answer to a
+specific question about its content, without returning the raw page. Use this
+instead of `web_fetch` when you need a distilled answer rather than exact
+wording to copy.
+
+Both tools can optionally log their task/question, step-by-step tool calls,
+and final answer to a Notion page under a fixed Gemini root page
+(`log_to_notion`, default `false`).
+
 ### GitHub
 File/repo ops: `read_file`, `read_file_chunked`, `get_file_at_commit`, `list_directory`,
 `get_file_tree`, `create_repo_file`, `overwrite_file`, `overwrite_files`, `str_replace_file`, `rename_file`,
@@ -174,32 +203,6 @@ Observability: `cf_workers_observability_query/keys/values/compare`
 `search_library`, `get_library_docs` — resolve a library/framework name to a Context7 ID, then fetch
 up-to-date, version-specific docs and code examples for it. Works without an API key at low rate
 limits; `CONTEXT7_API_KEY` is optional.
-
-### Gemini (delegation)
-`delegate_gemini` — hand an open-ended, multi-step, read-only investigation
-(e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
-the last week") to Gemini instead of making 5-10 separate manual tool calls.
-Gemini runs its own loop server-side across GitHub, Cloudflare, and Notion
-(bounded by `max_steps`, default 6, hard cap 20) and returns one synthesized
-answer. Falls through an ordered model cascade (`GEMINI_MODEL` →
-`GEMINI_FALLBACK_MODELS`) on rate limits, with Redis-backed per-model cooldown
-so already-limited models are skipped rather than retried.
-
-Progress is checkpointed to Redis after every completed step. If the Gemini
-API call itself fails partway through (429/503/network blip), the response
-includes a `resume_run_id` and everything gathered so far instead of losing
-the run outright — pass that id back on a follow-up `delegate_gemini` call
-to continue from the last completed step (checkpoint TTL: 1 hour) rather than
-re-running, and re-paying for, steps already done.
-
-`Delegate_web_fetch` — fetch a single URL and get back Gemini's answer to a
-specific question about its content, without returning the raw page. Use this
-instead of `web_fetch` when you need a distilled answer rather than exact
-wording to copy.
-
-Both tools can optionally log their task/question, step-by-step tool calls,
-and final answer to a Notion page under a fixed Gemini root page
-(`log_to_notion`, default `false`).
 
 ### Sync
 `sync_mem0_to_notion` — one-way sync from Mem0 into a Notion "Memory Index": creates/updates a
