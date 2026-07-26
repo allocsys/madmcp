@@ -124,7 +124,7 @@ export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
 // to track a thing that should be tracked -- so that case now throws
 // instead of silently creating an untracked page. Passing one_off: true is
 // the deliberate opt-out for real one-offs.
-export async function doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off }) {
+export async function doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create_page's entity_id and one_off param descriptions.`);
   }
@@ -153,9 +153,9 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
     .map((c) => ({ to_entity_id: c.entity_id, relation: "relates_to" }));
   const mergedRelations = [...explicitRelations, ...autoRelations];
 
-  const parent     = parent_type === "database" ? { database_id: parent_id } : { page_id: parent_id };
-  const properties = parent_type === "database"
-    ? { Name:  { title: [{ text: { content: title } }] } }
+  const parent         = parent_type === "database" ? { database_id: parent_id } : { page_id: parent_id };
+  const pageProperties = parent_type === "database"
+    ? { Name:  { title: [{ text: { content: title } }] }, ...(properties || {}) }
     : { title: { title: [{ text: { content: title } }] } };
   const markerBlocks   = buildMarkerBlocks({ entity_id, status });
   const relationBlocks = buildRelationBlocks(mergedRelations);
@@ -178,7 +178,7 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
   }
   const data = await notionRequest("/pages", {
     method: "POST",
-    body: { parent, properties, children: firstBatch },
+    body: { parent, properties: pageProperties, children: firstBatch },
   });
 
   // If a later batch fails (rate limit, network blip), the page ITSELF
@@ -323,16 +323,19 @@ async function appendChangelogEntry(page_id, summary) {
 // unsupported block type) -- the single-item tool catches this to preserve
 // its existing isError response shape; the batch tool lets Promise.allSettled
 // catch it per item, same pattern as mem/tools.js.
-export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations }) {
+export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations, properties }) {
   const results = [];
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
   // (archived: true) is deliberately NOT handled here -- see the bottom of
   // this function for why it's deferred to run last.
-  if (title !== undefined || archived === false) {
+  if (title !== undefined || archived === false || (properties !== undefined && archived !== true)) {
     const body = {};
     if (archived !== undefined) body.archived = archived;
-    if (title    !== undefined) body.properties = { title: { title: [{ text: { content: title } }] } };
+    const propUpdates = {};
+    if (title      !== undefined) propUpdates.title = { title: [{ text: { content: title } }] };
+    if (properties !== undefined) Object.assign(propUpdates, properties);
+    if (Object.keys(propUpdates).length) body.properties = propUpdates;
     const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
     results.push(`Updated page "${notionPageTitle(data)}" (ID: ${data.id}).`);
   }
@@ -406,7 +409,10 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
   // call with {title, archived: true} still sets both in one PATCH.
   if (archived === true) {
     const body = { archived: true };
-    if (title !== undefined) body.properties = { title: { title: [{ text: { content: title } }] } };
+    const propUpdates = {};
+    if (title      !== undefined) propUpdates.title = { title: [{ text: { content: title } }] };
+    if (properties !== undefined) Object.assign(propUpdates, properties);
+    if (Object.keys(propUpdates).length) body.properties = propUpdates;
     const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
     results.push(`Updated page "${notionPageTitle(data)}" (ID: ${data.id}).`);
   }
@@ -574,11 +580,12 @@ export function register(server) {
         relation:     z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' -- free text"),
       })).optional().describe("Optional list of outgoing relations from this page's entity to others, e.g. [{to_entity_id:'bug-4', relation:'blocks'}]. Stored as visible '🔗 relation -> to_entity_id' marker paragraphs. Only outgoing relations are supported -- see notion_get_page's Relations section for resolved targets."),
       one_off:     z.boolean().optional().describe("Set true to explicitly opt this page OUT of entity_id tracking -- required if entity_id is omitted. This tool refuses to create a page without either entity_id or one_off: true, so omitting entity_id by accident (rather than on purpose) is caught immediately instead of silently producing an untracked, un-deduped page. Use for genuine one-offs: scratch notes, test pages, throwaway content that will never need dedup or update-in-place."),
+      properties:  z.record(z.any()).optional().describe("Optional Notion database property VALUES to set when parent_type is 'database' (ignored for parent_type 'page', which has no custom properties). Keys are property names exactly as they appear in the database schema; values must be in Notion's property-value format, e.g. { \"Status\": { \"select\": { \"name\": \"open\" } }, \"Apply Link\": { \"url\": \"https://...\" }, \"Comp / Rate\": { \"rich_text\": [{ \"text\": { \"content\": \"$10-60/hr\" } }] } }. Call notion_get_database first to see available property names and types."),
     },
-    async ({ parent_id, parent_type, title, content, entity_id, status, relations, one_off }) => {
+    async ({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) => {
       let result;
       try {
-        result = await doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off });
+        result = await doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties });
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
       }
@@ -627,6 +634,7 @@ export function register(server) {
           relation:     z.string().describe("The relation type -- see notion_create_page"),
         })).optional().describe("Optional outgoing relations for this page -- see notion_create_page."),
         one_off:     z.boolean().optional().describe("Required if entity_id is omitted -- see notion_create_page."),
+        properties:  z.record(z.any()).optional().describe("Optional database property values for this page -- see notion_create_page."),
       })).min(1).describe("List of pages to create"),
     },
     async ({ items }) => {
@@ -751,10 +759,11 @@ export function register(server) {
         to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
         relation:     z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' -- free text"),
       })).optional().describe("New outgoing relations for this page -- REPLACES the existing relation set whole (not merged). Omit to leave relations unchanged. Pass an empty array to clear all relations."),
+      properties:     z.record(z.any()).optional().describe("Database property VALUES to set/update on this page (only meaningful if the page is a row in a database). Keys are property names exactly as they appear in the database schema; values must be in Notion's property-value format, e.g. { \"Status\": { \"select\": { \"name\": \"resolved\" } } }. Merged with any title change into a single PATCH. Call notion_get_database first to see available property names and types."),
     },
-    async ({ page_id, title, append_content, archived, replacements, status, relations }) => {
+    async ({ page_id, title, append_content, archived, replacements, status, relations, properties }) => {
       try {
-        const results = await doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations });
+        const results = await doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations, properties });
         return { content: [{ type: "text", text: results.join("\n") || "No changes made." }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
@@ -827,6 +836,7 @@ export function register(server) {
           to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
           relation:     z.string().describe("The relation type -- see notion_update_page"),
         })).optional().describe("New outgoing relations for this page -- see notion_update_page (whole-set replace)."),
+        properties:     z.record(z.any()).optional().describe("Database property values to set/update on this page -- see notion_update_page."),
       })).min(1).describe("List of page updates to apply"),
     },
     async ({ items }) => {
