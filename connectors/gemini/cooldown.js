@@ -54,6 +54,19 @@ export function getRedis() {
   return redisClient;
 }
 
+// Synchronous, side-effect-free (beyond the one-time lazy init above) check
+// for whether cross-call Redis memory is actually available right now --
+// used by delegate.js to tell a caller UPFRONT that checkpointing/resume
+// won't work this run (env var missing, or client construction failed),
+// rather than letting them discover it only when a resume_run_id later
+// comes back with no live checkpoint. Does not distinguish "not configured"
+// from "configured but Redis.fromEnv() itself threw" -- both mean the same
+// thing to a caller (no cross-call memory this run) and getRedis() doesn't
+// preserve which one happened.
+export function isRedisConfigured() {
+  return getRedis() !== null;
+}
+
 // Extracts a retry delay in whole seconds from a Gemini 429 error message,
 // e.g. "...Please retry in 52.395004654s." Returns null if not found, so the
 // caller can fall back to DEFAULT_COOLDOWN_SECONDS.
