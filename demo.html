@@ -195,6 +195,9 @@
   .card .metric{font-family:'Courier Prime',monospace;font-size:10px;color:var(--ink-soft);}
   .card p{margin:0;font-size:12.5px;line-height:1.5;font-family:'Fraunces',serif;font-weight:500;}
   .card .tech{margin:5px 0 0;font-family:'Courier Prime',monospace;font-size:10px;color:var(--ink-soft);opacity:0.85;line-height:1.4;}
+  .card.capstone{border-width:2px;border-color:var(--stamp-blue);}
+  .card.capstone .tag{color:var(--stamp-blue);}
+  .card.capstone.active{border-color:var(--stamp-red);}
 
   .stats{margin-top:4px;background:var(--paper-2);border:1px solid var(--line);border-radius:3px;padding:12px 14px;font-family:'Courier Prime',monospace;font-size:11px;color:var(--ink-soft);}
   .stats .row{display:flex;justify-content:space-between;padding:3px 0;}
@@ -233,8 +236,8 @@
     <div class="stamp-chip"><span class="dot"></span>routed live</div>
   </div>
   <h1>madmcp</h1>
-  <p class="sub">One server, six connectors — GitHub, Cloudflare, Notion, Mem0, web fetch, and Gemini-powered delegation — giving an AI agent direct, tool-level access to real infrastructure. <b>Below, a call is routed through each checkpoint</b> the way a single incident actually gets resolved.</p>
-  <p class="note">Sample trace for illustration — the org, incident, and code shown are fictional.</p>
+  <p class="sub">Built around <b>Gemini-powered delegation</b> — the last step below hands a whole postmortem investigation to Gemini in a single call, instead of chaining more manual tool calls. That sits on top of direct, tool-level access to five more backends — GitHub, Cloudflare, Notion, Mem0, and web fetch. <b>Below, a call is routed through each checkpoint</b> the way a single incident actually gets resolved.</p>
+  <p class="note">Sample trace for illustration — the org, incident, and code shown are fictional. Watch for the ⭐ capstone step.</p>
 
   <div class="checkpoints">
     <div class="route-line" id="route">
@@ -274,10 +277,11 @@
       <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update_page · status → In review</p></div>
       <div class="card" data-id="4"><div class="tag-row"><span class="tag">Step 5 · Mem0</span><span class="metric">874ms</span></div><p>Stores the root cause with dedup + relations.</p><p class="tech">mem0_add + mem0_update · dup flagged, 3 relations linked</p></div>
       <div class="card" data-id="5"><div class="tag-row"><span class="tag">Step 6 · Fetch</span><span class="metric">233ms</span></div><p>Confirms the status page reflects the fix.</p><p class="tech">web_fetch · matches Cloudflare baseline</p></div>
-      <div class="card" data-id="6"><div class="tag-row"><span class="tag">Step 7 · Gemini</span><span class="metric">612ms</span></div><p>Delegates the postmortem write-up instead of chaining more manual calls.</p><p class="tech">gemini_investigate · 4 sub-steps run server-side in 1 call</p></div>
+      <div class="card capstone" data-id="6"><div class="tag-row"><span class="tag">⭐ Step 7 · Gemini (capstone)</span><span class="metric">612ms</span></div><p>The payoff: 4 sub-steps of investigation, run server-side by Gemini, collapsed into <b>1 call</b> from the agent — no manual chaining.</p><p class="tech">delegate_gemini · list_commits + get_pr_reviews + cf_workers_observability_query + get_check_runs, synthesized into one answer</p></div>
       <div class="stats">
         <div class="row"><span>Connectors touched</span><span id="statConn">1 / 6</span></div>
         <div class="row"><span>Total latency</span><span id="statMs">118ms</span></div>
+        <div class="row"><span>Manual calls saved by delegation</span><span>3</span></div>
       </div>
     </div>
   </div>
