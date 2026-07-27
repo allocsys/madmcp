@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, FRONTEND_PROVIDER, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS } from "./config.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
@@ -19,6 +19,7 @@ import * as fetch      from "./connectors/fetch/tools.js";
 import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
 import * as gemini     from "./connectors/gemini/tools.js";
+import * as frontend   from "./connectors/frontend/tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 
 // Build the MCP server once at startup and reuse it across all requests.
@@ -35,6 +36,7 @@ fetch.register(mcpServer);
 cloudflare.register(mcpServer);
 context7.register(mcpServer);
 gemini.register(mcpServer);
+frontend.register(mcpServer);
 sync.register(mcpServer);
 
 // Adding a new connector:
@@ -125,6 +127,7 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       cloudflare: Boolean(CLOUDFLARE_API_TOKEN && CLOUDFLARE_ACCOUNT_ID),
       context7: true, // works unauthenticated at lower rate limits, so always "configured"
       gemini: Boolean(GEMINI_API_KEY),
+      frontend: FRONTEND_PROVIDER, // provider name, not a boolean -- always "configured" in the sense of having a default
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });
