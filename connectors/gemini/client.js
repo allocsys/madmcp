@@ -4,20 +4,41 @@
 // Auth header: "x-goog-api-key: <api_key>"
 // ---------------------------------------------------------------------------
 
-import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS } from "../../config.js";
+import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, GEMINI_REQUEST_TIMEOUT_MS } from "../../config.js";
 import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "./cooldown.js";
 
 async function callGenerateContentOnce(body, model) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the madmcp server.");
 
-  const res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
-    method: "POST",
-    headers: {
-      "x-goog-api-key": GEMINI_API_KEY,
-      "Content-Type":   "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type":   "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    // Network-level failure -- connection dropped, DNS/TLS error, or our own
+    // abort firing. None of these carry an HTTP status (err.status is
+    // undefined), so without this they'd fall through callGenerateContent's
+    // 429/503-only retry check as a hard, non-cascading failure even though
+    // they're exactly as transient as a 503 in practice. `transient: true`
+    // lets the cascade (and delegate.js's isTransientGeminiError) treat them
+    // the same way, without pretending they're a real HTTP status code.
+    const isAbort = err.name === "AbortError";
+    const wrapped = new Error(isAbort ? `Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms (model: ${model})` : `Gemini request failed (network error, model: ${model}): ${err.message}`);
+    wrapped.transient = true;
+    throw wrapped;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const text = await res.text();
   let data;
@@ -71,7 +92,8 @@ async function callGenerateContent(body, requestedModel) {
       const isLast = i === models.length - 1;
       const isRateLimited = err.status === 429;
       const isOverloaded  = err.status === 503;
-      if ((!isRateLimited && !isOverloaded) || isLast) throw err;
+      const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
+      if ((!isRateLimited && !isOverloaded && !isNetworkTransient) || isLast) throw err;
       if (isRateLimited) {
         // Rate-limited on this model -- record a cooldown (best-effort; never
         // blocks or throws on its own) so future calls can skip straight past
@@ -88,8 +110,8 @@ async function callGenerateContent(body, requestedModel) {
 
 // Single-turn text generation. Takes a plain prompt string (build any
 // system/user framing into it before calling) and returns the model's text
-// output. Used by Delegate_web_fetch -- a genuine one-shot "here's context,
-// answer this" call with no tool use.
+// output. Used by delegate_research's precision mode (url + question) --
+// a genuine one-shot "here's context, answer this" call with no tool use.
 export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTokens } = {}) {
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -111,7 +133,9 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 }
 
 // Multi-turn call WITH function-calling support -- used by
-// connectors/gemini/delegate.js's investigation loop. Unlike geminiGenerate,
+// connectors/gemini/delegate.js's GitHub/Notion/Cloudflare investigation loop
+// AND connectors/gemini/research.js's web-only research loop (delegate_research's
+// wide mode). Unlike geminiGenerate,
 // this takes/returns the raw `contents` conversation array and the raw
 // candidate, since the caller (delegate.js) needs to inspect whether the
 // response is a functionCall (keep looping) or plain text (done), which a
@@ -126,9 +150,16 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 // with functionResponse.id echoing the originating functionCall.id. See
 // delegate.js for how a turn is actually built -- don't "fix" it back to
 // role: "function" without re-checking current docs against the model in use.
-export async function geminiChat(contents, { model = GEMINI_MODEL, tools, maxOutputTokens } = {}) {
+export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolConfig, maxOutputTokens } = {}) {
   const body = { contents };
   if (tools) body.tools = tools;
+  // toolConfig is currently only ever passed as
+  // { includeServerSideToolInvocations: true } by research.js, required to
+  // combine the native googleSearch tool with a custom function declaration
+  // in the same call (see research.js's file header for the exact contract
+  // -- confirmed against Google's generateContent tool-combination docs,
+  // 2026-07-27). delegate.js never passes this: it has no built-in tools.
+  if (toolConfig) body.toolConfig = toolConfig;
   if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
 
   const data = await callGenerateContent(body, model);

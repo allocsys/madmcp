@@ -125,6 +125,14 @@ export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "ge
   .map((s) => s.trim())
   .filter(Boolean);
 
+// Defensive ceiling on a single generateContent call -- no official guidance
+// from Google on max latency, but without SOME timeout a hung/dropped
+// connection leaves delegate.js's per-step checkpointing unable to kick in
+// at all (the call just never returns). Override via env var if this proves
+// too tight for slower multi-tool-call turns, or too loose relative to the
+// hosting platform's own request-duration limit.
+export const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 55000;
+
 // Read/write isolation for the Gemini connector's Notion access (2026-07-25
 // plan): Gemini tools may READ any page/database reachable via the existing
 // Notion connector (Memory Index, Entity Index, Job Leads, etc.), but may

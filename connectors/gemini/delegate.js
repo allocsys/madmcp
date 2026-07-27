@@ -9,7 +9,7 @@
 // SCOPE: every delegated function below is READ-ONLY. Gemini is never given
 // a write-capable function here -- writes stay confined to the fixed
 // GEMINI_NOTION_ROOT_PAGE_ID path in tools.js, same isolation rule as
-// Delegate_web_fetch. This file only reaches into GitHub/Cloudflare/Notion's
+// delegate_research. This file only reaches into GitHub/Cloudflare/Notion's
 // existing client-layer functions (not the MCP tool layer) to avoid
 // round-tripping through the MCP server for its own internal calls.
 //
@@ -62,7 +62,7 @@ const HARD_MAX_STEPS = 30;
 // safety/recitation block) is a config or request problem that will
 // reproduce identically on a resume, not something retrying fixes.
 function isTransientGeminiError(err) {
-  return err?.status === 429 || err?.status === 503;
+  return err?.status === 429 || err?.status === 503 || err?.transient === true;
 }
 
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
@@ -798,12 +798,32 @@ const FUNCTION_DECLARATIONS = [{
   functionDeclarations: FUNCTIONS.map(({ name, description, parameters }) => ({ name, description, parameters })),
 }];
 
+// SCOPE NOTE (2026-07-27): this file deliberately has NO web access (no
+// web_fetch, no Google Search grounding) -- that lives entirely in
+// connectors/gemini/research.js, behind the separate delegate_research
+// tool. Keeping the two apart is a security boundary, not just a UX split:
+// this loop reads private GitHub/Notion/Cloudflare/Context7/Mem0 data, and
+// research.js's loop reads untrusted public web content -- a single loop
+// with both would let a malicious page or search result Gemini encounters
+// mid-investigation try to talk the model into leaking whatever it just
+// read from those private systems (e.g. via a crafted outbound fetch to an
+// attacker-controlled URL). Neither loop can do that, because neither ever
+// has both capabilities available at once. Do NOT re-add web_fetch or a
+// google_search tool here -- add web capability to research.js instead.
+
 const SYSTEM_PREAMBLE =
   "You are a read-only investigation agent. Use the available functions to gather whatever " +
   "information you need to answer the task fully, calling as many as necessary across multiple " +
   "turns. When you have enough information, respond with a final plain-text answer and no further " +
   "function calls. Be specific and cite what you found (file paths, commit SHAs, log entries, page " +
-  "titles) rather than speculating.";
+  "titles) rather than speculating.\n\n" +
+  "IMPORTANT -- cross-check, don't just aggregate: when the task touches more than one source " +
+  "(e.g. a GitHub PR's status vs. a Notion tracking page, or a repo file vs. what a database row " +
+  "claims), actively look for contradictions between them rather than reporting each source's claim " +
+  "in isolation. A thing that LOOKS current, open, or resolved in one source can be stale or wrong " +
+  "according to another -- if your task plan touches multiple sources for related claims, check them " +
+  "against each other before answering, and call out any discrepancy explicitly (including which " +
+  "source you consider more authoritative and why) rather than picking one silently.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
