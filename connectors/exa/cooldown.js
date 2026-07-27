@@ -1,18 +1,17 @@
 // ---------------------------------------------------------------------------
 // connectors/exa/cooldown.js — per-key rate-limit cooldown for the Exa
 // connector, backed by Upstash Redis (Vercel Marketplace integration).
-// Same Redis instance/credentials as connectors/gemini/cooldown.js and
-// connectors/openai/cooldown.js -- both just namespace their keys
-// differently below -- but a SEPARATE client + separate exported
-// functions, not a shared import. See those files' headers for why that
-// duplication is deliberate.
+// Same Redis instance/credentials as connectors/gemini/cooldown.js -- it
+// just namespaces its keys differently below -- but a SEPARATE client +
+// separate exported functions, not a shared import. See that file's header
+// for why that duplication is deliberate.
 //
 // WHY REDIS, NOT IN-MEMORY / WHY THIS NEVER SLEEPS: identical reasoning to
 // connectors/gemini/cooldown.js -- see that file's header. Not repeated here
 // beyond this pointer, to avoid the comments drifting apart over time.
 //
-// WHY keyIndex ALONE, UNLIKE connectors/openai/cooldown.js's (model,
-// keyIndex): Exa's /answer endpoint has no selectable model for this call
+// WHY keyIndex ALONE, UNLIKE connectors/gemini/cooldown.js's per-model
+// namespacing: Exa's /answer endpoint has no selectable model for this call
 // shape (see client.js's file header) -- the cascade in client.js is a 1D
 // rotation across EXA_API_KEYS only, so a cooldown only ever needs to be
 // namespaced by keyIndex (position in EXA_API_KEYS, not the key value
