@@ -162,13 +162,13 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // rate-limit memory, but never breaks a real Gemini call) -- safe to leave
 // both unset until an integration is activated.
 
-// Exa /answer API (docs.exa.ai/reference/answer), used only as a
-// search+synthesis fallback -- see connectors/exa/client.js's file header
-// for exactly why this exists alongside Gemini's own native Google Search
-// grounding rather than replacing it. FORMERLY OPENAI (2026-07-27): this
-// section replaced the OPENAI_* config that used to serve the same role
-// via OpenAI's Responses API web_search tool -- see git history if that
-// needs to be resurrected.
+// Exa /answer API (docs.exa.ai/reference/answer) -- backs delegate_research's
+// wide mode as the sole implementation (a single search+synthesis call),
+// not a fallback for anything; see connectors/exa/client.js's file header
+// for the 2026-07-27 history of what this replaced. FORMERLY OPENAI
+// (2026-07-27): this section replaced the OPENAI_* config that used to
+// serve the same role via OpenAI's Responses API web_search tool -- see git
+// history if that needs to be resurrected.
 //
 // EXA_API_KEYS is a comma-separated list -- deliberately supporting
 // MULTIPLE keys/accounts, same reasoning as the OpenAI config it replaces.
