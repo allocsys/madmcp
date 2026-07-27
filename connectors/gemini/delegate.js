@@ -874,12 +874,6 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
   let repeatCounts = new Map();
   let resultCache = new Map();
   let consecutiveAllRepeatSteps = 0;
-  // Latches true the first time a model in the cascade rejects combining
-  // Google Search grounding with functionDeclarations in one request (see
-  // TOOLS_WITH_SEARCH's comment) -- once true, every subsequent step this
-  // run skips straight to function-declarations-only instead of re-paying
-  // for a same-step retry every time.
-  let searchToolDisabledThisRun = false;
   // How many entries of `contents` have already been pushed to the Redis
   // checkpoint list (fix #5) -- saveCheckpoint only ever needs the SLICE
   // added since the last checkpoint, not the whole array, so this cursor is
