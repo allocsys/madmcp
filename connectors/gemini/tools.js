@@ -12,11 +12,12 @@
 // compact answer, at the cost of one extra API call + latency. Stays inline
 // in this file (not research.js) since it's a genuinely simpler, one-shot
 // code path with no loop.
-// WIDE MODE (task): delegates to runResearch() in research.js -- a
-// multi-step, WEB-ONLY loop (Google Search grounding + web_fetch). See
-// research.js's header for the security rationale for keeping that loop's
-// function set separate from delegate_gemini's (GitHub/Notion/Cloudflare/
-// Context7/Mem0, no web).
+// WIDE MODE (task): delegates to runResearch() in research.js -- as of
+// 2026-07-27 a single, WEB-ONLY call to Exa's /answer endpoint (search +
+// synthesis in one shot), not a multi-step Gemini loop -- see research.js's
+// header for why that loop was retired and why this stays WEB-ONLY (kept
+// separate from delegate_gemini's GitHub/Notion/Cloudflare/Context7/Mem0
+// access) regardless of provider.
 //
 // NOTE ON WHY PRECISION MODE SAVES TOKENS AND OTHER SIMILAR-LOOKING TOOLS
 // DON'T: any argument a caller passes INTO a tool call (e.g. "summarize this
