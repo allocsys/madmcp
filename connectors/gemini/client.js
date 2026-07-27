@@ -7,17 +7,46 @@
 import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS } from "../../config.js";
 import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "./cooldown.js";
 
+// No official guidance from Google on a max generateContent latency; this
+// is a defensive ceiling so a hung/dropped connection fails fast enough for
+// delegate.js's per-step checkpointing to actually kick in, rather than the
+// whole request (and the platform's own hosting-duration limit) timing out
+// with zero information back to the caller. Override via env var if this
+// proves too tight for slower multi-tool-call turns.
+const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 55000;
+
 async function callGenerateContentOnce(body, model) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the madmcp server.");
 
-  const res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
-    method: "POST",
-    headers: {
-      "x-goog-api-key": GEMINI_API_KEY,
-      "Content-Type":   "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type":   "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    // Network-level failure -- connection dropped, DNS/TLS error, or our own
+    // abort firing. None of these carry an HTTP status (err.status is
+    // undefined), so without this they'd fall through callGenerateContent's
+    // 429/503-only retry check as a hard, non-cascading failure even though
+    // they're exactly as transient as a 503 in practice. `transient: true`
+    // lets the cascade (and delegate.js's isTransientGeminiError) treat them
+    // the same way, without pretending they're a real HTTP status code.
+    const isAbort = err.name === "AbortError";
+    const wrapped = new Error(isAbort ? `Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms (model: ${model})` : `Gemini request failed (network error, model: ${model}): ${err.message}`);
+    wrapped.transient = true;
+    throw wrapped;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const text = await res.text();
   let data;
