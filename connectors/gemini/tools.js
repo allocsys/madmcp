@@ -38,7 +38,7 @@
 import { z } from "zod";
 import { geminiGenerate } from "./client.js";
 import { runInvestigation } from "./delegate.js";
-import { runResearch } from "./research.js";
+import { runResearch } from "../exa/research.js";
 import { fetchUrl, htmlToText } from "../fetch/client.js";
 import { doCreatePage } from "../notion/tools.js";
 import { GEMINI_NOTION_ROOT_PAGE_ID } from "../../config.js";
