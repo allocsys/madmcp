@@ -4,7 +4,7 @@
 // Auth header: "x-api-key: <api_key>"
 //
 // WHY THIS EXISTS ALONGSIDE GEMINI'S NATIVE GOOGLE SEARCH GROUNDING:
-// connectors/gemini/research.js already gets search via the native
+// research.js (same directory) already gets search via the native
 // googleSearch tool combined with the web_fetch function -- see that
 // file's header for the exact combination contract. But that combination
 // is a Preview feature limited to Gemini 3 models, and GEMINI_FALLBACK_MODELS
