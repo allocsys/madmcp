@@ -4,7 +4,6 @@
 // To add a new group: create connectors/github/<name>.js and call register().
 // ---------------------------------------------------------------------------
 
-import { z } from "zod";
 import { register as registerDownload  } from "./download.js";
 import { register as registerFiles     } from "./files.js";
 import { register as registerBranches  } from "./branches.js";
