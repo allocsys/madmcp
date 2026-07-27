@@ -57,6 +57,8 @@ import { geminiChat } from "./client.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { fetchUrl, htmlToText } from "../fetch/client.js";
+import { openaiWebSearch } from "../openai/client.js";
+import { OPENAI_API_KEYS } from "../../config.js";
 
 const HARD_MAX_STEPS = 30;
 
@@ -74,42 +76,82 @@ function isTransientGeminiError(err) {
   return err?.status === 429 || err?.status === 503 || err?.transient === true;
 }
 
-const FUNCTIONS = [
-  {
-    name: "web_fetch",
-    description: "Fetch the content of a public URL (http/https only; private/internal addresses are blocked) and return its text, JSON, or stripped HTML. Use this to read a specific page, doc, or API response you already have the URL for -- combine with Google Search grounding (available natively in this loop, not as a separate function) to find a URL first.",
-    parameters: {
-      type: "object",
-      properties: {
-        url:      { type: "string", description: "The URL to fetch (must be http:// or https://)" },
-        raw_html: { type: "boolean", description: "Return raw HTML instead of stripped plain text (default: false)" },
-      },
-      required: ["url"],
+const WEB_FETCH_FUNCTION = {
+  name: "web_fetch",
+  description: "Fetch the content of a public URL (http/https only; private/internal addresses are blocked) and return its text, JSON, or stripped HTML. Use this to read a specific page, doc, or API response you already have the URL for -- combine with Google Search grounding (available natively in this loop, not as a separate function) to find a URL first.",
+  parameters: {
+    type: "object",
+    properties: {
+      url:      { type: "string", description: "The URL to fetch (must be http:// or https://)" },
+      raw_html: { type: "boolean", description: "Return raw HTML instead of stripped plain text (default: false)" },
     },
-    execute: async ({ url, raw_html = false }) => {
-      const { status, ok, contentType, text } = await fetchUrl(url);
-      let output = text;
-      if (!raw_html && contentType.includes("text/html")) {
-        output = htmlToText(text);
-      } else if (contentType.includes("application/json")) {
-        try { output = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep raw */ }
-      }
-      const prefix = `HTTP ${status} — ${url}${ok ? "" : " (non-2xx response)"}\n\n`;
-      const combined = prefix + output;
-      return combined.length > WEB_FETCH_MAX_CHARS ? combined.slice(0, WEB_FETCH_MAX_CHARS) + "\n...[truncated]" : combined;
-    },
+    required: ["url"],
   },
-];
+  execute: async ({ url, raw_html = false }) => {
+    const { status, ok, contentType, text } = await fetchUrl(url);
+    let output = text;
+    if (!raw_html && contentType.includes("text/html")) {
+      output = htmlToText(text);
+    } else if (contentType.includes("application/json")) {
+      try { output = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep raw */ }
+    }
+    const prefix = `HTTP ${status} — ${url}${ok ? "" : " (non-2xx response)"}\n\n`;
+    const combined = prefix + output;
+    return combined.length > WEB_FETCH_MAX_CHARS ? combined.slice(0, WEB_FETCH_MAX_CHARS) + "\n...[truncated]" : combined;
+  },
+};
 
-const FUNCTION_DECLARATIONS = [{
-  functionDeclarations: FUNCTIONS.map(({ name, description, parameters }) => ({ name, description, parameters })),
-}];
+// OpenAI's web_search (connectors/openai/client.js), used ONLY in the
+// fallback function set below -- NOT alongside native Google Search
+// grounding, since that would just be a second, costlier way to do the same
+// thing while native search still works. This exists specifically to plug
+// the gap connectors/openai/client.js's file header describes: once a model
+// in GEMINI_FALLBACK_MODELS rejects the search+function combination
+// (searchToolDisabledThisRun below), web_fetch alone leaves this loop with
+// no way to find a URL it doesn't already have. Omitted entirely if
+// OPENAI_API_KEYS isn't configured, so Gemini is never offered a tool that
+// can only ever fail.
+const OPENAI_WEB_SEARCH_FUNCTION = {
+  name: "web_search",
+  description: "Search the web and return a synthesized answer with sources (backed by OpenAI's web_search tool). Only offered when Google Search grounding is unavailable this run -- use it the same way you'd use that, to find a URL or current fact you don't already have.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "The search query" },
+    },
+    required: ["query"],
+  },
+  execute: async ({ query }) => {
+    try {
+      return await openaiWebSearch(query);
+    } catch (err) {
+      return `Error: ${err?.message ?? String(err)}`;
+    }
+  },
+};
+
+// Base set advertised alongside native Google Search grounding -- web_fetch
+// only; native search already covers "find something" while it's available.
+const BASE_FUNCTIONS = [WEB_FETCH_FUNCTION];
+// Fallback set used once native search is disabled this run -- adds OpenAI
+// web_search (if configured) to plug the gap. Also the source of truth for
+// execute() lookups below, since it's a superset of BASE_FUNCTIONS.
+const FUNCTIONS = OPENAI_API_KEYS.length > 0 ? [WEB_FETCH_FUNCTION, OPENAI_WEB_SEARCH_FUNCTION] : [WEB_FETCH_FUNCTION];
+
+function declareFunctions(fns) {
+  return [{ functionDeclarations: fns.map(({ name, description, parameters }) => ({ name, description, parameters })) }];
+}
+
+const FUNCTION_DECLARATIONS_BASE = declareFunctions(BASE_FUNCTIONS);
+// Used wherever native search is off this run (searchToolDisabledThisRun) --
+// see FUNCTIONS' comment above.
+const FUNCTION_DECLARATIONS = declareFunctions(FUNCTIONS);
 
 // Native Gemini tool (Google Search grounding) -- executed by Gemini itself
 // server-side, no execute() round-trip through this file. camelCase key is
 // required -- see file header's tool-combination contract, part (a).
 const SEARCH_TOOL = { googleSearch: {} };
-const TOOLS_WITH_SEARCH = [...FUNCTION_DECLARATIONS, SEARCH_TOOL];
+const TOOLS_WITH_SEARCH = [...FUNCTION_DECLARATIONS_BASE, SEARCH_TOOL];
 // Required whenever TOOLS_WITH_SEARCH is used -- see file header's
 // tool-combination contract, part (b). Meaningless (and not sent) on a
 // request that only carries FUNCTION_DECLARATIONS or no tools at all.
@@ -119,7 +161,9 @@ const SYSTEM_PREAMBLE =
   "You are a read-only web research agent. You have exactly two capabilities: web_fetch (read a " +
   "specific URL you already have) and Google Search grounding (find current facts, pages, or URLs " +
   "you don't already have yet) -- the latter is available natively in this loop, not as a separate " +
-  "function you call. You have NO access to any internal system -- no GitHub, Notion, Cloudflare, " +
+  "function you call. If Google Search grounding becomes unavailable partway through this run, a " +
+  "web_search function tool (a different provider, same purpose) may take its place -- use it the " +
+  "same way. You have NO access to any internal system -- no GitHub, Notion, Cloudflare, " +
   "or similar -- this is public web research only. Use these across as many turns as necessary. " +
   "When you have enough information, respond with a final plain-text answer and no further tool " +
   "calls. Be specific and cite the actual URLs you found or read, rather than speculating.\n\n" +

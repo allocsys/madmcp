@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { githubRequest, fromBase64, toBase64 } from "./client.js";
+import { githubRequest } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 
 function guessMime(path) {

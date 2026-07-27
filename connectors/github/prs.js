@@ -4,7 +4,6 @@
 
 import { z } from "zod";
 import { githubRequest, githubGraphQL } from "./client.js";
-import { DEFAULT_OWNER } from "../../config.js";
 
 export function register(server) {
 

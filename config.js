@@ -162,6 +162,48 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // rate-limit memory, but never breaks a real Gemini call) -- safe to leave
 // both unset until an integration is activated.
 
+// OpenAI Responses API (platform.openai.com/docs/api-reference/responses),
+// used only for its built-in web_search tool -- see connectors/openai/
+// client.js's file header for exactly why this exists alongside Gemini's
+// own native Google Search grounding rather than replacing it.
+//
+// OPENAI_API_KEYS is a comma-separated list -- deliberately supporting
+// MULTIPLE keys/accounts. There is no free tier for this tool (flat ~$10
+// per 1,000 calls as of 2026-07, on top of normal per-token pricing,
+// regardless of which model is used), so this cascade is about rate-limit
+// headroom and cost control, not accessing a free quota. On a 429,
+// connectors/openai/client.js tries OPENAI_FALLBACK_MODELS on the SAME key
+// first (separate per-model rate-limit bucket, and cheaper token pricing --
+// see below), and only rotates to the NEXT key once every model on the
+// current key has failed. Order matters: put cheaper/lighter models later
+// in the fallback list, same convention as GEMINI_FALLBACK_MODELS below.
+export const OPENAI_API_KEYS = (process.env.OPENAI_API_KEYS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+export const OPENAI_API = "https://api.openai.com/v1/responses";
+
+// Default model -- as of 2026-07, OpenAI's current lineup is the GPT-5.6
+// (Sol/Terra/Luna) and GPT-5.4 families; GPT-5.4-mini is a reasonable
+// default for search+synthesis quality vs. cost. Override via env var if
+// this drifts out of date -- OpenAI renames/retires model IDs periodically,
+// so don't assume this stays current without checking
+// https://platform.openai.com/docs/pricing.
+export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+
+// Fallback model cascade on the same key before rotating keys (see above).
+// gpt-5.4-nano is OpenAI's cheapest current model -- lower cost and its own
+// separate rate-limit bucket from OPENAI_MODEL, at reduced quality. Override
+// via env var as a comma-separated list; OPENAI_MODEL is always tried first
+// regardless of whether it's repeated here.
+export const OPENAI_FALLBACK_MODELS = (process.env.OPENAI_FALLBACK_MODELS || "gpt-5.4-nano")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
+export const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || 55000;
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to
