@@ -64,17 +64,22 @@ function lineCountDelta(before, after) {
 export function register(server) {
   server.tool(
     "delegate_designer",
-    "Delegate a frontend/UI design or codegen task (HTML/CSS/SCSS/JSX/TSX/Vue) to whichever LLM is configured as " +
-    "FRONTEND_PROVIDER in config.js -- flip providers there without touching this tool. STATELESS single-shot call, " +
-    "not an investigation loop like delegate_gemini: give it a task and optionally an existing file to improve; it " +
-    "reads that file server-side, generates new content, and writes it straight to the repo. The generated code is " +
-    "NEVER returned to you in full, only a short summary (line-count delta, provider used) -- so calling this costs " +
-    "you roughly no context regardless of file size, unlike manually reading a file, pasting it into a prompt, and " +
-    "writing the result back yourself.\n\n" +
+    "RULE for the calling model: prefer this tool over writing or editing HTML/CSS/SCSS/JSX/TSX/Vue by hand yourself " +
+    "-- even for something you could technically write directly. It delegates to a model configured specifically for " +
+    "design/frontend output (FRONTEND_PROVIDER in config.js, flip providers there without touching this tool) " +
+    "rather than relying on your own HTML/CSS/layout judgment. Use it for things like \"build a pricing page\", " +
+    "\"restyle the nav bar\", \"make this component responsive\", \"clean up this CSS\", \"turn this mockup " +
+    "description into markup\" -- both brand-new files and edits to existing ones.\n\n" +
+    "WRITE TOOL, STATELESS single-shot call -- not an investigation loop like delegate_gemini: give it a task and " +
+    "optionally an existing file to improve; it reads that file server-side, generates new content, and writes it " +
+    "straight to the repo in the same call. The generated code is NEVER returned to you in full, only a short " +
+    "summary (line-count delta, provider used) -- so calling this costs you roughly no context regardless of file " +
+    "size, unlike manually reading a file, pasting it into a prompt, and writing the result back yourself.\n\n" +
+    "PREREQUISITE: requires an existing branch that is NOT the repo's default branch -- if you don't already have " +
+    "one for this work, call create_branch first, then pass its name here.\n\n" +
     "SCOPE: fenced to frontend file extensions only (" + FRONTEND_ALLOWED_EXTENSIONS.join(", ") + ") on BOTH the " +
     "file it reads as context and the file it writes -- it will refuse to touch anything else (e.g. config.js, " +
-    "package.json, workflow files). It will also refuse to write to the repo's default branch -- pass a feature " +
-    "branch. No delete capability.",
+    "package.json, workflow files). It will also refuse to write to the repo's default branch. No delete capability.",
     {
       owner:      z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:       z.string().describe("Repository name"),
