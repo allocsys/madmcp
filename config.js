@@ -191,7 +191,7 @@ export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS)
 
 // ---------------------------------------------------------------------------
 // Frontend/design delegate (connectors/frontend/) -- provider-agnostic text
-// generation used ONLY by delegate_frontend_design for one-shot HTML/CSS/
+// generation used ONLY by delegate_designer for one-shot HTML/CSS/
 // component generation. FRONTEND_PROVIDER selects which backend client.js
 // calls; swapping providers is a config change, not a code change. Add a
 // new provider by branching in connectors/frontend/client.js and adding its
@@ -224,7 +224,7 @@ export const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL || "qwen/qwen3-co
 // EXA_REQUEST_TIMEOUT_MS above -- applies to whichever provider is active.
 export const FRONTEND_REQUEST_TIMEOUT_MS = Number(process.env.FRONTEND_REQUEST_TIMEOUT_MS) || 55000;
 
-// Extensions delegate_frontend_design is allowed to read as context OR write
+// Extensions delegate_designer is allowed to read as context OR write
 // as output. Fences BOTH the read side (so a manipulated task can't feed a
 // secrets-adjacent file like config.js to a third-party LLM API as prompt
 // text) and the write side (so a generation can't overwrite server.js/
