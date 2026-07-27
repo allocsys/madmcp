@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/tools.js — delegate_frontend_design
+// connectors/frontend/tools.js — delegate_designer
 //
 // STATELESS, single-call codegen -- NOT an agentic loop like delegate_gemini.
 // Given a task (+ optionally an existing file to improve), sends a prompt to
@@ -63,7 +63,7 @@ function lineCountDelta(before, after) {
 
 export function register(server) {
   server.tool(
-    "delegate_frontend_design",
+    "delegate_designer",
     "Delegate a frontend/UI design or codegen task (HTML/CSS/SCSS/JSX/TSX/Vue) to whichever LLM is configured as " +
     "FRONTEND_PROVIDER in config.js -- flip providers there without touching this tool. STATELESS single-shot call, " +
     "not an investigation loop like delegate_gemini: give it a task and optionally an existing file to improve; it " +
@@ -151,7 +151,7 @@ export function register(server) {
         commitResult = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(targetPath)}`, {
           method: "PUT",
           body: {
-            message: message || `${sha ? "Update" : "Create"} ${targetPath} via delegate_frontend_design: ${task.slice(0, 72)}`,
+            message: message || `${sha ? "Update" : "Create"} ${targetPath} via delegate_designer: ${task.slice(0, 72)}`,
             content: toBase64(cleaned),
             branch,
             sha,
