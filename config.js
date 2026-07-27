@@ -189,6 +189,52 @@ export const EXA_API = "https://api.exa.ai/answer";
 // Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
 export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS) || 55000;
 
+// ---------------------------------------------------------------------------
+// Frontend/design delegate (connectors/frontend/) -- provider-agnostic text
+// generation used ONLY by delegate_frontend_design for one-shot HTML/CSS/
+// component generation. FRONTEND_PROVIDER selects which backend client.js
+// calls; swapping providers is a config change, not a code change. Add a
+// new provider by branching in connectors/frontend/client.js and adding its
+// own key/model config here -- keep a provider's config block even when it's
+// not the current default, since flipping back only works if it's still here.
+export const FRONTEND_PROVIDER = process.env.FRONTEND_PROVIDER || "cloudflare";
+
+// -- cloudflare: Workers AI (api.cloudflare.com/.../ai/run/{model}) --
+// Reuses CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID below -- no separate key
+// needed for this provider. Free daily neuron allocation; see
+// https://developers.cloudflare.com/workers-ai/platform/pricing/ for current
+// limits, which drift over time. Default model is a general instruct model,
+// not design-specialized -- override via env var if a better-suited model
+// becomes available on Workers AI.
+export const CLOUDFLARE_AI_MODEL = process.env.CLOUDFLARE_AI_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+// -- openrouter: openrouter.ai (OpenAI-compatible /chat/completions) --
+// Optional -- only required if FRONTEND_PROVIDER=openrouter. Default model
+// is a free (":free"-suffixed) route; override via env var, but check
+// https://openrouter.ai/models for which routes are still free before
+// changing it.
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+export const OPENROUTER_API     = "https://openrouter.ai/api/v1";
+export const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL || "qwen/qwen3-coder:free";
+
+// -- gemini: reuses the existing Gemini connector's geminiGenerate() and its
+// GEMINI_API_KEY/GEMINI_MODEL config above -- no separate keys needed here.
+
+// Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS/
+// EXA_REQUEST_TIMEOUT_MS above -- applies to whichever provider is active.
+export const FRONTEND_REQUEST_TIMEOUT_MS = Number(process.env.FRONTEND_REQUEST_TIMEOUT_MS) || 55000;
+
+// Extensions delegate_frontend_design is allowed to read as context OR write
+// as output. Fences BOTH the read side (so a manipulated task can't feed a
+// secrets-adjacent file like config.js to a third-party LLM API as prompt
+// text) and the write side (so a generation can't overwrite server.js/
+// package.json/workflow files/etc) to the frontend surface this tool exists
+// for. Comma-separated, override via env var if the frontend stack changes.
+export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSIONS || ".html,.css,.scss,.jsx,.tsx,.vue")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to
