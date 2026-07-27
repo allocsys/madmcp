@@ -44,6 +44,7 @@ import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.j
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
+import { fetchUrl, htmlToText } from "../fetch/client.js";
 import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
 import { cfAccountRequest } from "../cloudflare/client.js";
 import { context7Request } from "../context7/client.js";
@@ -52,6 +53,13 @@ import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseT
 import { DEFAULT_OWNER } from "../../config.js";
 
 const HARD_MAX_STEPS = 30;
+
+// Cap on how much of a fetched page's text is fed back into Gemini's own
+// loop -- this is server-side context consumed by Gemini's next turn, not
+// returned to the calling model, so it can be smaller than web_fetch's
+// caller-facing default (500,000 chars) without losing anything the caller
+// would have seen anyway.
+const WEB_FETCH_MAX_CHARS = 20000;
 
 // 429 (rate limit) and 503 (overloaded/high demand) are the only cases
 // documented as transient -- see client.js's own model-fallback cascade,
