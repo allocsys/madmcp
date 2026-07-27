@@ -1025,7 +1025,21 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
     const withholdTools = isFinalStep || stuckLoopForce;
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: withholdTools ? undefined : FUNCTION_DECLARATIONS });
+      const preferredTools = withholdTools ? undefined : (searchToolDisabledThisRun ? FUNCTION_DECLARATIONS : TOOLS_WITH_SEARCH);
+      try {
+        candidate = await geminiChat(contents, { tools: preferredTools });
+      } catch (innerErr) {
+        // A model rejecting the search+functions combination surfaces as a
+        // 400 (bad request shape), not a 429/503 -- distinct from every
+        // other error this function can throw. Only worth a same-step retry
+        // when search was actually in play (preferredTools === TOOLS_WITH_SEARCH);
+        // otherwise this is a real request/config error and should fall
+        // through to the outer catch like any other failure.
+        const mightBeToolCombinationError = preferredTools === TOOLS_WITH_SEARCH && innerErr?.status === 400;
+        if (!mightBeToolCombinationError) throw innerErr;
+        searchToolDisabledThisRun = true;
+        candidate = await geminiChat(contents, { tools: withholdTools ? undefined : FUNCTION_DECLARATIONS });
+      }
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
