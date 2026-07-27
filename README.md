@@ -2,7 +2,7 @@
 
 # 🔌 madmcp
 
-**An MCP server built around Gemini-powered delegation — hand Claude an open-ended, multi-step investigation instead of chaining 5-10 manual tool calls — plus direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, and the web.**
+**An MCP server built around Gemini-powered delegation — hand Claude an open-ended, multi-step investigation instead of chaining 5-10 manual tool calls — plus direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, and the web. Reflexive by construction: a connected agent has write access to this very repo, so it can read its own source, diagnose a gap, and patch it through the same connection.**
 
 [![CI](https://github.com/allocsys/madmcp/actions/workflows/ci.yml/badge.svg)](https://github.com/allocsys/madmcp/actions/workflows/ci.yml)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-E8A33D?style=flat-square)](https://modelcontextprotocol.io)
@@ -36,6 +36,24 @@ On top of that, the server also gives an AI agent direct tool-level access
 to real infrastructure — GitHub, Cloudflare, Notion, Mem0, Context7, and
 arbitrary web pages — so agent workflows can read and write directly instead
 of relying on manual copy/paste between tabs.
+
+### Agent-driven self-modification
+
+`DEFAULT_OWNER` defaults to `allocsys`, and the GitHub connector exposes
+full read/write/PR tooling (`read_file`, `str_replace_file`, `overwrite_file`,
+`create_pull_request`, `merge_pull_request`, etc.) — not a read-only subset.
+That combination means an agent connected to this server has direct write
+access to this very repo: it can read its own source, diagnose a bug or a
+gap in the docs, and commit the fix — or open a PR against itself — through
+the same connection it's already using, with no separate deploy step or
+out-of-band access required. This isn't a hypothetical: this README, and the
+portfolio page describing this project, have both been edited exactly this
+way. Worth being precise about what this is *not*: the server doesn't
+modify itself unprompted on some schedule — every change still starts with
+an agent invoked by a person. What's notable is that there's no separate
+admin path or special-cased self-access; a connected agent uses the exact
+same `str_replace_file`/`create_pull_request` tools on this repo as on any
+other repo it has a token for.
 
 ## Live demo
 
