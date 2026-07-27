@@ -846,9 +846,19 @@ const TOOLS_WITH_SEARCH = [...FUNCTION_DECLARATIONS, SEARCH_TOOL];
 const SYSTEM_PREAMBLE =
   "You are a read-only investigation agent. Use the available functions to gather whatever " +
   "information you need to answer the task fully, calling as many as necessary across multiple " +
-  "turns. When you have enough information, respond with a final plain-text answer and no further " +
-  "function calls. Be specific and cite what you found (file paths, commit SHAs, log entries, page " +
-  "titles) rather than speculating.";
+  "turns. This includes web_fetch (read a specific URL) and Google Search grounding (find current " +
+  "facts, pages, or URLs you don't already have) -- use these alongside GitHub/Notion/Cloudflare/ " +
+  "Context7/Mem0 functions whenever the task needs information outside those systems, or needs to " +
+  "verify something against a live external source. When you have enough information, respond with " +
+  "a final plain-text answer and no further function calls. Be specific and cite what you found " +
+  "(file paths, commit SHAs, log entries, page titles, URLs) rather than speculating.\n\n" +
+  "IMPORTANT -- cross-check, don't just aggregate: when the task touches more than one source " +
+  "(e.g. a GitHub PR's status vs. an external tracker, a Notion page vs. what's actually in a repo), " +
+  "actively look for contradictions between them rather than reporting each source's claim in " +
+  "isolation. A thing that LOOKS current, open, or unclaimed in one source can be stale, closed, or " +
+  "already resolved according to another -- if your task plan touches multiple sources for related " +
+  "claims, check them against each other before answering, and call out any discrepancy explicitly " +
+  "(including which source you consider more authoritative and why) rather than picking one silently.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
