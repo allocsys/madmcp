@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/research.js — backs delegate_research's "wide mode"
+// connectors/exa/research.js — backs delegate_research's "wide mode"
 // (a `task`, no `url`/`question`) in tools.js -- the precision mode (single
 // url + question, one geminiGenerate call) stays inline in tools.js since
 // it's a genuinely different, simpler code path.
@@ -11,9 +11,10 @@
 // is gone -- this now calls Exa's /answer endpoint directly, which already
 // does search + synthesis with sources in a single call. No multi-step
 // loop, no checkpointing, no tool-combination handling, no Gemini call at
-// all. See connectors/exa/client.js for the retry/cooldown/key-rotation
+// all. See client.js (same directory) for the retry/cooldown/key-rotation
 // behavior backing this call, and git history for the prior Gemini-loop
-// implementation if it's ever wanted back.
+// implementation (from when this file lived under connectors/gemini/) if
+// it's ever wanted back.
 //
 // resume_run_id: tools.js's delegate_research still accepts this param for
 // wide mode (shared validation with delegate_gemini's checkpoint/resume
@@ -25,7 +26,7 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { exaWebSearch } from "../exa/client.js";
+import { exaWebSearch } from "./client.js";
 
 // Runs wide-mode research via a single Exa /answer call. Returns the same
 // { answer, steps, transcript, runId, task, failed? } shape the prior
