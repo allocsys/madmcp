@@ -49,7 +49,7 @@ export function register(server) {
 
   server.tool(
     "delegate_research",
-    "Delegate web research to Gemini, in one of two mutually-exclusive modes -- pass EITHER url+question (precision mode) OR task (wide mode). Do not pass both, and do not pass neither.\n\n" +
+    "Delegate web research, in one of two mutually-exclusive modes -- pass EITHER url+question (precision mode, via Gemini) OR task (wide mode, via Exa). Do not pass both, and do not pass neither.\n\n" +
     "PRECISION MODE (url + question): fetches the URL and hands its content + your question to Gemini in a single call, returning ONLY Gemini's compact answer, not the raw page. Use this when you need a specific answer from a page rather than the page's exact text (e.g. \"does this doc mention rate limits?\"). Not a substitute for web_fetch when you need exact wording, code snippets to copy, or content to edit.\n\n" +
     "WIDE MODE (task): hands an open-ended research task to Exa's /answer endpoint, which does its own web search + synthesis server-side in a single call and returns one answer with sources -- no multi-step loop (that Gemini-loop architecture was retired 2026-07-27; see research.js). Use this for things like \"what's the current status of X\" or comparing multiple sources, where a single page/question won't cover it. WEB-ONLY -- no GitHub/Notion/Cloudflare access (use delegate_gemini for internal-systems investigations instead). This is a single-shot call: max_steps is accepted but has no effect, and resume_run_id always returns a message explaining there's nothing to resume (kept for parameter compatibility with delegate_gemini, not because wide mode can actually be resumed). show_transcript still works, showing the one Exa call made.",
     {
