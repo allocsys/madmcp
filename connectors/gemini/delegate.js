@@ -823,7 +823,17 @@ const SYSTEM_PREAMBLE =
   "in isolation. A thing that LOOKS current, open, or resolved in one source can be stale or wrong " +
   "according to another -- if your task plan touches multiple sources for related claims, check them " +
   "against each other before answering, and call out any discrepancy explicitly (including which " +
-  "source you consider more authoritative and why) rather than picking one silently.";
+  "source you consider more authoritative and why) rather than picking one silently.\n\n" +
+  "IMPORTANT -- respect scope, don't let same-named symbols bleed across files: when a question is " +
+  "about whether something is used, referenced, or defined WITHIN A SPECIFIC FILE OR SCOPE (e.g. an " +
+  "unused-import lint warning, which is always per-file), only evidence found in THAT exact file or " +
+  "scope counts. A same-named function/variable being called somewhere else in the repo -- even in a " +
+  "file that imports it from the same source module -- does NOT mean it's used in the file the question " +
+  "is actually about; each file's own import/declaration is independent. Before calling a usage claim a " +
+  "'false positive' or asserting something IS used, quote the exact call site (file + line/snippet) " +
+  "inside the specific scope in question. If you can't produce that quote from within the scope asked " +
+  "about, say plainly that no such usage was found there, rather than pointing to usage elsewhere as if " +
+  "it answered the question.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
