@@ -267,6 +267,49 @@ export async function runResearch({ task, max_steps = 20, resume_run_id }) {
       contentsCheckpointedUpTo = contents.length;
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
+
+      // FULL-GEMINI-DOWN FALLBACK (2026-07-27): the search+function
+      // tool-combination fallback elsewhere in this file only covers ONE
+      // model rejecting that combination with a 400 mid-run -- it says
+      // nothing about Gemini being unavailable outright, e.g. every model
+      // in the GEMINI_MODEL/GEMINI_FALLBACK_MODELS cascade returning 429
+      // because the underlying quota is exhausted account-wide rather than
+      // per-model (client.js's cascade only helps when the limit really is
+      // per-model). That case used to fail the whole call even though
+      // openaiWebSearch (see OPENAI_WEB_SEARCH_FUNCTION above) is itself a
+      // complete "search + synthesize with sources" call, not just a
+      // Gemini-loop building block -- so it can stand in for the ENTIRE
+      // research task in one shot, not only for finding a single URL mid-run.
+      // Only attempted on a transient failure (429/503/network) with OpenAI
+      // configured; a non-transient error (400/401/etc.) means asking a
+      // different provider the same way wouldn't help either.
+      if (isTransientGeminiError(err) && OPENAI_API_KEYS.length > 0) {
+        try {
+          const fallbackAnswer = await openaiWebSearch(effectiveTask);
+          await deleteCheckpoint(runId);
+          return {
+            answer: `[Gemini was unavailable this run (${errMessage}) -- answered via OpenAI web_search fallback instead of the Gemini research loop:]\n\n${fallbackAnswer}`,
+            steps: step,
+            transcript,
+            runId,
+            task: effectiveTask,
+          };
+        } catch (fallbackErr) {
+          const fallbackErrMessage = fallbackErr?.message ?? String(fallbackErr);
+          const resumeHint = redisOk
+            ? ` ${transcript.length} tool call(s) already completed this run are saved. Call delegate_research again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
+            : ` ${transcript.length} tool call(s) were completed this run, but Redis is NOT configured in this environment, so nothing was actually saved -- resume_run_id: "${runId}" will NOT work. The only way to continue is a fresh call with the full task text.`;
+          return {
+            answer: `(Gemini call failed on step ${step}: ${errMessage} -- OpenAI fallback also failed: ${fallbackErrMessage}.${resumeHint})`,
+            steps: step - 1,
+            transcript,
+            runId,
+            task: effectiveTask,
+            failed: true,
+          };
+        }
+      }
+
       const resumeHint = isTransientGeminiError(err)
         ? (redisOk
             ? ` ${transcript.length} tool call(s) already completed this run are saved. Call delegate_research again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
