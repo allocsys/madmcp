@@ -223,6 +223,42 @@ export async function runResearch({ task, max_steps = 20, resume_run_id }) {
     startStep = 1;
   }
 
+  // DIRECT-TO-OPENAI BYPASS (2026-07-27): Gemini's free-tier quota is
+  // currently exhausted account-wide, so every model in GEMINI_MODEL/
+  // GEMINI_FALLBACK_MODELS 429s on step 1 of every fresh call -- paying for
+  // a guaranteed-to-fail Gemini request before falling back just adds
+  // latency. Skip the Gemini loop entirely on a FRESH call (no live
+  // checkpoint to resume) and answer via OpenAI's web_search directly when
+  // it's configured. NOTE: unlike Gemini's free tier, OpenAI's web_search
+  // tool has NO free tier -- see connectors/openai/client.js's file header
+  // (~$10/1,000 calls, on top of per-token pricing). This trades one
+  // Gemini-loop's worth of tool-use/multi-step depth for a single-shot
+  // OpenAI web_search call; remove this bypass once Gemini quota/billing is
+  // sorted out and the multi-step loop is wanted again.
+  if (!checkpoint && OPENAI_API_KEYS.length > 0) {
+    try {
+      const answer = await openaiWebSearch(effectiveTask);
+      await deleteCheckpoint(runId);
+      return {
+        answer,
+        steps: 1,
+        transcript: [`[step 1] openai_web_search (direct -- Gemini step skipped, quota exhausted) -> ${answer.length > 300 ? answer.slice(0, 300) + "…" : answer}`],
+        runId,
+        task: effectiveTask,
+      };
+    } catch (err) {
+      const errMessage = err?.message ?? String(err);
+      return {
+        answer: `(OpenAI direct research call failed: ${errMessage})`,
+        steps: 0,
+        transcript: [],
+        runId,
+        task: effectiveTask,
+        failed: true,
+      };
+    }
+  }
+
   if (checkpoint && startStep > cappedSteps) {
     return {
       answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call delegate_research again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
