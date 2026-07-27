@@ -110,8 +110,8 @@ async function callGenerateContent(body, requestedModel) {
 
 // Single-turn text generation. Takes a plain prompt string (build any
 // system/user framing into it before calling) and returns the model's text
-// output. Used by Delegate_web_fetch -- a genuine one-shot "here's context,
-// answer this" call with no tool use.
+// output. Used by delegate_research's precision mode (url + question) --
+// a genuine one-shot "here's context, answer this" call with no tool use.
 export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTokens } = {}) {
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -133,7 +133,9 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 }
 
 // Multi-turn call WITH function-calling support -- used by
-// connectors/gemini/delegate.js's investigation loop. Unlike geminiGenerate,
+// connectors/gemini/delegate.js's GitHub/Notion/Cloudflare investigation loop
+// AND connectors/gemini/research.js's web-only research loop (delegate_research's
+// wide mode). Unlike geminiGenerate,
 // this takes/returns the raw `contents` conversation array and the raw
 // candidate, since the caller (delegate.js) needs to inspect whether the
 // response is a functionCall (keep looping) or plain text (done), which a
@@ -148,9 +150,16 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 // with functionResponse.id echoing the originating functionCall.id. See
 // delegate.js for how a turn is actually built -- don't "fix" it back to
 // role: "function" without re-checking current docs against the model in use.
-export async function geminiChat(contents, { model = GEMINI_MODEL, tools, maxOutputTokens } = {}) {
+export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolConfig, maxOutputTokens } = {}) {
   const body = { contents };
   if (tools) body.tools = tools;
+  // toolConfig is currently only ever passed as
+  // { includeServerSideToolInvocations: true } by research.js, required to
+  // combine the native googleSearch tool with a custom function declaration
+  // in the same call (see research.js's file header for the exact contract
+  // -- confirmed against Google's generateContent tool-combination docs,
+  // 2026-07-27). delegate.js never passes this: it has no built-in tools.
+  if (toolConfig) body.toolConfig = toolConfig;
   if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
 
   const data = await callGenerateContent(body, model);
