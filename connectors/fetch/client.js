@@ -87,8 +87,9 @@ async function assertSafeUrl(urlStr) {
 
 // Strip HTML tags and collapse whitespace into readable plain text. Lives
 // here (not fetch/tools.js) so other connectors that need the same
-// HTML-to-text step server-side -- e.g. gemini/tools.js's Delegate_web_fetch,
-// which strips a fetched page before handing it to Gemini -- can reuse this
+// HTML-to-text step server-side -- e.g. gemini/tools.js's delegate_research
+// (both its precision mode and, via research.js, its wide mode), which
+// strips a fetched page before handing it to Gemini -- can reuse this
 // instead of duplicating the tag/entity-stripping regexes.
 export function htmlToText(html) {
   return html
