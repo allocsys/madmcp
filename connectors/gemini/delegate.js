@@ -62,7 +62,7 @@ const HARD_MAX_STEPS = 30;
 // safety/recitation block) is a config or request problem that will
 // reproduce identically on a resume, not something retrying fixes.
 function isTransientGeminiError(err) {
-  return err?.status === 429 || err?.status === 503;
+  return err?.status === 429 || err?.status === 503 || err?.transient === true;
 }
 
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
