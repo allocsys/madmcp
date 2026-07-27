@@ -830,6 +830,19 @@ const FUNCTION_DECLARATIONS = [{
   functionDeclarations: FUNCTIONS.map(({ name, description, parameters }) => ({ name, description, parameters })),
 }];
 
+// Native Gemini tool (Google Search grounding) -- deliberately NOT one of
+// the FUNCTIONS above: Gemini executes this itself server-side and returns
+// grounded text directly, with no execute() round-trip through this file.
+// This is what actually lets the loop DISCOVER a URL or current fact it
+// doesn't already have -- web_fetch (in FUNCTIONS) only reads a URL it's
+// already been given. Combining this with custom functionDeclarations in
+// the same request ("multi-tool use") is newer Gemini behavior and not
+// guaranteed to be supported by every model in GEMINI_FALLBACK_MODELS --
+// see runInvestigation's searchToolDisabledThisRun for the same-step
+// fallback if a given model rejects the combination.
+const SEARCH_TOOL = { google_search: {} };
+const TOOLS_WITH_SEARCH = [...FUNCTION_DECLARATIONS, SEARCH_TOOL];
+
 const SYSTEM_PREAMBLE =
   "You are a read-only investigation agent. Use the available functions to gather whatever " +
   "information you need to answer the task fully, calling as many as necessary across multiple " +
