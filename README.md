@@ -29,8 +29,8 @@ its own tool-use loop server-side and returns one synthesized answer. This
 is split across two tools along a security boundary: `delegate_gemini`
 covers GitHub, Cloudflare, and Notion (no web access), while
 `delegate_research` covers the live web (a precision single-page mode, or
-an open-ended multi-step wide research mode) with no access to those
-internal systems. Both are described first under Connectors & tools below.
+a single-shot wide research mode via Exa's `/answer` endpoint) with no
+access to those internal systems. Both are described first under Connectors & tools below.
 
 On top of that, the server also gives an AI agent direct tool-level access
 to real infrastructure — GitHub, Cloudflare, Notion, Mem0, Context7, and
@@ -156,17 +156,21 @@ selected by which args are passed:
   Gemini's answer to a specific question about its content, without
   returning the raw page. Use this instead of `web_fetch` when you need a
   distilled answer rather than exact wording to copy.
-- **Wide mode** (`task`): an open-ended, multi-step research loop —
-  Google Search grounding to find pages, `web_fetch` to read them — bounded
-  by `max_steps`, returning one synthesized answer.
+- **Wide mode** (`task`): a single-shot call to Exa's `/answer` endpoint,
+  which does its own web search + synthesis server-side and returns one
+  answer with sources. No multi-step loop, no effect from `max_steps`, and
+  nothing to resume via `resume_run_id` (that Gemini-loop architecture was
+  retired 2026-07-27).
 
-Progress on both `delegate_gemini` and wide-mode `delegate_research` runs is
-checkpointed to Redis after every completed step. If the underlying Gemini
-API call fails partway through (429/503/network blip), the response includes
-a `resume_run_id` and everything gathered so far instead of losing the run
-outright — pass that id back on a follow-up call to continue from the last
-completed step (checkpoint TTL: 1 hour) rather than re-running, and
-re-paying for, steps already done.
+Progress on `delegate_gemini` runs is checkpointed to Redis after every
+completed step. If the underlying Gemini API call fails partway through
+(429/503/network blip), the response includes a `resume_run_id` and
+everything gathered so far instead of losing the run outright — pass that
+id back on a follow-up call to continue from the last completed step
+(checkpoint TTL: 1 hour) rather than re-running, and re-paying for, steps
+already done. Wide-mode `delegate_research` is a single Exa call with no
+steps to checkpoint — a failure just returns an error, and `resume_run_id`
+is accepted only for parameter compatibility with `delegate_gemini`.
 
 Both tools can optionally log their task/question, step-by-step tool calls,
 and final answer to a Notion page under a fixed Gemini root page
