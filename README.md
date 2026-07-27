@@ -25,9 +25,12 @@
 `madmcp`'s core idea is **delegation**: instead of an agent making 5-10
 manual tool calls to run an investigation itself, it can hand an open-ended,
 read-only investigation (or a single page + question) to Gemini, which runs
-its own tool-use loop server-side — across GitHub, Cloudflare, and Notion —
-and returns one synthesized answer. That's `delegate_gemini` and
-`Delegate_web_fetch`, described first under Connectors & tools below.
+its own tool-use loop server-side and returns one synthesized answer. This
+is split across two tools along a security boundary: `delegate_gemini`
+covers GitHub, Cloudflare, and Notion (no web access), while
+`delegate_research` covers the live web (a precision single-page mode, or
+an open-ended multi-step wide research mode) with no access to those
+internal systems. Both are described first under Connectors & tools below.
 
 On top of that, the server also gives an AI agent direct tool-level access
 to real infrastructure — GitHub, Cloudflare, Notion, Mem0, Context7, and
@@ -131,6 +134,13 @@ See **Configuration** below for the full variable reference.
 ## Connectors & tools
 
 ### ⭐ Gemini (delegation) — the flagship feature
+The two delegation tools split along a security boundary: `delegate_gemini`
+has no web access, `delegate_research` has no access to GitHub/Notion/
+Cloudflare. This means a malicious page or search result encountered
+mid-research can influence at most that run's own answer — it has no
+internal-system data to exfiltrate, because that loop never has access to
+any in the first place.
+
 `delegate_gemini` — hand an open-ended, multi-step, read-only investigation
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
 the last week") to Gemini instead of making 5-10 separate manual tool calls.
@@ -140,17 +150,23 @@ answer. Falls through an ordered model cascade (`GEMINI_MODEL` →
 `GEMINI_FALLBACK_MODELS`) on rate limits, with Redis-backed per-model cooldown
 so already-limited models are skipped rather than retried.
 
-Progress is checkpointed to Redis after every completed step. If the Gemini
-API call itself fails partway through (429/503/network blip), the response
-includes a `resume_run_id` and everything gathered so far instead of losing
-the run outright — pass that id back on a follow-up `delegate_gemini` call
-to continue from the last completed step (checkpoint TTL: 1 hour) rather than
-re-running, and re-paying for, steps already done.
+`delegate_research` — web research, in one of two mutually-exclusive modes
+selected by which args are passed:
+- **Precision mode** (`url` + `question`): fetch a single URL and get back
+  Gemini's answer to a specific question about its content, without
+  returning the raw page. Use this instead of `web_fetch` when you need a
+  distilled answer rather than exact wording to copy.
+- **Wide mode** (`task`): an open-ended, multi-step research loop —
+  Google Search grounding to find pages, `web_fetch` to read them — bounded
+  by `max_steps`, returning one synthesized answer.
 
-`Delegate_web_fetch` — fetch a single URL and get back Gemini's answer to a
-specific question about its content, without returning the raw page. Use this
-instead of `web_fetch` when you need a distilled answer rather than exact
-wording to copy.
+Progress on both `delegate_gemini` and wide-mode `delegate_research` runs is
+checkpointed to Redis after every completed step. If the underlying Gemini
+API call fails partway through (429/503/network blip), the response includes
+a `resume_run_id` and everything gathered so far instead of losing the run
+outright — pass that id back on a follow-up call to continue from the last
+completed step (checkpoint TTL: 1 hour) rather than re-running, and
+re-paying for, steps already done.
 
 Both tools can optionally log their task/question, step-by-step tool calls,
 and final answer to a Notion page under a fixed Gemini root page
@@ -224,7 +240,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `MEM0_API_KEY` | Mem0 tools (`MEM0_USER_ID` optional, defaults to `default`) |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
-| `GEMINI_API_KEY` | Gemini tools (`delegate_gemini`, `Delegate_web_fetch`) — required, throws if unset |
+| `GEMINI_API_KEY` | Gemini tools (`delegate_gemini`, `delegate_research`) — required, throws if unset |
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
