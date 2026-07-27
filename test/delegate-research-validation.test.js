@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // success paths too (where the stubs' return values matter).
 
 const CLIENT_PATH = "../connectors/gemini/client.js";
-const RESEARCH_PATH = "../connectors/gemini/research.js";
+const RESEARCH_PATH = "../connectors/exa/research.js";
 const FETCH_PATH = "../connectors/fetch/client.js";
 const NOTION_PATH = "../connectors/notion/tools.js";
 const TOOLS_PATH = "../connectors/gemini/tools.js";
