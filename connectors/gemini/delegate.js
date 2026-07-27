@@ -205,6 +205,30 @@ const FUNCTIONS = [
     },
   },
   {
+    name: "web_fetch",
+    description: "Fetch the content of a public URL (http/https only; private/internal addresses are blocked) and return its text, JSON, or stripped HTML. Use this to read a specific page, doc, or API response you already have the URL for. Combine with google_search grounding (available natively in this loop, not as a separate function) to first find a URL before fetching it.",
+    parameters: {
+      type: "object",
+      properties: {
+        url:      { type: "string", description: "The URL to fetch (must be http:// or https://)" },
+        raw_html: { type: "boolean", description: "Return raw HTML instead of stripped plain text (default: false)" },
+      },
+      required: ["url"],
+    },
+    execute: async ({ url, raw_html = false }) => {
+      const { status, ok, contentType, text } = await fetchUrl(url);
+      let output = text;
+      if (!raw_html && contentType.includes("text/html")) {
+        output = htmlToText(text);
+      } else if (contentType.includes("application/json")) {
+        try { output = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep raw */ }
+      }
+      const prefix = `HTTP ${status} — ${url}${ok ? "" : " (non-2xx response)"}\n\n`;
+      const combined = prefix + output;
+      return combined.length > WEB_FETCH_MAX_CHARS ? combined.slice(0, WEB_FETCH_MAX_CHARS) + "\n...[truncated]" : combined;
+    },
+  },
+  {
     name: "cf_query_logs",
     description: "Query Cloudflare Workers Observability logs/traces/events for a time range.",
     parameters: {
