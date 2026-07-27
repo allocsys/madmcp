@@ -11,7 +11,7 @@ import {
   buildRelationBlocks, parseRelationBlocks,
   buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
 } from "./client.js";
-import { findLinkCandidates, extractTags, findTagOverlapCandidates } from "./linking.js";
+import { findLinkCandidates, extractTags } from "./linking.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
 
