@@ -1,19 +1,15 @@
 // ---------------------------------------------------------------------------
-// connectors/exa/client.js — Exa /answer API, used as a search+synthesis
-// fallback. Docs: https://docs.exa.ai/reference/answer
+// connectors/exa/client.js — Exa /answer API, backing delegate_research's
+// wide mode. Docs: https://docs.exa.ai/reference/answer
 // Auth header: "x-api-key: <api_key>"
 //
-// WHY THIS EXISTS ALONGSIDE GEMINI'S NATIVE GOOGLE SEARCH GROUNDING:
-// research.js (same directory) already gets search via the native
-// googleSearch tool combined with the web_fetch function -- see that
-// file's header for the exact combination contract. But that combination
-// is a Preview feature limited to Gemini 3 models, and GEMINI_FALLBACK_MODELS
-// (config.js) may include an older model that rejects it outright (400).
-// When that happens mid-run, research.js sets searchToolDisabledThisRun
-// and falls back to FUNCTION_DECLARATIONS only -- which, without a
-// standalone search fallback, means web_fetch with NO way to find a URL
-// it doesn't already have. exaWebSearch() below plugs that gap as an
-// ordinary function tool, no native-tool combination involved at all.
+// NOT A FALLBACK ANYMORE (2026-07-27): this file used to plug a gap in
+// research.js's Gemini-native-search-grounding loop (for older
+// GEMINI_FALLBACK_MODELS that rejected the search+web_fetch tool
+// combination). That loop is gone -- research.js (same directory) now
+// calls exaWebSearch() below directly, as the only implementation of wide
+// mode, not as a fallback for anything. See research.js's header for that
+// history and the full rationale.
 //
 // FORMERLY OPENAI (2026-07-27): this file replaces connectors/openai/
 // client.js, which did the same job via OpenAI's Responses API web_search
