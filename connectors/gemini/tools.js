@@ -48,38 +48,105 @@ const DEFAULT_MAX_SOURCE_CHARS = 300000;
 export function register(server) {
 
   server.tool(
-    "Delegate_web_fetch",
-    "Fetch a URL and answer a specific question about its content, WITHOUT returning the raw page. Fetching and reading happen server-side via Gemini -- only Gemini's compact answer is returned to you. Use this instead of web_fetch whenever you need a specific answer from a page rather than the page's exact text (e.g. \"does this doc mention rate limits?\" rather than \"give me this page verbatim\"). Not a substitute for web_fetch when you need exact wording, code snippets to copy, or content to edit.",
+    "delegate_research",
+    "Delegate web research to Gemini, in one of two mutually-exclusive modes -- pass EITHER url+question (precision mode) OR task (wide mode). Do not pass both, and do not pass neither.\n\n" +
+    "PRECISION MODE (url + question): fetches the URL and hands its content + your question to Gemini in a single call, returning ONLY Gemini's compact answer, not the raw page. Use this when you need a specific answer from a page rather than the page's exact text (e.g. \"does this doc mention rate limits?\"). Not a substitute for web_fetch when you need exact wording, code snippets to copy, or content to edit.\n\n" +
+    "WIDE MODE (task): hands an open-ended research task to Gemini, which runs its own multi-step loop server-side -- Google Search grounding to find pages, web_fetch to read them -- across as many turns as needed (bounded by max_steps) and returns one synthesized answer. Use this for things like \"what's the current status of X\" or comparing multiple sources, where a single page/question won't cover it. WEB-ONLY -- no GitHub/Notion/Cloudflare access (use delegate_gemini for internal-systems investigations instead). Supports resume_run_id/show_transcript the same way delegate_gemini does, for continuing a run that failed partway through.",
     {
-      url:              z.string().url().describe("The URL to fetch"),
-      question:         z.string().describe("The specific question to answer using the page's content. Be specific -- vague questions get vague answers."),
-      max_source_chars: z.number().optional().describe(`Truncate the fetched page to this many characters before sending to Gemini (default: ${DEFAULT_MAX_SOURCE_CHARS})`),
-      log_to_notion:    z.boolean().optional().describe("Whether to log this URL/question/answer as a page under the Gemini section of Notion (default: false). The write always targets the fixed Gemini root page -- this cannot be redirected elsewhere."),
+      url:              z.string().url().optional().describe("PRECISION MODE: the URL to fetch. Must be paired with `question`; do not combine with `task`."),
+      question:         z.string().optional().describe("PRECISION MODE: the specific question to answer using the page's content. Be specific -- vague questions get vague answers. Must be paired with `url`."),
+      max_source_chars: z.number().optional().describe(`PRECISION MODE only: truncate the fetched page to this many characters before sending to Gemini (default: ${DEFAULT_MAX_SOURCE_CHARS}).`),
+      task:             z.string().optional().describe("WIDE MODE: the research task/question, described with enough context for Gemini to act without needing to ask you anything back -- it can't. Do not combine with `url`/`question`. Optional only when resume_run_id resolves to a live checkpoint."),
+      max_steps:        z.number().optional().describe("WIDE MODE only: max tool-use turns Gemini gets before being forced to answer (default 20, hard cap 30 regardless of this value)."),
+      resume_run_id:    z.string().optional().describe("WIDE MODE only: a runId returned from a previous failed/partial wide-mode call. If its checkpoint is still live (1 hour TTL), continues that run instead of starting fresh."),
+      show_transcript:  z.boolean().optional().describe("WIDE MODE only: include the full step-by-step tool-call transcript in the response, even on a successful run (default: false)."),
+      log_to_notion:    z.boolean().optional().describe("Whether to log this call's inputs/outputs as a page under the Gemini section of Notion (default: false). The write always targets the fixed Gemini root page -- this cannot be redirected elsewhere."),
     },
-    async ({ url, question, max_source_chars = DEFAULT_MAX_SOURCE_CHARS, log_to_notion = false }) => {
-      let fetched;
-      try {
-        fetched = await fetchUrl(url);
-      } catch (err) {
-        return { content: [{ type: "text", text: `Fetch failed: ${err?.message ?? String(err)}` }], isError: true };
+    async ({ url, question, max_source_chars = DEFAULT_MAX_SOURCE_CHARS, task, max_steps = 20, resume_run_id, show_transcript = false, log_to_notion = false }) => {
+      // Mode selection is by presence of args, not an explicit "mode" param --
+      // see file header. Validate mutual exclusivity up front so a caller who
+      // passes both (or neither) gets a clear error instead of one set of
+      // args being silently ignored.
+      const hasPrecisionArgs = url !== undefined || question !== undefined;
+      const hasWideArgs = task !== undefined || resume_run_id !== undefined;
+
+      if (hasPrecisionArgs && hasWideArgs) {
+        return { content: [{ type: "text", text: "Invalid arguments: pass EITHER url+question (precision mode) OR task/resume_run_id (wide mode), not both." }], isError: true };
+      }
+      if (!hasPrecisionArgs && !hasWideArgs) {
+        return { content: [{ type: "text", text: "Missing arguments: pass either url+question (precision mode) or task (wide mode)." }], isError: true };
+      }
+      if (hasPrecisionArgs && (url === undefined || question === undefined)) {
+        return { content: [{ type: "text", text: "Precision mode requires BOTH url and question." }], isError: true };
+      }
+      if (hasWideArgs && !task && !resume_run_id) {
+        return { content: [{ type: "text", text: "Wide mode requires task, unless resuming a live checkpoint via resume_run_id." }], isError: true };
+      }
+      // Same off-by-invalid-input guard as delegate_gemini's max_steps check --
+      // see tools.js's delegate_gemini handler comment for the full reasoning.
+      if (hasWideArgs && max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
+        return { content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 30 regardless of a larger value.` }], isError: true };
       }
 
-      let sourceText = fetched.contentType.includes("text/html") ? htmlToText(fetched.text) : fetched.text;
-      const truncated = sourceText.length > max_source_chars;
-      if (truncated) sourceText = sourceText.slice(0, max_source_chars);
+      if (hasPrecisionArgs) {
+        // ---- Precision mode: single fetch + single geminiGenerate call ----
+        let fetched;
+        try {
+          fetched = await fetchUrl(url);
+        } catch (err) {
+          return { content: [{ type: "text", text: `Fetch failed: ${err?.message ?? String(err)}` }], isError: true };
+        }
 
-      const prompt =
-        `Answer the question below using ONLY the page content provided. ` +
-        `Be concise and specific. If the answer isn't in the content, say so plainly rather than guessing.\n\n` +
-        `Question: ${question}\n\n` +
-        `Page content (from ${url}${truncated ? ", truncated" : ""}):\n${sourceText}`;
+        let sourceText = fetched.contentType.includes("text/html") ? htmlToText(fetched.text) : fetched.text;
+        const truncated = sourceText.length > max_source_chars;
+        if (truncated) sourceText = sourceText.slice(0, max_source_chars);
 
-      let answer;
-      try {
-        answer = await geminiGenerate(prompt);
-      } catch (err) {
-        return { content: [{ type: "text", text: `Gemini call failed: ${err?.message ?? String(err)}` }], isError: true };
+        const prompt =
+          `Answer the question below using ONLY the page content provided. ` +
+          `Be concise and specific. If the answer isn't in the content, say so plainly rather than guessing.\n\n` +
+          `Question: ${question}\n\n` +
+          `Page content (from ${url}${truncated ? ", truncated" : ""}):\n${sourceText}`;
+
+        let answer;
+        try {
+          answer = await geminiGenerate(prompt);
+        } catch (err) {
+          return { content: [{ type: "text", text: `Gemini call failed: ${err?.message ?? String(err)}` }], isError: true };
+        }
+
+        let notionNote = "";
+        if (log_to_notion) {
+          try {
+            const logged = await doCreatePage({
+              parent_id:   GEMINI_NOTION_ROOT_PAGE_ID,
+              parent_type: "page",
+              title:       `delegate_research (precision): ${url}`,
+              content:     `URL: ${url}\nQuestion: ${question}\n\nAnswer:\n${answer}`,
+              one_off:     true,
+            });
+            notionNote = `\n\n(Logged to Notion: ${logged.url})`;
+          } catch (err) {
+            // Best-effort -- a failed log write shouldn't hide the answer the
+            // caller actually asked for.
+            notionNote = `\n\n(⚠️ Notion logging failed: ${err.message})`;
+          }
+        }
+
+        return { content: [{ type: "text", text: `${answer}${notionNote}` }] };
       }
+
+      // ---- Wide mode: multi-step, web-only research loop (research.js) ----
+      let result;
+      try {
+        result = await runResearch({ task, max_steps, resume_run_id });
+      } catch (err) {
+        return { content: [{ type: "text", text: `Research failed: ${err?.message ?? String(err)}` }], isError: true };
+      }
+
+      // On a resumed run, task may be undefined here -- runResearch returns
+      // the effective task text it actually used, mirroring delegate_gemini's
+      // handling below.
+      const effectiveTask = task || result.task || "(resumed run)";
 
       let notionNote = "";
       if (log_to_notion) {
@@ -87,19 +154,21 @@ export function register(server) {
           const logged = await doCreatePage({
             parent_id:   GEMINI_NOTION_ROOT_PAGE_ID,
             parent_type: "page",
-            title:       `Delegate_web_fetch: ${url}`,
-            content:     `URL: ${url}\nQuestion: ${question}\n\nAnswer:\n${answer}`,
+            title:       `${result.failed ? "delegate_research (partial): " : "delegate_research: "}${effectiveTask.slice(0, 80)}`,
+            content:     `Task: ${effectiveTask}\n\nrunId: ${result.runId}${result.failed ? " (resumable)" : ""}\n\nSteps taken: ${result.steps}\n\nTool calls:\n${result.transcript.join("\n") || "(none)"}\n\nAnswer:\n${result.answer}`,
             one_off:     true,
           });
           notionNote = `\n\n(Logged to Notion: ${logged.url})`;
         } catch (err) {
-          // Best-effort -- a failed log write shouldn't hide the answer the
-          // caller actually asked for.
           notionNote = `\n\n(⚠️ Notion logging failed: ${err.message})`;
         }
       }
 
-      return { content: [{ type: "text", text: `${answer}${notionNote}` }] };
+      const transcriptBlock = result.transcript?.length && (result.failed || show_transcript)
+        ? `\n\n${result.failed ? "Tool calls completed before the failure" : "Tool call transcript"}:\n${result.transcript.join("\n")}`
+        : "";
+
+      return { content: [{ type: "text", text: `${result.answer}${transcriptBlock}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: !!result.failed };
     }
   );
 
