@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // connectors/frontend/client.js — provider-agnostic one-shot text generation
-// for delegate_frontend_design. Flip FRONTEND_PROVIDER in config.js (or the
+// for delegate_designer. Flip FRONTEND_PROVIDER in config.js (or the
 // env var of the same name) to change which backend this calls -- nothing
 // in tools.js needs to change when swapping providers.
 //
