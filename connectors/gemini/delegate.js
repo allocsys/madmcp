@@ -44,7 +44,6 @@ import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.j
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
-import { fetchUrl, htmlToText } from "../fetch/client.js";
 import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
 import { cfAccountRequest } from "../cloudflare/client.js";
 import { context7Request } from "../context7/client.js";
