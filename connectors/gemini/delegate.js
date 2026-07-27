@@ -833,7 +833,17 @@ const SYSTEM_PREAMBLE =
   "'false positive' or asserting something IS used, quote the exact call site (file + line/snippet) " +
   "inside the specific scope in question. If you can't produce that quote from within the scope asked " +
   "about, say plainly that no such usage was found there, rather than pointing to usage elsewhere as if " +
-  "it answered the question.";
+  "it answered the question.\n\n" +
+  "IMPORTANT -- re-scan your OWN retrieved text before writing a verdict word (consistent, fixed, " +
+  "resolved, stale, up-to-date, matches, etc.): a long tool-use run compresses many turns of raw " +
+  "file/page content into one final summary, and that compression step is itself a separate inference " +
+  "that can pattern-match toward a comfortable verdict even when the contradicting text is sitting " +
+  "unused in your own transcript. If your task asks you to check whether something is stale, " +
+  "inconsistent, or still-accurate, before writing the verdict go back through EVERY piece of raw " +
+  "content you fetched (not just the ones that confirm your leaning) and check it against the specific " +
+  "claim in the question -- do not let a majority of confirming sources outvote a single contradicting " +
+  "one you already retrieved. If you find a contradiction this way, quote it and flag it explicitly " +
+  "even if most of what you found points the other way.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
