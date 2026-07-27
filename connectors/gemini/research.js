@@ -1,66 +1,23 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/research.js — read-only, WEB-ONLY multi-step research
-// loop. Backs delegate_research's "wide mode" (a `task`, no `url`/`question`)
-// in tools.js -- the precision mode (single url + question, one geminiGenerate
-// call, no loop) stays inline in tools.js since it's genuinely a different,
-// much simpler code path.
+// connectors/gemini/research.js — backs delegate_research's "wide mode"
+// (a `task`, no `url`/`question`) in tools.js -- the precision mode (single
+// url + question, one geminiGenerate call) stays inline in tools.js since
+// it's a genuinely different, simpler code path.
 //
-// SECURITY BOUNDARY (2026-07-27): this file has NO access to GitHub, Notion,
-// Cloudflare, Context7, or Mem0 -- the only two capabilities here are
-// web_fetch (read a URL) and Google Search grounding (find one). This is
-// deliberate, not an oversight: keeping web research in its own loop with
-// its own function set means a malicious page or search result Gemini
-// encounters mid-run can influence AT MOST the text of THIS run's answer --
-// it has no private data to exfiltrate, because this loop never has access
-// to any in the first place. (See delegate.js for the GitHub/Notion/
-// Cloudflare/Context7/Mem0 loop -- that one deliberately has NO web access,
-// for the same reason in reverse. Do not merge the two function sets back
-// together; that reintroduces the exact exfiltration path this split closes.)
-//
-// UNTRUSTED CONTENT: fetched pages and search results are external,
-// attacker-influenceable text, unlike delegate.js's GitHub/Notion/Cloudflare
-// sources. SYSTEM_PREAMBLE below explicitly tells Gemini to treat that
-// content as data, not instructions -- see its comment for why this is a
-// prompt-level mitigation only, not a substitute for the capability
-// isolation above (which is the actual security boundary).
-//
-// TOOL COMBINATION CONTRACT (confirmed against Google's generateContent
-// "Combine built-in tools and function calling" docs, 2026-07-27 --
-// https://ai.google.dev/gemini-api/docs/generate-content/tool-combination):
-// combining the built-in google_search tool with a custom function
-// declaration (web_fetch) in one generateContent call requires BOTH:
-//   (a) the built-in tool's REST key to be camelCase "googleSearch" -- NOT
-//       snake_case "google_search". The snake_case form is a real, distinct
-//       bug (not just a model-support gap): it 400s on this endpoint
-//       regardless of model. (An earlier version of this loop, since
-//       reverted, used the wrong casing and likely explains why its
-//       same-step fallback was triggering on effectively every step.)
-//   (b) `toolConfig: { includeServerSideToolInvocations: true }` on EVERY
-//       request in the conversation, not just the first turn.
-// This is a Preview feature, Gemini 3 models only -- GEMINI_FALLBACK_MODELS
-// may include an older model that rejects the combination outright even
-// with (a) and (b) correct, hence SEARCH_DISABLED_THIS_RUN's same-step
-// fallback below.
-//
-// Everything else here (checkpointing via checkpoint.js, stuck-loop
-// detection, step-budget reminders, resumability) intentionally mirrors
-// delegate.js's runInvestigation -- same proven patterns, applied to a much
-// smaller function set. isTransientGeminiError is duplicated rather than
-// imported from delegate.js: these two loops are meant to stay independent
-// files with no runtime coupling between them (see the security-boundary
-// note above), so a few duplicated lines here are preferable to a cross-
-// import that would make it easy to accidentally wire them together later.
+// NO GEMINI "FIRST TRY" (2026-07-27): this used to run a multi-step Gemini
+// loop first (native Google Search grounding + a web_fetch function tool),
+// falling back to OpenAI's web_search only when Gemini failed or its search
+// tool was rejected mid-run. That architecture, and OpenAI along with it,
+// is gone -- this now calls Exa's /answer endpoint directly, which already
+// does search + synthesis with sources in a single call. No multi-step
+// loop, no checkpointing, no tool-combination handling, no Gemini call at
+// all. See connectors/exa/client.js for the retry/cooldown/key-rotation
+// behavior backing this call, and git history for the prior Gemini-loop
+// implementation if it's ever wanted back.
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { geminiChat } from "./client.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.js";
-import { isRedisConfigured } from "./cooldown.js";
-import { fetchUrl, htmlToText } from "../fetch/client.js";
-import { openaiWebSearch } from "../openai/client.js";
-import { OPENAI_API_KEYS } from "../../config.js";
-
-const HARD_MAX_STEPS = 30;
+import { exaWebSearch } from "../exa/client.js";
 
 // Cap on how much of a fetched page's text is fed back into Gemini's own
 // loop -- this is server-side context consumed by Gemini's next turn, not
