@@ -133,9 +133,8 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 }
 
 // Multi-turn call WITH function-calling support -- used by
-// connectors/gemini/delegate.js's GitHub/Notion/Cloudflare investigation loop
-// AND connectors/gemini/research.js's web-only research loop (delegate_research's
-// wide mode). Unlike geminiGenerate,
+// connectors/gemini/delegate.js's GitHub/Notion/Cloudflare investigation loop.
+// Unlike geminiGenerate,
 // this takes/returns the raw `contents` conversation array and the raw
 // candidate, since the caller (delegate.js) needs to inspect whether the
 // response is a functionCall (keep looping) or plain text (done), which a

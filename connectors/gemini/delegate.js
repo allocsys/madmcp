@@ -800,10 +800,10 @@ const FUNCTION_DECLARATIONS = [{
 
 // SCOPE NOTE (2026-07-27): this file deliberately has NO web access (no
 // web_fetch, no Google Search grounding) -- that lives entirely in
-// connectors/gemini/research.js, behind the separate delegate_research
+// connectors/exa/research.js, behind the separate delegate_research
 // tool. Keeping the two apart is a security boundary, not just a UX split:
 // this loop reads private GitHub/Notion/Cloudflare/Context7/Mem0 data, and
-// research.js's loop reads untrusted public web content -- a single loop
+// research.js's Exa call reads untrusted public web content -- a single loop
 // with both would let a malicious page or search result Gemini encounters
 // mid-investigation try to talk the model into leaking whatever it just
 // read from those private systems (e.g. via a crafted outbound fetch to an
