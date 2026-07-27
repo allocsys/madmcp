@@ -798,35 +798,32 @@ const FUNCTION_DECLARATIONS = [{
   functionDeclarations: FUNCTIONS.map(({ name, description, parameters }) => ({ name, description, parameters })),
 }];
 
-// Native Gemini tool (Google Search grounding) -- deliberately NOT one of
-// the FUNCTIONS above: Gemini executes this itself server-side and returns
-// grounded text directly, with no execute() round-trip through this file.
-// This is what actually lets the loop DISCOVER a URL or current fact it
-// doesn't already have -- web_fetch (in FUNCTIONS) only reads a URL it's
-// already been given. Combining this with custom functionDeclarations in
-// the same request ("multi-tool use") is newer Gemini behavior and not
-// guaranteed to be supported by every model in GEMINI_FALLBACK_MODELS --
-// see runInvestigation's searchToolDisabledThisRun for the same-step
-// fallback if a given model rejects the combination.
-const SEARCH_TOOL = { google_search: {} };
-const TOOLS_WITH_SEARCH = [...FUNCTION_DECLARATIONS, SEARCH_TOOL];
+// SCOPE NOTE (2026-07-27): this file deliberately has NO web access (no
+// web_fetch, no Google Search grounding) -- that lives entirely in
+// connectors/gemini/research.js, behind the separate delegate_research
+// tool. Keeping the two apart is a security boundary, not just a UX split:
+// this loop reads private GitHub/Notion/Cloudflare/Context7/Mem0 data, and
+// research.js's loop reads untrusted public web content -- a single loop
+// with both would let a malicious page or search result Gemini encounters
+// mid-investigation try to talk the model into leaking whatever it just
+// read from those private systems (e.g. via a crafted outbound fetch to an
+// attacker-controlled URL). Neither loop can do that, because neither ever
+// has both capabilities available at once. Do NOT re-add web_fetch or a
+// google_search tool here -- add web capability to research.js instead.
 
 const SYSTEM_PREAMBLE =
   "You are a read-only investigation agent. Use the available functions to gather whatever " +
   "information you need to answer the task fully, calling as many as necessary across multiple " +
-  "turns. This includes web_fetch (read a specific URL) and Google Search grounding (find current " +
-  "facts, pages, or URLs you don't already have) -- use these alongside GitHub/Notion/Cloudflare/ " +
-  "Context7/Mem0 functions whenever the task needs information outside those systems, or needs to " +
-  "verify something against a live external source. When you have enough information, respond with " +
-  "a final plain-text answer and no further function calls. Be specific and cite what you found " +
-  "(file paths, commit SHAs, log entries, page titles, URLs) rather than speculating.\n\n" +
+  "turns. When you have enough information, respond with a final plain-text answer and no further " +
+  "function calls. Be specific and cite what you found (file paths, commit SHAs, log entries, page " +
+  "titles) rather than speculating.\n\n" +
   "IMPORTANT -- cross-check, don't just aggregate: when the task touches more than one source " +
-  "(e.g. a GitHub PR's status vs. an external tracker, a Notion page vs. what's actually in a repo), " +
-  "actively look for contradictions between them rather than reporting each source's claim in " +
-  "isolation. A thing that LOOKS current, open, or unclaimed in one source can be stale, closed, or " +
-  "already resolved according to another -- if your task plan touches multiple sources for related " +
-  "claims, check them against each other before answering, and call out any discrepancy explicitly " +
-  "(including which source you consider more authoritative and why) rather than picking one silently.";
+  "(e.g. a GitHub PR's status vs. a Notion tracking page, or a repo file vs. what a database row " +
+  "claims), actively look for contradictions between them rather than reporting each source's claim " +
+  "in isolation. A thing that LOOKS current, open, or resolved in one source can be stale or wrong " +
+  "according to another -- if your task plan touches multiple sources for related claims, check them " +
+  "against each other before answering, and call out any discrepancy explicitly (including which " +
+  "source you consider more authoritative and why) rather than picking one silently.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
