@@ -13,7 +13,7 @@ export function register(server) {
     "List repositories for a GitHub user or organization.",
     {
       owner:    z.string().describe("GitHub username or organization name"),
-      type:     z.enum(["all", "owner", "member"]).optional().describe("Filter by repo type (default: all)"),
+      type:     z.enum(["all", "owner", "member"]).optional().describe("Filter by repo type (default: all). Only meaningful for a user owner -- \"owner\" isn't a valid filter on GitHub's org-repos endpoint, so if `owner` turns out to be an organization, this is silently remapped to \"all\" rather than erroring."),
       sort:     z.enum(["created", "updated", "pushed", "full_name"]).optional().describe("Sort order (default: updated)"),
       per_page: z.number().optional().describe("Number of repos to return, max 100 (default: 30)"),
     },
