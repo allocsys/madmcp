@@ -53,13 +53,6 @@ import { DEFAULT_OWNER } from "../../config.js";
 
 const HARD_MAX_STEPS = 30;
 
-// Cap on how much of a fetched page's text is fed back into Gemini's own
-// loop -- this is server-side context consumed by Gemini's next turn, not
-// returned to the calling model, so it can be smaller than web_fetch's
-// caller-facing default (500,000 chars) without losing anything the caller
-// would have seen anyway.
-const WEB_FETCH_MAX_CHARS = 20000;
-
 // 429 (rate limit) and 503 (overloaded/high demand) are the only cases
 // documented as transient -- see client.js's own model-fallback cascade,
 // which deliberately only retries a different model on a 429 for the same
