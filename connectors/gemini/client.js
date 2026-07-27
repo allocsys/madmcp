@@ -100,7 +100,8 @@ async function callGenerateContent(body, requestedModel) {
       const isLast = i === models.length - 1;
       const isRateLimited = err.status === 429;
       const isOverloaded  = err.status === 503;
-      if ((!isRateLimited && !isOverloaded) || isLast) throw err;
+      const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
+      if ((!isRateLimited && !isOverloaded && !isNetworkTransient) || isLast) throw err;
       if (isRateLimited) {
         // Rate-limited on this model -- record a cooldown (best-effort; never
         // blocks or throws on its own) so future calls can skip straight past
