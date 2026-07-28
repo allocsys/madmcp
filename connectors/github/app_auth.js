@@ -17,6 +17,8 @@
 //     else in this connector), scoped to contents:read only
 //   - installed only on the specific repo(s) that need this
 //   - minted as a per-repo installation token, ~1hr TTL (GitHub's own max)
+//   - revoked server-side a short grace period after minting (see below) --
+//     the actual single-use guarantee, independent of GitHub's own TTL
 //
 // WHY THE TOKEN PASSES THROUGH THE CALLING MODEL AT ALL (2026-07-28 decision):
 // the original plan assumed the calling model's bash sandbox could reach a
@@ -30,22 +32,22 @@
 // server instead of the model's sandbox (considered, rejected for this pass
 // since the actual want was local sandbox file access, not command-output-
 // only). So: the token is minted here and returned to the calling model,
-// which runs `git clone` with it in its own sandbox. Still narrow — single
-// repo, read-only, ~1hr TTL, never written to a file/env var, cache-backed
-// so repeat clones of the same repo don't mint a fresh one every time — just
-// not zero-exposure the way the original design intended.
+// which runs `git clone` with it in its own sandbox.
 //
-// CACHING: mint calls hit GitHub's API and cost a real round-trip, and a
-// fresh session/agent asking to clone the same repo minutes after another
-// session already did so has no reason to mint again. getCloneToken() checks
-// a Redis-backed cache (same Redis as connectors/gemini/cooldown.js — see
-// getRedis() there) keyed per owner/repo before minting, and reuses a cached
-// token as long as GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS of validity remain.
-// This is SERVER-SIDE reuse only — it has nothing to do with, and doesn't
-// change, the fact that each individual clone still needs the token handed
-// to the calling model to run the clone itself. Fails open to "always mint
-// fresh" if Redis isn't configured/reachable, same convention as
-// cooldown.js.
+// ONE-TIME-USE (2026-07-28 update): the token used to be cached server-side
+// (Redis) and reused across repeat calls for the same repo within its ~1hr
+// GitHub-issued TTL. That's cheap on mint calls but means a token that
+// leaked/lingered anywhere (logs, shell history, a second unintended clone)
+// stayed valid for up to an hour. Caching has been REMOVED: every call now
+// mints a genuinely fresh token, and getCloneToken() schedules a server-side
+// revoke via GitHub's `DELETE /installation/token` endpoint
+// GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS after minting -- comfortably long
+// enough for a `git clone` to finish, short enough that the token is dead
+// well before GitHub's own ~1hr TTL would otherwise expire it. This is
+// enforced server-side (GitHub kills the token outright), not merely
+// "please don't reuse this" guidance to the calling model. The tradeoff:
+// repeat clones of the same repo now always cost a fresh mint call (cheap;
+// contents:read, single repo) instead of reusing a cached one.
 // ---------------------------------------------------------------------------
 
 import crypto from "node:crypto";
@@ -54,11 +56,8 @@ import {
   GITHUB_APP_ID,
   GITHUB_APP_INSTALLATION_ID,
   GITHUB_APP_PRIVATE_KEY,
-  GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS,
+  GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS,
 } from "../../config.js";
-import { getRedis } from "../gemini/cooldown.js";
-
-const TOKEN_CACHE_KEY_PREFIX = "github-app:clone-token:";
 
 // GitHub rejects App JWTs older than 10 minutes; keep comfortably under that
 // to absorb clock skew between this server and GitHub's.
@@ -85,7 +84,7 @@ function signRs256(signingInput, privateKeyPem) {
 // Builds a GitHub App JWT (iss = App ID), used only to authenticate the
 // single "mint an installation token" call below -- never returned to a
 // caller, never cached (cheap to build fresh each time; only the resulting
-// installation token is cached).
+// installation token is minted/revoked).
 function buildAppJwt() {
   if (!GITHUB_APP_ID || !GITHUB_APP_PRIVATE_KEY) {
     throw new Error(
@@ -108,8 +107,9 @@ function buildAppJwt() {
 }
 
 // Mints a FRESH installation token scoped to exactly one repo, contents:read
-// only. Always hits GitHub's API -- callers wanting cache-aware reuse should
-// call getCloneToken() below instead of this directly.
+// only. Always hits GitHub's API -- there is no cache to check anymore (see
+// ONE-TIME-USE note above), so every call to getCloneToken() below results
+// in exactly one of these.
 async function mintInstallationToken(owner, repo) {
   if (!GITHUB_APP_INSTALLATION_ID) {
     throw new Error(
@@ -142,50 +142,46 @@ async function mintInstallationToken(owner, repo) {
   return { token: data.token, expiresAt: data.expires_at }; // expires_at: ISO 8601 string
 }
 
-function cacheKey(owner, repo) {
-  return `${TOKEN_CACHE_KEY_PREFIX}${owner}/${repo}`;
+// Revokes an installation token early via GitHub's own revoke endpoint,
+// authenticated with the token itself (no App JWT needed for this call).
+// Best-effort: a failure here just means the token lives out its remaining
+// ~1hr GitHub-issued TTL instead of dying early -- never thrown, never
+// surfaced to the tool caller, since this always runs on a timer well after
+// the tool response has already been returned.
+async function revokeInstallationToken(token) {
+  try {
+    const res = await fetch(`${GITHUB_API}/installation/token`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    // 401/404 here just means it's already invalid (expired naturally, or
+    // revoked some other way) -- not worth logging as an error.
+    if (!res.ok && res.status !== 401 && res.status !== 404) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[app_auth] Failed to revoke clone token (${res.status}): ${detail || "(no response body)"}`);
+    }
+  } catch (err) {
+    console.error(`[app_auth] Error revoking clone token: ${err.message}`);
+  }
 }
 
-// Returns { token, expiresAt, cached } for cloning owner/repo -- reuses a
-// still-valid, server-side-cached token (with at least
-// GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS remaining) when one exists, mints a
-// fresh one otherwise. `cached` tells the caller which happened, purely for
-// an informative response message -- behavior is identical either way from
-// the caller's perspective.
+// Returns { token, expiresAt } for cloning owner/repo -- always a freshly
+// minted token (see ONE-TIME-USE note above; no server-side cache/reuse).
+// Schedules that token's revocation GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS
+// from now, so it stops working shortly after being handed off regardless
+// of GitHub's own ~1hr TTL. The timer is unref()'d so it never keeps the
+// process alive on its own.
 export async function getCloneToken(owner, repo) {
-  const key = cacheKey(owner, repo);
-  const redis = getRedis();
-
-  if (redis) {
-    try {
-      const raw = await redis.get(key);
-      if (raw) {
-        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        const remainingMs = new Date(parsed.expiresAt).getTime() - Date.now();
-        if (remainingMs > GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS * 1000) {
-          return { token: parsed.token, expiresAt: parsed.expiresAt, cached: true };
-        }
-      }
-    } catch {
-      // Best-effort cache read -- fall through to minting fresh, same
-      // fail-open convention as cooldown.js.
-    }
-  }
-
   const minted = await mintInstallationToken(owner, repo);
 
-  if (redis) {
-    try {
-      const ttlSeconds = Math.max(
-        60,
-        Math.floor((new Date(minted.expiresAt).getTime() - Date.now()) / 1000) - GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS
-      );
-      await redis.set(key, JSON.stringify(minted), { ex: ttlSeconds });
-    } catch {
-      // Best-effort cache write -- the freshly minted token is still
-      // returned below even if caching it fails.
-    }
-  }
+  const revokeTimer = setTimeout(() => {
+    revokeInstallationToken(minted.token);
+  }, GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS * 1000);
+  revokeTimer.unref();
 
-  return { ...minted, cached: false };
+  return { token: minted.token, expiresAt: minted.expiresAt };
 }
