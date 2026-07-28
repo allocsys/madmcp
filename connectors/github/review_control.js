@@ -14,7 +14,8 @@ export function register(server) {
 
   server.tool(
     "request_reviewers",
-    "Request review from specific users and/or teams on a pull request. Distinct from review_pull_request, which submits a review verdict (approve/comment/request-changes) — this instead asks someone else to review, the same as clicking 'Request review' in the GitHub UI.",
+    "DOES: Request review from users/teams on a PR (same as clicking 'Request review' in the GitHub UI).\n" +
+    "NOT: submitting a review verdict yourself -> use review_pull_request for that.",
     {
       owner:         z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:          z.string().describe("Repository name"),
@@ -45,7 +46,7 @@ export function register(server) {
 
   server.tool(
     "remove_requested_reviewers",
-    "Cancel a pending review request from specific users and/or teams on a pull request (does not affect reviews already submitted).",
+    "DOES: Cancel a pending review request on a PR. RULE: does not affect reviews already submitted.",
     {
       owner:          z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:           z.string().describe("Repository name"),
@@ -70,7 +71,8 @@ export function register(server) {
 
   server.tool(
     "get_pr_mergeability",
-    "Check whether a pull request can be merged: mergeable state, merge conflicts, and required-check status. GitHub computes `mergeable` asynchronously, so a null result on first call means 'still computing' — this tool retries briefly before giving up. Use this instead of inferring conflicts manually from a failed merge attempt or a stale diff.",
+    "DOES: Check mergeable state, conflicts, required-check status for a PR (retries briefly server-side since GitHub computes this async).\n" +
+    "RULE: use this instead of inferring conflicts from a failed merge attempt or a stale diff.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
@@ -111,7 +113,8 @@ export function register(server) {
 
   server.tool(
     "add_review_comment",
-    "Add an inline review comment anchored to a specific line in a pull request's diff — the same as clicking a line in the GitHub 'Files changed' view and leaving a comment there. Distinct from review_pull_request (whole-PR verdict + summary body) and add_issue_comment (general, non-anchored PR conversation comment).",
+    "DOES: Inline comment anchored to a diff line (same as clicking a line in GitHub's 'Files changed' view).\n" +
+    "NOT: whole-PR verdict -> review_pull_request. NOT: general non-anchored conversation comment -> add_issue_comment.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
@@ -144,7 +147,8 @@ export function register(server) {
 
   server.tool(
     "get_branch_protection",
-    "Read the branch protection rules for a branch — required status checks, required approving reviews, whether admins are exempt, and whether force-pushes/deletions are blocked. Read-only; explains upfront why a PR might be gated (e.g. 'requires 1 approval from a code owner') instead of that being discovered empirically from a rejected merge.",
+    "DOES: Read-only branch protection rules -- required checks/approvals, admin exemption, force-push/delete blocking.\n" +
+    "RULE: use this to see upfront why a PR might be gated, instead of discovering it from a rejected merge.",
     {
       owner:  z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:   z.string().describe("Repository name"),
@@ -183,7 +187,8 @@ export function register(server) {
 
   server.tool(
     "list_notifications",
-    "List GitHub notifications for the authenticated token (PR/issue mentions, review requests, comment replies, CI failures on watched runs, etc.) — the same feed as github.com/notifications. Use this to check 'did anyone reply to me' or 'is anything waiting on me' without re-polling specific issues/PRs one at a time.",
+    "DOES: Authenticated-token notification feed (mentions, review requests, replies, CI failures on watched runs) -- same feed as github.com/notifications.\n" +
+    "RULE: 'did anyone reply to me' / 'is anything waiting on me' -> this, instead of re-polling specific issues/PRs one at a time.",
     {
       all:           z.boolean().optional().describe("If true, include notifications already marked as read (default: false — unread only)"),
       participating: z.boolean().optional().describe("If true, only show notifications where the token owner is directly @mentioned or involved (not just watching) (default: false)"),

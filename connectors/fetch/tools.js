@@ -2,6 +2,14 @@
 // connectors/fetch/tools.js — web_fetch MCP tool
 // Fetches a URL and returns its content (text, JSON, or HTML).
 // HTML is stripped to readable text to keep responses concise.
+//
+// TOKEN COST NOTE: default max_chars is 500,000 -- this tool returns the raw
+// page content straight into the calling model's context. When the actual
+// need is just an answer to a specific question about a page (not the exact
+// text/code itself), delegate_research's precision mode (url+question) is
+// far cheaper: it fetches server-side and hands only Gemini's compact
+// answer back, never the raw page. See gemini/tools.js's file header for
+// the full token-cost comparison.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -11,7 +19,9 @@ export function register(server) {
 
   server.tool(
     "web_fetch",
-    "Fetch the content of any public URL and return its text, JSON, or stripped HTML. Useful for reading docs, APIs, pages, or raw files from the web. Also supports POST/PUT/PATCH/DELETE with a JSON body for calling public write APIs (e.g. registering an API key, submitting a form) — set method and body.",
+    "DOES: Fetch any public URL, return text/JSON/stripped HTML. Also supports POST/PUT/PATCH/DELETE + JSON body for public write APIs (set method and body).\n" +
+    "RULE: need only an answer to a specific question about the page, not its exact text/code -> use delegate_research (url+question, precision mode) instead -- far fewer tokens, since that fetches server-side and returns only the compact answer.\n" +
+    "USE THIS INSTEAD when you need: exact wording, code snippets to copy, or content to edit in place.",
     {
       url:          z.string().url().describe("The URL to fetch"),
       method:       z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional().describe("HTTP method (default: GET)"),

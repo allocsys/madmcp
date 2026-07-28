@@ -10,7 +10,9 @@ export function register(server) {
 
   server.tool(
     "get_issue",
-    "Get a single issue's full details, including its complete body text and comment thread -- unlike search_issues/list_issues, which only return title/metadata snippets. Use this before assessing whether an issue is a good, well-scoped contribution candidate.",
+    "DOES: Full details of a single issue -- complete body text + comment thread.\n" +
+    "NOT: title/metadata snippets only -> that's search_issues/list_issues.\n" +
+    "RULE: assessing whether an issue is a good, well-scoped contribution candidate -> use this first.",
     {
       owner:                z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:                 z.string().describe("Repository name"),
@@ -64,7 +66,8 @@ export function register(server) {
 
   server.tool(
     "list_issues",
-    "List issues in a GitHub repository.",
+    "DOES: List issues in a single known repo (title/metadata only, no body/comments -> use get_issue for full detail).\n" +
+    "NOT: cross-repo discovery -> use search_issues for that.",
     {
       owner:    z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:     z.string().describe("Repository name"),

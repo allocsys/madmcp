@@ -152,7 +152,9 @@ function analyzeEvents(events) {
 export function register(server) {
   server.tool(
     "cf_workers_observability_compare",
-    "Compare Workers Observability telemetry between TWO Worker scripts over the SAME timeframe. Returns normalized rates (events/sec, loadShed/sec, error/sec) rather than raw counts, plus a 'stuck socket' heuristic (high wall-time vs low CPU-time — the workerd stuck-TCP-connect signature) with example events for each side. Use this instead of two separate cf_workers_observability_query calls when comparing a deploy against a baseline, since raw event counts aren't comparable across differing sample time-spans.",
+    "DOES: Compare Workers Observability telemetry between TWO scripts over the SAME timeframe -- normalized rates (events/sec, loadShed/sec, error/sec), not raw counts, plus a 'stuck socket' heuristic (high wall-time vs low CPU-time) with example events per side.\n" +
+    "RULE: comparing a deploy against a baseline -> this, not two separate cf_workers_observability_query calls -- raw counts aren't comparable across differing sample time-spans (see file header for why).\n" +
+    "NOT a controlled A/B: traffic mix, client geography, time-of-day aren't normalized -- output includes that caveat.",
     {
       script_a: z.string().describe("First Worker script name, e.g. the post-deploy / current version"),
       script_b: z.string().describe("Second Worker script name, e.g. the pre-deploy / baseline version"),

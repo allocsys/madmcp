@@ -1,5 +1,12 @@
 // ---------------------------------------------------------------------------
 // connectors/github/prs.js — pull request tools
+//
+// NOTE ON TOOL DESCRIPTIONS BELOW: rewritten into tagged DOES:/RULE:/NOTE:
+// format for faster LLM parsing (same convention as github/files.js and
+// frontend/tools.js). Rationale/mechanism detail not needed at
+// call-selection time (how "ready" is implemented, what the commit
+// verification badge means) lives in code comments here instead of in the
+// description strings the calling model reads.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -9,7 +16,8 @@ export function register(server) {
 
   server.tool(
     "get_pull_requests",
-    "List pull requests in a GitHub repository, or — when pull_number is given — fetch a single PR's full details plus (by default) its conversation comments and formal reviews, all merged into one response.",
+    "DOES: List PRs in a repo, OR (pull_number given) fetch one PR's full details + comments + reviews + commits merged into one response.\n" +
+    "RULE: pull_number set -> state/per_page ignored. Use include_comments/include_reviews/include_commits=false to trim an unwanted section out of the response.",
     {
       owner:            z.string().describe("Repository owner (user or org)"),
       repo:             z.string().describe("Repository name"),
@@ -18,7 +26,8 @@ export function register(server) {
       pull_number:      z.number().optional().describe("If provided, fetch this single PR's details instead of listing PRs."),
       include_comments: z.boolean().optional().describe("When fetching a single PR, include its conversation comments (default: true)"),
       include_reviews:  z.boolean().optional().describe("When fetching a single PR, include its formal reviews (default: true)"),
-      include_commits:  z.boolean().optional().describe("When fetching a single PR, include its commit list with each commit's GitHub signature verification status (the same 'Verified' badge shown in the GitHub UI) (default: true)"),
+      // "Verified"/"Unverified" badge below matches the same GitHub-signature check GitHub's own UI shows on each commit.
+      include_commits:  z.boolean().optional().describe("When fetching a single PR, include its commit list with signature verification status (default: true)"),
       max_comments:     z.number().optional().describe("Max comments to include, most recent first, when fetching a single PR (default: 20, max: 100)"),
       max_reviews:      z.number().optional().describe("Max reviews to include when fetching a single PR (default: 30, max: 100)"),
       max_commits:      z.number().optional().describe("Max commits to include when fetching a single PR (default: 100, max: 250)"),
@@ -82,7 +91,8 @@ export function register(server) {
 
   server.tool(
     "get_pr_comments",
-    "Get the general conversation comments on a pull request (the main comment thread, same as issue comments — not inline code-review comments). Use this to see what people have said in response to a PR.",
+    "DOES: General conversation thread on a PR (same as issue comments -- NOT inline code-review comments).\n" +
+    "NOT: inline diff comments (none of these tools currently expose those) or formal approve/request-changes reviews -> use get_pr_reviews for that.",
     {
       owner:       z.string().describe("Repository owner (user or org)"),
       repo:        z.string().describe("Repository name"),
@@ -101,7 +111,8 @@ export function register(server) {
 
   server.tool(
     "get_pr_reviews",
-    "Get the formal reviews on a pull request — approvals, change requests, and general review comments left via GitHub's review flow (distinct from get_pr_comments, which covers the plain conversation thread). Shows who reviewed, their verdict, and their summary comment.",
+    "DOES: Formal reviews on a PR -- approve/request-changes/comment verdicts plus each reviewer's summary comment.\n" +
+    "NOT: the plain conversation thread -> use get_pr_comments for that.",
     {
       owner:       z.string().describe("Repository owner (user or org)"),
       repo:        z.string().describe("Repository name"),
@@ -142,7 +153,8 @@ export function register(server) {
 
   server.tool(
     "update_pull_request",
-    "Edit an existing pull request's title, description body, base branch, open/closed state, or draft status. Use this to update a PR's description after review feedback, rename it, close it without merging, or convert it from draft to ready for review.",
+    "DOES: Edit title/body/base/open-closed-state/draft-status on an existing PR. Pass only the field(s) to change.\n" +
+    "RULE: ready=true only converts draft -> ready; no-op (with notice) if already non-draft. No API path exists to convert ready back to draft.",
     {
       owner:       z.string().describe("Repository owner (user or org)"),
       repo:        z.string().describe("Repository name"),
@@ -151,7 +163,8 @@ export function register(server) {
       body:        z.string().optional().describe("New PR description body (replaces the existing description entirely)"),
       state:       z.enum(["open", "closed"]).optional().describe("Set to 'closed' to close the PR without merging, or 'open' to reopen it"),
       base:        z.string().optional().describe("Change the base branch this PR merges into"),
-      ready:       z.boolean().optional().describe("Set to true to convert a draft PR to ready for review. GitHub's REST API has no field for this, so it's done via the markPullRequestReadyForReview GraphQL mutation under the hood. No effect (besides a no-op notice) if the PR is already non-draft. There's no way to convert ready back to draft via the API."),
+      // GitHub's REST API has no field for draft->ready, so this runs the markPullRequestReadyForReview GraphQL mutation under the hood instead.
+      ready:       z.boolean().optional().describe("Set to true to convert a draft PR to ready for review (default: unchanged)"),
     },
     async ({ owner, repo, pull_number, title, body, state, base, ready }) => {
       const patch = {};
@@ -194,7 +207,7 @@ export function register(server) {
 
   server.tool(
     "merge_pull_request",
-    "Merge a pull request in a GitHub repository.",
+    "DOES: Merge a PR. RULE: irreversible via this tool -- no unmerge.",
     {
       owner:          z.string().describe("Repository owner (user or org)"),
       repo:           z.string().describe("Repository name"),
@@ -214,7 +227,8 @@ export function register(server) {
 
   server.tool(
     "review_pull_request",
-    "Submit a review on a pull request (approve, request changes, or comment).",
+    "DOES: Submit a formal review on a PR (APPROVE / REQUEST_CHANGES / COMMENT).\n" +
+    "NOT: a plain conversation reply -> use add_issue_comment for that (works on PRs too, since PRs are issues under the hood).",
     {
       owner:       z.string().describe("Repository owner (user or org)"),
       repo:        z.string().describe("Repository name"),
