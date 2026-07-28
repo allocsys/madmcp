@@ -70,6 +70,16 @@ yet, open `demo.html` directly.)
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/allocsys/madmcp)
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/allocsys/madmcp&env=MCP_SHARED_KEY,GITHUB_TOKEN,NOTION_TOKEN,MEM0_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID&envDescription=Generate+a+long+random+string+yourself+for+MCP_SHARED_KEY+(Vercel+can%27t+auto-generate+it).+Leave+any+connector+token+blank+to+skip+it.&envLink=https://github.com/allocsys/madmcp%23configuration&project-name=madmcp-server&repository-name=madmcp-server)
 
+Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-click links to each provider's key-creation page:
+
+[![GitHub Token](https://img.shields.io/badge/GitHub-Token-181717?style=flat-square&logo=github)](https://github.com/settings/tokens/new)
+[![Cloudflare Token](https://img.shields.io/badge/Cloudflare-Token-F38020?style=flat-square&logo=cloudflare)](https://dash.cloudflare.com/profile/api-tokens)
+[![Notion Integration](https://img.shields.io/badge/Notion-Integration-000000?style=flat-square&logo=notion)](https://www.notion.so/my-integrations)
+[![Mem0 Key](https://img.shields.io/badge/Mem0-API_Key-6E56CF?style=flat-square)](https://app.mem0.ai/dashboard/api-keys)
+[![Gemini Key](https://img.shields.io/badge/Gemini-API_Key-4285F4?style=flat-square&logo=googlegemini)](https://aistudio.google.com/apikey)
+[![Exa Key](https://img.shields.io/badge/Exa-API_Key-000000?style=flat-square)](https://dashboard.exa.ai/api-keys)
+[![OpenRouter Key](https://img.shields.io/badge/OpenRouter-API_Key-6467F2?style=flat-square)](https://openrouter.ai/keys)
+
 Get tokens, deploy, connect to Claude — in that order.
 
 **1. Deploy it — pick a host.** Both buttons above deploy this repo as-is,
