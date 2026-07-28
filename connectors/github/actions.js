@@ -87,7 +87,7 @@ export function register(server) {
         if (!run_id) throw new Error("Provide either job_id, or run_id (optionally with job_name).");
         const jobsData = await githubRequest(`/repos/${owner}/${repo}/actions/runs/${run_id}/jobs`);
         const jobs = jobsData.jobs || [];
-        let candidates = jobs;
+        let candidates;
         if (job_name) {
           const needle = job_name.toLowerCase();
           candidates = jobs.filter((j) => j.name.toLowerCase().includes(needle));
