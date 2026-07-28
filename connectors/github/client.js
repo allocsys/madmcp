@@ -2,6 +2,8 @@
 // connectors/github/client.js
 // ---------------------------------------------------------------------------
 
+import https from "node:https";
+import { URL } from "node:url";
 import {
   GITHUB_TOKEN,
   GITHUB_API,
@@ -155,6 +157,75 @@ export async function githubGraphQL(query, variables = {}) {
   }
 
   return data.data;
+}
+
+// --- Binary tarball fetch (fix #4, 2026-07-28) -----------------------------
+// search.js's private-repo search_code fallback used to fetch one blob per
+// file through githubRequest -- up to 500 sequential, individually-throttled
+// requests for a single search. This replaces that with ONE request for the
+// whole repo via GitHub's tarball endpoint, which search.js decompresses and
+// greps locally instead.
+//
+// Deliberately uses node:https instead of the global fetch() used elsewhere
+// in this file: the tarball endpoint responds with a 302 to codeload.
+// github.com carrying the actual archive, and fetch()'s redirect: "manual"
+// mode returns a spec-mandated "opaqueredirect" filtered response (status 0,
+// empty headers, null body) -- there is no way to read the Location header
+// off it to follow the redirect ourselves. http.request has no such
+// filtering, so we can read the real status/headers and re-issue the
+// request to codeload.github.com directly.
+//
+// The Authorization header is re-attached on the codeload hop on purpose --
+// private-repo tarball downloads require it there too (public repos ignore
+// it harmlessly). NOTE: this hasn't been exercised against a live private
+// repo from this environment (github.com/codeload.github.com aren't in this
+// sandbox's egress allowlist) -- worth a real smoke test against a private
+// repo before relying on it, in case codeload's auth handling has changed.
+function httpGetBuffer(url, headers, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method: "GET", headers }, (res) => {
+      const status = res.statusCode;
+
+      if (status >= 300 && status < 400 && res.headers.location) {
+        res.resume(); // discard the (empty) redirect body
+        if (redirectsLeft <= 0) {
+          reject(new Error(`Too many redirects fetching ${url}`));
+          return;
+        }
+        const nextUrl = new URL(res.headers.location, url).toString();
+        resolve(httpGetBuffer(nextUrl, headers, redirectsLeft - 1));
+        return;
+      }
+
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        if (status < 200 || status >= 300) {
+          reject(new Error(`GitHub tarball fetch error (${status}) for ${url}`));
+          return;
+        }
+        resolve(Buffer.concat(chunks));
+      });
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+// Fetches a repo's full contents as a gzipped tarball (raw bytes -- caller
+// gunzips/parses). Shares the same throttleChain as githubRequest so it's
+// paced consistently with every other GitHub call this server makes, but
+// only occupies ONE slot for the whole repo instead of one per file.
+export async function githubFetchTarball(owner, repo, ref) {
+  assertConfigured();
+  return scheduleThrottled(() =>
+    httpGetBuffer(`${GITHUB_API}/repos/${owner}/${repo}/tarball/${ref}`, {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "madmcp-server",
+    })
+  );
 }
 
 export function toBase64(str) {
