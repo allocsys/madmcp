@@ -33,26 +33,24 @@ describe("extractRepoQualifier", () => {
   });
 });
 
+// Builds a single PAX record string ("<len> key=value\n") with the
+// self-referential length PAX requires (the length must include its own
+// digit count), matching what real tar writers produce.
+function buildPaxRecord(kv) {
+  const withoutLen = ` ${kv}\n`;
+  let len = withoutLen.length + 1;
+  while (String(len).length + withoutLen.length !== len) len++;
+  return `${len}${withoutLen}`;
+}
+
 describe("parsePaxHeader", () => {
   it("parses a single path record", () => {
-    const value = "path=some/very/long/nested/file.js";
-    const len = value.length + String(value.length + 20).length + 20; // rough, recomputed below
-    // Build the record precisely: "<len> <value>\n" where len includes itself.
-    const withoutLen = ` ${value}\n`;
-    let recordLen = withoutLen.length + 1;
-    while (String(recordLen).length + withoutLen.length !== recordLen) recordLen++;
-    const record = `${recordLen}${withoutLen}`;
+    const record = buildPaxRecord("path=some/very/long/nested/file.js");
     expect(parsePaxHeader(record)).toEqual({ path: "some/very/long/nested/file.js" });
   });
 
   it("parses multiple concatenated records", () => {
-    function buildRecord(kv) {
-      const withoutLen = ` ${kv}\n`;
-      let len = withoutLen.length + 1;
-      while (String(len).length + withoutLen.length !== len) len++;
-      return `${len}${withoutLen}`;
-    }
-    const text = buildRecord("path=a/b.txt") + buildRecord("size=123");
+    const text = buildPaxRecord("path=a/b.txt") + buildPaxRecord("size=123");
     expect(parsePaxHeader(text)).toEqual({ path: "a/b.txt", size: "123" });
   });
 
@@ -83,7 +81,7 @@ function buildTar(entries) {
     const contentBuf = Buffer.from(entry.content ?? "", "utf-8");
     parts.push(buildTarHeader({
       name: entry.name,
-      size: entry.typeFlag && entry.typeFlag !== "0" ? contentBuf.length : contentBuf.length,
+      size: contentBuf.length,
       typeFlag: entry.typeFlag ?? "0",
     }));
     parts.push(padTo512(contentBuf));
@@ -132,14 +130,7 @@ describe("parseTar", () => {
 
   it("applies a PAX 'x' extended header's path to the following entry", () => {
     const longPath = "repo-abc123/" + "nested/".repeat(15) + "file.txt";
-    const paxBody = (() => {
-      const value = `path=${longPath}`;
-      const withoutLen = ` ${value}\n`;
-      let len = withoutLen.length + 1;
-      while (String(len).length + withoutLen.length !== len) len++;
-      return `${len}${withoutLen}`;
-    })();
-    const paxBuf = Buffer.from(paxBody, "utf-8");
+    const paxBuf = Buffer.from(buildPaxRecord(`path=${longPath}`), "utf-8");
     const parts = [
       buildTarHeader({ name: "PaxHeaders/file.txt", size: paxBuf.length, typeFlag: "x" }),
       padTo512(paxBuf),
