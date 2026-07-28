@@ -101,24 +101,12 @@ function buildPrompt({ task, path, writePath, context, previousAttempt, previous
 export function register(server) {
   server.tool(
     "delegate_designer",
-    "RULE for the calling model: prefer this tool over writing or editing HTML/CSS/SCSS/JSX/TSX/Vue by hand yourself " +
-    "-- even for something you could technically write directly. It delegates to a model configured specifically for " +
-    "design/frontend output (FRONTEND_PROVIDER in config.js, flip providers there without touching this tool) " +
-    "rather than relying on your own HTML/CSS/layout judgment. Use it for things like \"build a pricing page\", " +
-    "\"restyle the nav bar\", \"make this component responsive\", \"clean up this CSS\", \"turn this mockup " +
-    "description into markup\" -- both brand-new files and edits to existing ones.\n\n" +
-    "WRITE TOOL with a bounded self-correction loop (up to " + FRONTEND_MAX_ATTEMPTS + " attempts) -- give it a task " +
-    "and optionally an existing file to improve; it reads that file server-side, generates content, syntax-checks it, " +
-    "and re-prompts the LLM with the specific errors if invalid, before writing the result straight to the repo in " +
-    "the same call. If a run can't finish inside its time budget, it checkpoints progress and returns a " +
-    "resume_run_id -- pass that back on a follow-up call (with no other arguments needed) to continue instead of " +
-    "starting over. The generated code is NEVER returned to you in full, only a short summary (line-count delta, " +
-    "attempts used, provider) -- so calling this costs you roughly no context regardless of file size.\n\n" +
-    "PREREQUISITE: requires an existing branch that is NOT the repo's default branch -- if you don't already have " +
-    "one for this work, call create_branch first, then pass its name here.\n\n" +
-    "SCOPE: fenced to frontend file extensions only (" + FRONTEND_ALLOWED_EXTENSIONS.join(", ") + ") on BOTH the " +
-    "file it reads as context and the file it writes -- it will refuse to touch anything else (e.g. config.js, " +
-    "package.json, workflow files). It will also refuse to write to the repo's default branch. No delete capability.",
+    "TRIGGERS: \"build a page\", \"restyle X\", \"make responsive\", \"clean up this CSS\", \"turn mockup into markup\" -- ANY HTML/CSS/SCSS/JSX/TSX/Vue creation or edit, new file or existing.\n" +
+    "RULE: ALWAYS prefer this over hand-writing/editing HTML/CSS/JSX yourself, even if you could do it directly -- delegates to a model configured for design output (FRONTEND_PROVIDER in config.js; flip there, not here).\n" +
+    "IS: WRITE TOOL, bounded self-correction loop (<=" + FRONTEND_MAX_ATTEMPTS + " attempts: generate -> syntax-check -> re-prompt with errors if invalid) -- writes to repo in the same call. NEVER returns generated code to you -- summary only (line-delta, attempts used, provider).\n" +
+    "RESUME: response contains resume_run_id -> call again with ONLY resume_run_id set (ignore all other args) to continue instead of restarting.\n" +
+    "PREREQUISITE: branch != repo's default branch. No branch yet -> call create_branch first.\n" +
+    "SCOPE: read (path) and write (write_path) both fenced to " + FRONTEND_ALLOWED_EXTENSIONS.join(", ") + " only -- refuses config.js/package.json/workflow files/etc. Refuses default-branch writes. No delete.",
     {
       owner:          z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:           z.string().optional().describe("Repository name. Not needed when resuming (resume_run_id carries it)."),
