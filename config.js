@@ -255,6 +255,30 @@ export const FRONTEND_MAX_ATTEMPTS = Number(process.env.FRONTEND_MAX_ATTEMPTS) |
 // limit, not up against it.
 export const FRONTEND_TOTAL_BUDGET_MS = Number(process.env.FRONTEND_TOTAL_BUDGET_MS) || 45000;
 
+// ---------------------------------------------------------------------------
+// GitHub App -- scoped, short-lived clone tokens for PRIVATE repos (2026-07-28
+// plan, see Notion entity_id madmcp-github-app-scoped-clone-token-plan).
+// Deliberately a SEPARATE credential from GITHUB_TOKEN above: GITHUB_TOKEN is
+// a broad, long-lived token used by every other GitHub tool in this
+// connector, while this App is scoped ONLY to contents:read and installed
+// only on repos that need sandbox-clone access. connectors/github/app_auth.js
+// mints per-repo installation tokens from these credentials on demand
+// (~1hr TTL, GitHub's max), returned to the calling model so it can `git
+// clone` a private repo into its own sandbox -- see that file's header for
+// why the token has to pass through the calling model at all (the sandbox
+// can't reach this server directly to fetch it itself).
+// GITHUB_APP_PRIVATE_KEY: paste the PEM as-is; if your env var tooling can't
+// store literal newlines, escape them as \n and app_auth.js unescapes them.
+export const GITHUB_APP_ID              = process.env.GITHUB_APP_ID;
+export const GITHUB_APP_INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID;
+export const GITHUB_APP_PRIVATE_KEY     = process.env.GITHUB_APP_PRIVATE_KEY;
+
+// Server-side cache buffer (connectors/github/app_auth.js): a cached token
+// is only reused if AT LEAST this many seconds of validity remain; otherwise
+// a fresh one is minted. Exists so a token doesn't get handed out with (say)
+// 10 seconds left, expiring mid-clone on a large repo/slow connection.
+export const GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS = Number(process.env.GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS) || 300;
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to
