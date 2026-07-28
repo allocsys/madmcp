@@ -12,7 +12,8 @@ export function register(server) {
 
   server.tool(
     "search_library",
-    "Search Context7's index for a library or framework by name and get back matching Context7 library IDs. Call this before get_library_docs unless you already know the exact library ID (format: /org/project, e.g. /vercel/next.js).",
+    "DOES: Search Context7's index by library/framework name, return matching Context7 library IDs.\n" +
+    "RULE: call before get_library_docs UNLESS you already know the exact ID (format: /org/project, e.g. /vercel/next.js).",
     {
       libraryName: z.string().describe("The library or framework name to search for (e.g. \"next.js\", \"react\", \"fastapi\")"),
       query:       z.string().describe("The task or question you're trying to solve — used to rank results by relevance (e.g. \"app router middleware\")"),
@@ -32,7 +33,8 @@ export function register(server) {
 
   server.tool(
     "get_library_docs",
-    "Fetch up-to-date, version-specific documentation and code examples for a library using its Context7 library ID. Get the ID from search_library first, unless the user already gave you an exact ID like /vercel/next.js or /vercel/next.js/v15.1.0.",
+    "DOES: Fetch up-to-date, version-specific docs + code examples for a library, given its Context7 library ID.\n" +
+    "RULE: need the ID first via search_library, UNLESS already given an exact one like /vercel/next.js or /vercel/next.js/v15.1.0.",
     {
       libraryId: z.string().describe("Exact Context7-compatible library ID, e.g. \"/vercel/next.js\" or \"/vercel/next.js/v15.1.0\""),
       query:     z.string().describe("The specific question or task to retrieve relevant docs for (e.g. \"how to set up middleware\") — be specific, vague queries return vague docs"),

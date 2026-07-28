@@ -65,7 +65,8 @@ export function register(server) {
 
   server.tool(
     "read_file_chunked",
-    "Read a slice of a large file from a GitHub repository. Use when read_file times out or is truncated. NOTE for the calling model: if you find yourself chunking through several large files to answer one open-ended question, delegate_gemini may be a better fit -- it can do this kind of multi-step digging in one call instead of many round-trips.",
+    "DOES: Read a slice of a large file. Use when read_file times out or is truncated.\n" +
+    "RULE: chunking through several large files for one open-ended question -> delegate_gemini instead of many manual round-trips.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
@@ -87,7 +88,8 @@ export function register(server) {
 
   server.tool(
     "list_directory",
-    "List files and folders at a path in a GitHub repository. NOTE for the calling model: if you're drilling into many directories one at a time to map out an unfamiliar repo, delegate_gemini can run that exploration server-side in one call instead.",
+    "DOES: List files/folders at a path.\n" +
+    "RULE: drilling into many directories one at a time to map an unfamiliar repo -> delegate_gemini instead, server-side in one call.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -135,7 +137,8 @@ export function register(server) {
 
   server.tool(
     "create_repo_file",
-    "Create, add, or write a brand-new file in a GitHub repository (not the local sandbox filesystem -- for that, use the computer-use create_file tool). Fails if the path already exists -- use str_replace_file to edit/patch/modify an existing file, or overwrite_file to explicitly replace its full contents.",
+    "DOES: Write a brand-new file to a GitHub repo. NOT the sandbox filesystem -> use the computer-use create_file tool for that.\n" +
+    "RULE: fails if the path already exists -> str_replace_file to patch, overwrite_file to fully replace.",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
@@ -163,7 +166,8 @@ export function register(server) {
 
   server.tool(
     "overwrite_file",
-    "Replace, rewrite, or update a file's full contents in a GitHub repository, or create it if it doesn't exist yet. Use this for a deliberate full rewrite; for small, targeted edits/patches use str_replace_file instead so you don't have to resend the whole file. To create a new file and fail loudly if it already exists, use create_repo_file instead. To write/overwrite several files at once as a single atomic commit, use overwrite_files.",
+    "DOES: Full rewrite of a file's contents (creates it if it doesn't exist).\n" +
+    "RULE: small targeted edit -> str_replace_file instead (no need to resend the whole file). Must fail if file already exists -> create_repo_file. Several files as one atomic commit -> overwrite_files.",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
@@ -189,7 +193,8 @@ export function register(server) {
 
   server.tool(
     "delete_file",
-    "Delete or remove a file from a GitHub repository. To replace/update a file's contents instead of removing it, use overwrite_file or str_replace_file; to create a new file instead, use create_repo_file.",
+    "DOES: Delete a file from a repo.\n" +
+    "NOT: replacing/updating contents -> overwrite_file or str_replace_file. NOT: creating a file -> create_repo_file.",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
@@ -210,7 +215,8 @@ export function register(server) {
 
   server.tool(
     "rename_file",
-    "Rename, move, or relocate a file in a GitHub repository. To edit/update a file's contents without moving it, use str_replace_file (targeted edit) or overwrite_file (full rewrite); to create a brand-new file, use create_repo_file.",
+    "DOES: Rename/move a file in a repo.\n" +
+    "NOT: editing contents without moving -> str_replace_file (targeted) or overwrite_file (full rewrite). NOT: creating a new file -> create_repo_file.",
     {
       owner:    z.string().describe("Repository owner (user or org)"),
       repo:     z.string().describe("Repository name"),
@@ -254,7 +260,8 @@ export function register(server) {
 
   server.tool(
     "overwrite_files",
-    "Create, overwrite, replace, or update multiple files in a GitHub repository as a single atomic commit -- each file's full content is written as-is (create_repo_file/overwrite_file/str_replace_file are single-file equivalents; use those for one file at a time).",
+    "DOES: Create/overwrite multiple files as ONE atomic commit -- each file's full content written as-is.\n" +
+    "RULE: one file at a time -> use create_repo_file/overwrite_file/str_replace_file instead (single-file equivalents).",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
