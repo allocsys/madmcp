@@ -39,6 +39,13 @@ Works unauthenticated at low rate limits — only provision this if you're hitti
 [![Create Upstash Redis](https://img.shields.io/badge/Create-Upstash_Redis-00E9A3?style=for-the-badge)](https://console.upstash.com/redis)
 > Optional — persists Gemini's per-model rate-limit cooldowns and `delegate_gemini` resume checkpoints across calls. Fails open (no cross-call memory, but nothing breaks) if unset. On Vercel, easier to add via **Storage → Create Database → Upstash for Redis** (Marketplace integration) instead of the link above — either path works, just note which var names your integration hands you (the two naming pairs above are interchangeable, `connectors/gemini/cooldown.js` accepts either).
 
+### MCP_SHARED_KEY — your own secret (not a provider credential)
+[![Generate Secret](https://img.shields.io/badge/Generate-Random_Secret-333333?style=for-the-badge)](https://generate-secret.vercel.app/32)
+> This one isn't issued by any provider — it's just a long random string you make up yourself, used to lock down this server's `/mcp` endpoint. The badge above is a small third-party generator (the same one NextAuth's own docs point to) that generates the string client-side and shows it to you to copy. If you'd rather not depend on an external site, run this locally instead — it never leaves your machine:
+> ```
+> openssl rand -hex 32
+> ```
+
 ---
 
 ## ⚠️ Advanced: GitHub App credentials
