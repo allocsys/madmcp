@@ -10,6 +10,21 @@
 // the other. Do not assume changes here propagate to delegate.js, and never
 // port this "use delegate_gemini instead" phrasing onto delegate.js's own
 // function declarations (see the warning at the top of that file for why).
+//
+// NOTE ON "clone via bash_tool" TEXT BELOW (added 2026-07-28, see Notion
+// entity_id madmcp-delegate-designer-plan): confirmed by direct test that
+// the calling model's own sandbox (bash_tool) can `git clone` a PUBLIC repo
+// straight from github.com/codeload.github.com/raw.githubusercontent.com --
+// all three are already on that sandbox's network allowlist. That's a THIRD
+// option alongside read_file and delegate_gemini, and for its specific use
+// case (needing multiple files locally to run/test/lint, not just read) it
+// beats both: unlike read_file it doesn't put file contents in the calling
+// model's context at all (only command output does), and unlike
+// delegate_gemini it lets the calling model actually EXECUTE the code
+// (npm test, eslint, etc.), not just read/summarize it. Only works for
+// PUBLIC repos -- the sandbox has no GitHub credentials, so a private repo
+// clone will simply fail auth, at which point read_file/delegate_gemini are
+// still the right fallback.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
