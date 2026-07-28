@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Env Bundler</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
+    <style>
+        body {
+            font-family: Inter, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f9f9f9;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .card {
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            background-color: #f9f9f9;
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .card-header button {
+            background-color: #4CAF50;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .card-header button:hover {
+            background-color: #3e8e41;
+        }
+        .card-body {
+            display: flex;
+            flex-direction: column;
+        }
+        .card-body label {
+            margin-bottom: 10px;
+        }
+        .card-body input, .card-body textarea {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+        }
+        .bundle {
+            position: sticky;
+            top: 0;
+            background-color: #fff;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+        }
+        .bundle pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .note {
+            font-size: 14px;
+            color: #666;
+        }
+        .optional {
+            font-size: 14px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Env Bundler</h1>
+        <p>Click each badge to go generate that provider's key, paste the value into the box, then copy the single bundled .env block at the bottom into Vercel/Render's environment variables.</p>
+        <p class="note">No data leaves the browser / nothing is uploaded anywhere, it's purely local assembly.</p>
+        <div class="card">
+            <div class="card-header">
+                <h2>GITHUB_TOKEN</h2>
+                <a href="https://github.com/settings/tokens/new" target="_blank">Generate Token</a>
+            </div>
+            <div class="card-body">
+                <label for="github-token">GITHUB_TOKEN</label>
+                <input type="text" id="github-token" placeholder="Paste token value">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>CLOUDFLARE_API_TOKEN</h2>
+                <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank">Generate Token</a>
+            </div>
+            <div class="card-body">
+                <label for="cloudflare-api-token">CLOUDFLARE_API_TOKEN</label>
+                <input type="text" id="cloudflare-api-token" placeholder="Paste token value">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>CLOUDFLARE_ACCOUNT_ID</h2>
+                <a href="https://dash.cloudflare.com/" target="_blank">Copy Account ID</a>
+            </div>
+            <div class="card-body">
+                <label for="cloudflare-account-id">CLOUDFLARE_ACCOUNT_ID</label>
+                <input type="text" id="cloudflare-account-id" placeholder="Paste account ID">
+                <p class="note">not created, just copy from the account overview sidebar</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>NOTION_TOKEN</h2>
+                <a href="https://www.notion.so/my-integrations" target="_blank">Generate Token</a>
+            </div>
+            <div class="card-body">
+                <label for="notion-token">NOTION_TOKEN</label>
+                <input type="text" id="notion-token" placeholder="Paste token value">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>MEM0_API_KEY</h2>
+                <a href="https://app.mem0.ai/dashboard/api-keys" target="_blank">Generate API Key</a>
+            </div>
+            <div class="card-body">
+                <label for="mem0-api-key">MEM0_API_KEY</label>
+                <input type="text" id="mem0-api-key" placeholder="Paste API key value">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>GEMINI_API_KEY</h2>
+                <a href="https://aistudio.google.com/apikey" target="_blank">Generate API Key</a>
+            </div>
+            <div class="card-body">
+                <label for="gemini-api-key">GEMINI_API_KEY</label>
+                <input type="text" id="gemini-api-key" placeholder="Paste API key value">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>EXA_API_KEYS</h2>
+                <a href="https://dashboard.exa.ai/api-keys" target="_blank">Generate API Keys</a>
+            </div>
+            <div class="card-body">
+                <label for="exa-api-keys">EXA_API_KEYS</label>
+                <input type="text" id="exa-api-key-1" placeholder="Paste API key value">
+                <button id="add-exa-api-key">Add another key</button>
+                <div id="exa-api-keys-container"></div>
+                <p class="note">comma-separated, you can generate and combine multiple keys</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>OPENROUTER_API_KEY</h2>
+                <a href="https://openrouter.ai/keys" target="_blank">Generate API Key</a>
+            </div>
+            <div class="card-body">
+                <label for="openrouter-api-key">OPENROUTER_API_KEY</label>
+                <input type="text" id="openrouter-api-key" placeholder="Paste API key value">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>CONTEXT7_API_KEY</h2>
+                <a href="https://context7.com/dashboard" target="_blank">Generate API Key</a>
+            </div>
+            <div class="card-body">
+                <label for="context7-api-key">CONTEXT7_API_KEY</label>
+                <input type="text" id="context7-api-key" placeholder="Paste API key value">
+                <p class="optional">works unauthenticated at low rate limits</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN</h2>
+                <a href="https://console.upstash.com/redis" target="_blank">Generate credentials</a>
+            </div>
+            <div class="card-body">
+                <label for="upstash-redis-rest-url">UPSTASH_REDIS_REST_URL</label>
+                <input type="text" id="upstash-redis-rest-url" placeholder="Paste URL value">
+                <label for="upstash-redis-rest-token">UPSTASH_REDIS_REST_TOKEN</label>
+                <input type="text" id="upstash-redis-rest-token" placeholder="Paste token value">
+                <p class="optional">optional</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>MCP_SHARED_KEY</h2>
+            </div>
+            <div class="card-body">
+                <label for="mcp-shared-key">MCP_SHARED_KEY</label>
+                <input type="text" id="mcp-shared-key" placeholder="Generate or paste secret value">
+                <button id="generate-mcp-shared-key">Generate random secret</button>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h2>GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY</h2>
+                <a href="https://github.com/settings/apps/new" target="_blank">Create GitHub App</a>
+            </div>
+            <div class="card-body">
+                <label for="github-app-id">GITHUB_APP_ID</label>
+                <input type="text" id="github-app-id" placeholder="Paste app ID value">
+                <label for="github-app-installation-id">GITHUB_APP_INSTALLATION_ID</label>
+                <input type="text" id="github-app-installation-id" placeholder="Paste installation ID value">
+                <label for="github-app-private-key">GITHUB_APP_PRIVATE_KEY</label>
+                <textarea id="github-app-private-key" placeholder="Paste private key value"></textarea>
+                <p class="note">multi-step flow: create app, install it to get installation ID, download private key .pem, copy app ID</p>
+                <p class="optional">optional</p>
+            </div>
+        </div>
+        <div class="bundle">
+            <h2>Bundle</h2>
+            <pre id="bundle-output"></pre>
+            <button id="copy-bundle">Copy bundle</button>
+            <button id="download-bundle">Download .env</button>
+        </div>
+    </div>
+    <script>
+        const bundleOutput = document.getElementById('bundle-output');
+        const copyBundleButton = document.getElementById('copy-bundle');
+        const downloadBundleButton = document.getElementById('download-bundle');
+        const githubTokenInput = document.getElementById('github-token');
+        const cloudflareApiTokenInput = document.getElementById('cloudflare-api-token');
+        const cloudflareAccountIdInput = document.getElementById('cloudflare-account-id');
+        const notionTokenInput = document.getElementById('notion-token');
+        const mem0ApiKeyInput = document.getElementById('mem0-api-key');
+        const geminiApiKeyInput = document.getElementById('gemini-api-key');
+        const exaApiKeyInput = document.getElementById('exa-api-key-1');
+        const addExaApiKeyButton = document.getElementById('add-exa-api-key');
+        const exaApiKeysContainer = document.getElementById('exa-api-keys-container');
+        const openrouterApiKeyInput = document.getElementById('openrouter-api-key');
+        const context7ApiKeyInput = document.getElementById('context7-api-key');
+        const upstashRedisRestUrlInput = document.getElementById('upstash-redis-rest-url');
+        const upstashRedisRestTokenInput = document.getElementById('upstash-redis-rest-token');
+        const mcpSharedKeyInput = document.getElementById('mcp-shared-key');
+        const generateMcpSharedKeyButton = document.getElementById('generate-mcp-shared-key');
+        const githubAppIdInput = document.getElementById('github-app-id');
+        const githubAppInstallationIdInput = document.getElementById('github-app-installation-id');
+        const githubAppPrivateKeyInput = document.getElementById('github-app-private-key');
+
+        let exaApiKeys = [];
+
+        addExaApiKeyButton.addEventListener('click', () => {
+            const newInput = document.createElement('input');
+            newInput.type = 'text';
+            newInput.placeholder = 'Paste API key value';
+            exaApiKeysContainer.appendChild(newInput);
+            exaApiKeys.push(newInput);
+        });
+
+        generateMcpSharedKeyButton.addEventListener('click', () => {
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            const hexString = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+            mcpSharedKeyInput.value = hexString;
+        });
+
+        function updateBundle() {
+            const bundle = [];
+            if (githubTokenInput.value) bundle.push(`GITHUB_TOKEN=${githubTokenInput.value}`);
+            if (cloudflareApiTokenInput.value) bundle.push(`CLOUDFLARE_API_TOKEN=${cloudflareApiTokenInput.value}`);
+            if (cloudflareAccountIdInput.value) bundle.push(`CLOUDFLARE_ACCOUNT_ID=${cloudflareAccountIdInput.value}`);
+            if (notionTokenInput.value) bundle.push(`NOTION_TOKEN=${notionTokenInput.value}`);
+            if (mem0ApiKeyInput.value) bundle.push(`MEM0_API_KEY=${mem0ApiKeyInput.value}`);
+            if (geminiApiKeyInput.value) bundle.push(`GEMINI_API_KEY=${geminiApiKeyInput.value}`);
+            if (exaApiKeyInput.value || exaApiKeys.some(input => input.value)) {
+                const exaApiKeysValues = [exaApiKeyInput.value, ...exaApiKeys.map(input => input.value)].filter(value => value);
+                bundle.push(`EXA_API_KEYS=${exaApiKeysValues.join(',')}`);
+            }
+            if (openrouterApiKeyInput.value) bundle.push(`OPENROUTER_API_KEY=${openrouterApiKeyInput.value}`);
+            if (context7ApiKeyInput.value) bundle.push(`CONTEXT7_API_KEY=${context7ApiKeyInput.value}`);
+            if (upstashRedisRestUrlInput.value) bundle.push(`UPSTASH_REDIS_REST_URL=${upstashRedisRestUrlInput.value}`);
+            if (upstashRedisRestTokenInput.value) bundle.push(`UPSTASH_REDIS_REST_TOKEN=${upstashRedisRestTokenInput.value}`);
+            if (mcpSharedKeyInput.value) bundle.push(`MCP_SHARED_KEY=${mcpSharedKeyInput.value}`);
+            if (githubAppIdInput.value) bundle.push(`GITHUB_APP_ID=${githubAppIdInput.value}`);
+            if (githubAppInstallationIdInput.value) bundle.push(`GITHUB_APP_INSTALLATION_ID=${githubAppInstallationIdInput.value}`);
+            if (githubAppPrivateKeyInput.value) bundle.push(`GITHUB_APP_PRIVATE_KEY="${githubAppPrivateKeyInput.value.replace(/\n/g, '\\n')}"`);
+            bundleOutput.textContent = bundle.join('\n');
+        }
+
+        githubTokenInput.addEventListener('input', updateBundle);
+        cloudflareApiTokenInput.addEventListener('input', updateBundle);
+        cloudflareAccountIdInput.addEventListener('input', updateBundle);
+        notionTokenInput.addEventListener('input', updateBundle);
+        mem0ApiKeyInput.addEventListener('input', updateBundle);
+        geminiApiKeyInput.addEventListener('input', updateBundle);
+        exaApiKeyInput.addEventListener('input', updateBundle);
+        exaApiKeys.forEach(input => input.addEventListener('input', updateBundle));
+        openrouterApiKeyInput.addEventListener('input', updateBundle);
+        context7ApiKeyInput.addEventListener('input', updateBundle);
+        upstashRedisRestUrlInput.addEventListener('input', updateBundle);
+        upstashRedisRestTokenInput.addEventListener('input', updateBundle);
+        mcpSharedKeyInput.addEventListener('input', updateBundle);
+        githubAppIdInput.addEventListener('input', updateBundle);
+        githubAppInstallationIdInput.addEventListener('input', updateBundle);
+        githubAppPrivateKeyInput.addEventListener('input', updateBundle);
+
+        copyBundleButton.addEventListener('click', () => {
+            navigator.clipboard.writeText(bundleOutput.textContent);
+            copyBundleButton.textContent = 'Copied!';
+            setTimeout(() => {
+                copyBundleButton.textContent = 'Copy bundle';
+            }, 2000);
+        });
+
+        downloadBundleButton.addEventListener('click', () => {
+            const blob = new Blob([bundleOutput.textContent], { type: 'text/plain' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = '.env';
+            link.click();
+        });
+    </script>
+</body>
+</html>
