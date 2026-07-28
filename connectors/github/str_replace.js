@@ -10,7 +10,9 @@ import { readFileViaBlob } from "./helpers.js";
 export function register(server) {
   server.tool(
     "str_replace_file",
-    "Edit, patch, modify, or fix part of a file in a GitHub repository by applying one or more targeted find-and-replace operations, then commit the result. Only the changed strings need to be sent — no full file upload required. Returns a unified diff of what changed. Use this for small, surgical edits; for a full rewrite use overwrite_file, or create_repo_file to write a brand-new file.",
+    "DOES: Targeted find-and-replace edit(s) on a file, committed in one call. Only changed strings need to be sent (no full-file upload). Returns a unified diff.\n" +
+    "RULE: each `find` must appear exactly once in the file, or that replacement is rejected and nothing is committed.\n" +
+    "RULE: small surgical edit -> this. Full rewrite -> overwrite_file. Brand-new file -> create_repo_file.",
     {
       owner:        z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:         z.string().describe("Repository name"),
