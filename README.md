@@ -67,11 +67,12 @@ yet, open `demo.html` directly.)
 
 ## Deploy & connect (quickstart)
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/allocsys/madmcp)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/allocsys/madmcp&env=MCP_SHARED_KEY,GITHUB_TOKEN,NOTION_TOKEN,MEM0_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID&envDescription=Generate+a+long+random+string+yourself+for+MCP_SHARED_KEY+(Vercel+can%27t+auto-generate+it).+Leave+any+connector+token+blank+to+skip+it.&envLink=https://github.com/allocsys/madmcp%23configuration&project-name=madmcp-server&repository-name=madmcp-server)
+[![Deploy to Render](https://img.shields.io/badge/Deploy%20to-Render-46E3B7?style=flat-square&logo=render&logoColor=white)](https://render.com/deploy?repo=https://github.com/allocsys/madmcp)
+[![Deploy with Vercel](https://img.shields.io/badge/Deploy%20with-Vercel-000000?style=flat-square&logo=vercel&logoColor=white)](https://vercel.com/new/clone?repository-url=https://github.com/allocsys/madmcp&env=MCP_SHARED_KEY,GITHUB_TOKEN,NOTION_TOKEN,MEM0_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID&envDescription=Generate+a+long+random+string+yourself+for+MCP_SHARED_KEY+(Vercel+can%27t+auto-generate+it).+Leave+any+connector+token+blank+to+skip+it.&envLink=https://github.com/allocsys/madmcp%23configuration&project-name=madmcp-server&repository-name=madmcp-server)
 
-Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-click links to each provider's key-creation page, or use the **[env bundler](https://allocsys.github.io/madmcp/index.html)** to collect them all and copy out a single `.env` block:
+Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-click links to each provider's key-creation page, or use the env bundler below to collect them all and copy out a single `.env` block:
 
+[![Env Bundler](https://img.shields.io/badge/Env-Bundler-ECD53F?style=flat-square&logo=dotenv&logoColor=333333)](https://allocsys.github.io/madmcp/index.html)
 [![GitHub Token](https://img.shields.io/badge/GitHub-Token-181717?style=flat-square&logo=github)](https://github.com/settings/tokens/new)
 [![Cloudflare Token](https://img.shields.io/badge/Cloudflare-Token-F38020?style=flat-square&logo=cloudflare)](https://dash.cloudflare.com/profile/api-tokens)
 [![Notion Integration](https://img.shields.io/badge/Notion-Integration-000000?style=flat-square&logo=notion)](https://www.notion.so/my-integrations)
