@@ -9,7 +9,8 @@ import { DEFAULT_OWNER } from "../../config.js";
 export function register(server) {
   server.tool(
     "download_repo",
-    "Fetch all files from a GitHub repository and return their full contents as a JSON payload. Claude receives {summary, files:[{path,content}], errors} and can then write them to the local sandbox filesystem with the computer-use create_file tool (not this connector's create_repo_file, which writes back to GitHub instead).",
+    "DOES: Fetch all files from a repo, return full contents as JSON ({summary, files:[{path,content}], errors}). Write to the local sandbox filesystem via the computer-use create_file tool (NOT create_repo_file, which writes back to GitHub).\n" +
+    "RULE: need to run/test/lint the code rather than just read it -> for a PUBLIC repo, `git clone` directly in the sandbox instead (zero context cost, can execute). For a PRIVATE repo, use get_repo_clone_token first to get a scoped clone token, then `git clone` with it.",
     {
       owner:      z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:       z.string().describe("Repository name"),
