@@ -18,6 +18,7 @@ import { register as registerReviewControl } from "./review_control.js";
 import { register as registerStrReplace} from "./str_replace.js";
 import { register as registerDiff      } from "./diff.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
+import { register as registerCloneToken } from "./clone_token.js";
 
 export function register(server) {
   registerDownload(server);
@@ -34,4 +35,5 @@ export function register(server) {
   registerStrReplace(server);
   registerDiff(server);
   registerRepoMgmt(server);
+  registerCloneToken(server);
 }
