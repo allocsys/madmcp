@@ -175,4 +175,4 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
 // function handler (Express apps are callable as (req, res) => {}). Named
 // exports are kept for tests/other tooling that import { app, mcpServer }.
 export default app;
-export { app, mcpServer };
+export { app, mcpServer }
