@@ -13,6 +13,7 @@ import {
   FRONTEND_PROVIDER,
   FRONTEND_REQUEST_TIMEOUT_MS,
   CLOUDFLARE_AI_MODEL,
+  CLOUDFLARE_AI_MAX_TOKENS,
   OPENROUTER_API_KEY,
   OPENROUTER_API,
   OPENROUTER_MODEL,
@@ -28,7 +29,12 @@ import { geminiGenerate } from "../gemini/client.js";
 async function callCloudflare(prompt) {
   const data = await cfAccountRequest(`/ai/run/${CLOUDFLARE_AI_MODEL}`, {
     method: "POST",
-    body: { messages: [{ role: "user", content: prompt }] },
+    // max_tokens must be set explicitly -- Workers AI defaults to a low cap
+    // (256 for most chat models) when it's omitted, which silently truncates
+    // longer generations (a full HTML/JSX file) partway through instead of
+    // erroring, and looks like a model-quality problem rather than a missing
+    // request parameter. See CLOUDFLARE_AI_MAX_TOKENS in config.js.
+    body: { messages: [{ role: "user", content: prompt }], max_tokens: CLOUDFLARE_AI_MAX_TOKENS },
   });
   const text = data?.response;
   if (!text) throw new Error(`Cloudflare Workers AI (${CLOUDFLARE_AI_MODEL}) returned no response text.`);
