@@ -208,6 +208,16 @@ export const FRONTEND_PROVIDER = process.env.FRONTEND_PROVIDER || "cloudflare";
 // becomes available on Workers AI.
 export const CLOUDFLARE_AI_MODEL = process.env.CLOUDFLARE_AI_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
+// Workers AI defaults max_tokens to a low cap (256 for most chat models) when
+// the request omits it -- discovered 2026-07-28 when delegate_designer's
+// cloudflare provider kept silently truncating generated files partway
+// through (e.g. mid <style>/<body>) regardless of task size or attempt
+// count, which looked like a model-capability problem but was actually just
+// this unset request parameter. Override via env var if a given model's own
+// max output is smaller than this, or if generations still truncate on
+// larger files.
+export const CLOUDFLARE_AI_MAX_TOKENS = Number(process.env.CLOUDFLARE_AI_MAX_TOKENS) || 4096;
+
 // -- openrouter: openrouter.ai (OpenAI-compatible /chat/completions) --
 // Optional -- only required if FRONTEND_PROVIDER=openrouter. Default model
 // is a free (":free"-suffixed) route; override via env var, but check
