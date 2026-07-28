@@ -93,7 +93,9 @@ async function fallbackCodeSearch({ owner, repo, query, per_page }) {
 export function register(server) {
   server.tool(
     "search_issues",
-    "Search issues and pull requests across GitHub using GitHub's issue-search syntax (e.g. 'label:bounty is:issue is:open stars:>100 -repo:owner/name -org:someorg'). Returns issue/PR title, repo, state, labels, assignee, created date, and URL for each result — useful for cross-repo discovery like bounty hunting or good-first-issue scanning, which list_issues (single-repo) can't do. NOTE for the calling model: if this is one step of a broader open-ended hunt (many searches, then reading candidates, then narrowing down), consider delegate_gemini instead -- it can chain that kind of multi-step search-and-read loop in one call.",
+    "DOES: Search issues/PRs cross-repo via GitHub issue-search syntax (label:, is:issue, is:pr, stars:>N, org:, -repo:, etc). Returns title, repo, state, labels, assignee, date, URL per result.\n" +
+    "RULE: cross-repo discovery (bounty hunting, good-first-issue scanning) -> this tool. Single known repo -> list_issues instead.\n" +
+    "RULE: broader open-ended hunt (many searches -> read candidates -> narrow down) -> delegate_gemini instead of chaining this manually.",
     {
       query:    z.string().describe("GitHub issue-search query string using standard qualifiers: label:, is:issue, is:pr, is:open, is:closed, stars:>N, org:, repo:, -repo: (exclude), -org: (exclude), created:, assignee:, no:assignee, etc. Combine with spaces (AND). e.g. 'label:bounty is:issue is:open stars:>100 -org:mergeos-bounties'"),
       sort:     z.enum(["created", "updated", "comments"]).optional().describe("Sort field (default: best-match relevance if omitted)"),
@@ -117,7 +119,9 @@ export function register(server) {
 
   server.tool(
     "search_code",
-    "Search for code across GitHub repositories. For a query scoped to one repo via `repo:owner/name`, automatically falls back to a direct tree/blob grep of that repo if GitHub's search index returns nothing — GitHub's code-search API has a known gap where it can return empty results for private repos regardless of token permissions. NOTE for the calling model: if you're running many of these searches back-to-back to track something down (e.g. tracing a symbol across a codebase), consider delegate_gemini instead of doing it manually call-by-call.",
+    "DOES: Search code across GitHub repos.\n" +
+    "RULE: query scoped via repo:owner/name AND index returns nothing -> auto-falls back to a direct tree/blob grep of that repo (handles GitHub's known private-repo search-index gap; see code comment above fallbackCodeSearch).\n" +
+    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_gemini instead of chaining this manually.",
     {
       query:    z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
       per_page: z.number().optional().describe("Number of results to return, max 100 (default: 10)"),
