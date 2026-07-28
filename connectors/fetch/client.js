@@ -76,7 +76,7 @@ async function assertSafeUrl(urlStr) {
       const results = await dns.lookup(hostname, { all: true });
       addresses = results.map((r) => r.address);
     } catch (err) {
-      throw new Error(`Could not resolve host "${hostname}": ${err.message}`);
+      throw new Error(`Could not resolve host "${hostname}": ${err.message}`, { cause: err });
     }
   }
   if (!addresses.length || addresses.some(isPrivateIP)) {
