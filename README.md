@@ -39,7 +39,7 @@ of relying on manual copy/paste between tabs.
 
 ### Agent-driven self-modification
 
-`DEFAULT_OWNER` defaults to `allocsys`, and the GitHub connector exposes
+`DEFAULT_OWNER` defaults to `your forked repo`, and the GitHub connector exposes
 full read/write/PR tooling (`read_file`, `str_replace_file`, `overwrite_file`,
 `create_pull_request`, `merge_pull_request`, etc.) — not a read-only subset.
 That combination means an agent connected to this server has direct write
