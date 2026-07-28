@@ -871,7 +871,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
   let runId = resume_run_id;
   let contents;
   let transcript;
-  let startStep = 1;
+  let startStep;
   // The task text actually in effect for this run -- the caller-supplied
   // one on a fresh run, or the one restored from a resumed checkpoint.
   // Tracked (and persisted in every checkpoint below) so callers/tools.js
@@ -1022,7 +1022,6 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
       });
-      contentsCheckpointedUpTo = contents.length;
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
       const resumeHint = isTransientGeminiError(err)
@@ -1213,7 +1212,6 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
       });
-      contentsCheckpointedUpTo = contents.length;
       const errMessage = err?.message ?? String(err);
       return {
         answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call delegate_gemini again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
