@@ -95,10 +95,10 @@ export function validateCss(content) {
 // Unlike HTML/CSS, JSX genuinely isn't valid plain JS syntax -- a regex
 // approach can't reliably validate it, so this is the one case that
 // warrants an actual parser dependency.
-export function validateJsx(content, { typescript = false } = {}) {
+export async function validateJsx(content, { typescript = false } = {}) {
   let parse;
   try {
-    ({ parse } = require("@babel/parser"));
+    ({ parse } = await import("@babel/parser"));
   } catch {
     // Dependency missing for some reason (shouldn't happen once package.json
     // is updated, but fail open rather than crash the whole tool call --
@@ -118,7 +118,7 @@ export function validateJsx(content, { typescript = false } = {}) {
 }
 
 // -- Vue SFC: block-balance + parse the <script> block if present --------
-export function validateVue(content) {
+export async function validateVue(content) {
   const errors = [];
   for (const tag of ["template", "script", "style"]) {
     const openCount  = (content.match(new RegExp(`<${tag}\\b`, "gi")) || []).length;
@@ -130,7 +130,7 @@ export function validateVue(content) {
   const scriptMatch = /<script[^>]*>([\s\S]*?)<\/script>/i.exec(content);
   if (scriptMatch) {
     const isTs = /lang=["']ts["']/i.test(scriptMatch[0]);
-    const scriptResult = validateJsx(scriptMatch[1], { typescript: isTs });
+    const scriptResult = await validateJsx(scriptMatch[1], { typescript: isTs });
     if (!scriptResult.valid) errors.push(...scriptResult.errors.map((e) => `<script> block: ${e}`));
   }
   const templateMatch = /<template[^>]*>([\s\S]*?)<\/template>/i.exec(content);
@@ -142,9 +142,9 @@ export function validateVue(content) {
 }
 
 const VALIDATORS = {
-  ".html": (c) => validateHtml(c),
-  ".css":  (c) => validateCss(c),
-  ".scss": (c) => validateCss(c),
+  ".html": async (c) => validateHtml(c),
+  ".css":  async (c) => validateCss(c),
+  ".scss": async (c) => validateCss(c),
   ".jsx":  (c) => validateJsx(c, { typescript: false }),
   ".tsx":  (c) => validateJsx(c, { typescript: true }),
   ".vue":  (c) => validateVue(c),
@@ -153,8 +153,10 @@ const VALIDATORS = {
 // Dispatches to the right validator based on file extension. Returns
 // { valid: true, errors: [] } for an extension with no validator registered
 // (fail-open -- an unrecognized-but-allowlisted extension shouldn't block a
-// write, it just doesn't get a syntax check).
-export function validateByExtension(path, content) {
+// write, it just doesn't get a syntax check). Async throughout (even the
+// HTML/CSS branches, which don't need to be) so callers have one uniform
+// `await validateByExtension(...)` regardless of which file type they hit.
+export async function validateByExtension(path, content) {
   const match = /\.[a-z0-9]+$/i.exec(path);
   const ext = match ? match[0].toLowerCase() : "";
   const validator = VALIDATORS[ext];
