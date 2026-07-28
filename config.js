@@ -235,6 +235,26 @@ export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSI
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
+// Bounds delegate_designer's generate -> validate -> fix loop (connectors/
+// frontend/validate.js + checkpoint.js). Mirrors delegate_gemini's
+// HARD_MAX_STEPS reasoning -- both bounds LLM call cost and keeps a single
+// resumable unit of work small. A run that can't converge within this many
+// attempts writes its best (most-recently-generated) attempt with an
+// unresolved-issues note rather than looping indefinitely.
+export const FRONTEND_MAX_ATTEMPTS = Number(process.env.FRONTEND_MAX_ATTEMPTS) || 3;
+
+// Wall-clock budget for the WHOLE validate-fix loop within one delegate_
+// designer call, checked before starting each attempt -- distinct from
+// FRONTEND_REQUEST_TIMEOUT_MS above, which bounds a single LLM call. A
+// 3-attempt loop (3 LLM calls) can plausibly exceed a hosting platform's
+// own request-duration ceiling (the same constraint that motivated
+// delegate_gemini's checkpoint/resume, see its HARD_MAX_STEPS comment) even
+// though no single attempt does. When exceeded, the loop checkpoints
+// (connectors/frontend/checkpoint.js) and returns a resume_run_id instead of
+// continuing past the platform's own limit. Set comfortably below that
+// limit, not up against it.
+export const FRONTEND_TOTAL_BUDGET_MS = Number(process.env.FRONTEND_TOTAL_BUDGET_MS) || 45000;
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to
