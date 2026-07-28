@@ -22,7 +22,7 @@ jobs:
       # on. hashFiles() silently skips any pattern that matches nothing, so
       # this works whether or not package-lock.json exists.
       - name: Cache npm dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json', 'package.json') }}
