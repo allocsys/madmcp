@@ -13,7 +13,9 @@ export function register(server) {
 
   server.tool(
     "trigger_workflow",
-    "Manually trigger a GitHub Actions workflow run via workflow_dispatch, on a given branch/ref, optionally passing input parameters. The workflow file must have a `workflow_dispatch` trigger defined, or this will fail. Use this instead of opening a throwaway PR just to get CI to run.",
+    "DOES: Manually trigger a workflow_dispatch run on a branch/ref, with optional inputs.\n" +
+    "RULE: workflow file must have a workflow_dispatch trigger defined, or this fails.\n" +
+    "RULE: needing CI to run without a real change -> this, instead of opening a throwaway PR.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
@@ -49,7 +51,8 @@ export function register(server) {
 
   server.tool(
     "rerun_workflow",
-    "Rerun a GitHub Actions workflow run — either the whole run or just its failed jobs. Use failed_jobs_only to retry a flaky test without re-running steps that already passed.",
+    "DOES: Rerun a workflow run -- whole run, or failed jobs only.\n" +
+    "RULE: retrying a flaky test without re-running steps that already passed -> failed_jobs_only=true.",
     {
       owner:            z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:             z.string().describe("Repository name"),
@@ -70,7 +73,7 @@ export function register(server) {
 
   server.tool(
     "cancel_workflow_run",
-    "Cancel a GitHub Actions workflow run that is queued or in progress.",
+    "DOES: Cancel a queued or in-progress workflow run.",
     {
       owner:  z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:   z.string().describe("Repository name"),
@@ -84,7 +87,8 @@ export function register(server) {
 
   server.tool(
     "get_check_runs",
-    "Get the check-runs (the individual check/status entries shown as pass/fail dots on a commit or PR) for a specific commit SHA, branch, or tag. This is the underlying data behind GitHub's green check / red X on a commit -- distinct from list_workflow_runs, which lists Actions runs rather than the check results attached to a ref.",
+    "DOES: Individual check/status entries (pass/fail dots) for a commit/branch/tag -- the data behind GitHub's green check / red X.\n" +
+    "NOT: a list of Actions runs -> use list_workflow_runs for that.",
     {
       owner:    z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:     z.string().describe("Repository name"),
@@ -104,7 +108,7 @@ export function register(server) {
 
   server.tool(
     "get_combined_status",
-    "Get the combined commit status for a ref — an overall pass/fail/pending rollup plus each individual status context (used by some CI systems and integrations instead of, or alongside, GitHub Actions check-runs).",
+    "DOES: Combined commit status for a ref -- overall pass/fail/pending rollup + each individual status context (the legacy Status API some CI systems/integrations use instead of, or alongside, Actions check-runs).",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
