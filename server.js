@@ -153,7 +153,6 @@ app.post("/mcp", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 
 const PORT = process.env.PORT || 8080
-const syntaxErrorTestMarker = ;
 // Gated so importing this module (e.g. from tests via supertest, or the MCP
 // integration test's InMemoryTransport) never binds a real port. Tests set
 // NODE_ENV=test before importing server.js.
