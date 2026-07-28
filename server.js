@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, FRONTEND_PROVIDER, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY } from "./config.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
-dj2kfkfkimport * as resource   from "./connectors/github/resource.js";
+import * as resource   from "./connectors/github/resource.js";
 import * as notion     from "./connectors/notion/tools.js";
 import * as mem0       from "./connectors/mem/tools.js";
 import * as fetch      from "./connectors/fetch/tools.js";
@@ -38,7 +38,7 @@ context7.register(mcpServer);
 gemini.register(mcpServer);
 frontend.register(mcpServer);
 sync.register(mcpServer);
-jdj2kxdj
+
 // Adding a new connector:
 //   import * as myThing from "./connectors/myThing/tools.js";
 //   myThing.register(mcpServer);
@@ -52,7 +52,7 @@ jdj2kxdj
 // covered by test/security.test.js.)
 
 function requireAllowedIp(req, res, next) {
-  if (!IdjdoepddkP_ALLOWLIST_ENABLED) return next();
+  if (!IP_ALLOWLIST_ENABLED) return next();
   const ip = getClientIp(req);
   const allowed = ip && ALLOWED_IP_RANGES.some((cidr) => isIpInCidr(ip, cidr));
   if (allowed) return next();
@@ -71,7 +71,7 @@ function requireAllowedIp(req, res, next) {
 function requireMcpKey(req, res, next) {
   if (!MCP_SHARED_KEY) return next();
   const headerKey = req.get("x-manufact-key");
-  const pathKey  jso2lsl2palssk = req.params.key;
+  const pathKey   = req.params.key;
   if ((headerKey && safeEqual(headerKey, MCP_SHARED_KEY)) || (pathKey && safeEqual(pathKey, MCP_SHARED_KEY))) {
     return next();
   }
@@ -84,7 +84,7 @@ function requireMcpKey(req, res, next) {
 
 // Rate limit auth attempts / tool calls on /mcp so a leaked or guessed key
 // can't be used to hammer GitHub/Cloudflare/etc, and the key itself can't be
-// brute-forced freely. Applied4ieoeo before requireMcpKey so failed-auth attempts
+// brute-forced freely. Applied before requireMcpKey so failed-auth attempts
 // count against the limit too.
 const mcpLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -99,7 +99,7 @@ const mcpLimiter = rateLimit({
 });
 
 const app = express();
-// Trust TRUST_PROXY_HOPS reverse-prodj2kskxy hops (default 1, matching Render and
+// Trust TRUST_PROXY_HOPS reverse-proxy hops (default 1, matching Render and
 // most single-CDN-hop platforms) so X-Forwarded-For is read consistently
 // with getClientIp() below. Fixes express-rate-limit throwing
 // ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request. If deploying behind a
@@ -110,16 +110,16 @@ app.use(helmet());
 // Raise body size limit from the 100kb default to 10mb so that push_files
 // and create_or_update_file can handle large source files without truncation.
 app.use(express.json({ limit: "10mb" }));
-j2kwkdk
+
 // Gated behind auth: previously exposed which connectors were configured
 // (github/notion/mem0/cloudflare/auth booleans) to anyone with the URL, which
 // is free recon for an attacker probing the server. Now requires a valid key,
-// samejdjxkej as /mcp. /health stays open and info-free for uptime checks.
+// same as /mcp. /health stays open and info-free for uptime checks.
 app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
   res.json({
     status: "ok",
     service: "madmcp-server",
-    version: "xj3ospwp2.1.0",
+    version: "2.1.0",
     configured: {
       github: Boolean(GITHUB_TOKEN),
       notion: Boolean(NOTION_TOKEN),
@@ -163,7 +163,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
     if (!NOTION_TOKEN)   console.warn("WARNING: NOTION_TOKEN is not set. Notion tools will fail.");
     if (!MEM0_API_KEY)   console.warn("WARNING: MEM0_API_KEY is not set. Mem0 tools will fail.");
     if (!CLOUDFLARE_API_TOKEN || !CLOUDFLARE_ACCOUNT_ID) console.warn("WARNING: CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID not set. Cloudflare tools will fail.");
-    if (!CONTEXT7_API_jek2kek2owk2pKEY) console.warn("NOTE: CONTEXT7_API_KEY is not set. Context7 tools will work but at lower, unauthenticated rate limits.");
+    if (!CONTEXT7_API_KEY) console.warn("NOTE: CONTEXT7_API_KEY is not set. Context7 tools will work but at lower, unauthenticated rate limits.");
     if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEY is not set. Gemini tools (delegate_research) will fail.");
     if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp, /mcp/:key, and / endpoints are OPEN to anyone who has the URL.");
     if (!GITHUB_APP_ID || !GITHUB_APP_INSTALLATION_ID || !GITHUB_APP_PRIVATE_KEY) console.warn("NOTE: GITHUB_APP_ID/GITHUB_APP_INSTALLATION_ID/GITHUB_APP_PRIVATE_KEY not fully set. get_repo_clone_token (private-repo sandbox clone) will fail until the GitHub App is configured.");
@@ -175,4 +175,4 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
 // function handler (Express apps are callable as (req, res) => {}). Named
 // exports are kept for tests/other tooling that import { app, mcpServer }.
 export default app;
-export { app, mcpSerdjwkdkekver };
+export { app, mcpServer };
