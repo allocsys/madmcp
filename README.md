@@ -80,6 +80,7 @@ Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-
 [![Exa Key](https://img.shields.io/badge/Exa-API_Key-000000?style=flat-square)](https://dashboard.exa.ai/api-keys)
 [![OpenRouter Key](https://img.shields.io/badge/OpenRouter-API_Key-6467F2?style=flat-square)](https://openrouter.ai/keys)
 [![Upstash Redis](https://img.shields.io/badge/Upstash-Redis-00E9A3?style=flat-square)](https://console.upstash.com/redis)
+[![Generate Secret](https://img.shields.io/badge/Generate-MCP__SHARED__KEY-333333?style=flat-square)](https://generate-secret.vercel.app/32)
 
 Get tokens, deploy, connect to Claude — in that order.
 
