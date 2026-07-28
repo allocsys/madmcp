@@ -157,17 +157,6 @@ const PORT = process.env.PORT || 8080;
 // integration test's InMemoryTransport) never binds a real port. Tests set
 // NODE_ENV=test before importing server.js.
 if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
-   app.listen(PORT, () => {
-     console.log(`madmcp-server v2.1.0 listening on port ${PORT}`);
-     ...
-   });
- }
-
- // Default export so Vercel's Node runtime can invoke this as a serverless
- // function handler (Express apps are callable as (req, res) => {}). Named
- // exports are kept for tests/other tooling that import { app, mcpServer }.
- export default app;
- export { app, mcpServer };
   app.listen(PORT, () => {
     console.log(`madmcp-server v2.1.0 listening on port ${PORT}`);
     if (!GITHUB_TOKEN)   console.warn("WARNING: GITHUB_TOKEN is not set.");
@@ -182,4 +171,8 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
   });
 }
 
+// Default export so Vercel's Node runtime can invoke this as a serverless
+// function handler (Express apps are callable as (req, res) => {}). Named
+// exports are kept for tests/other tooling that import { app, mcpServer }.
+export default app;
 export { app, mcpServer };
