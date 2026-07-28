@@ -36,7 +36,10 @@ export function register(server) {
 
   server.tool(
     "read_file",
-    "RULE for the calling model: only call read_file directly for a single, specifically-named file whose exact path you already know. If you'll need to read more than 2 files, or the request asks you to understand, review, or summarize a whole repo or directory -- regardless of how it's phrased ('read the repo', 'dig into it', 'get up to speed', 'get the full scope', etc. all count) -- use delegate_gemini instead of calling read_file repeatedly. If the repo is PUBLIC and what you actually need is to run/test/lint the code (not just read or summarize it) -- e.g. verifying a change before or after committing it -- `git clone` it in bash_tool instead of either read_file or delegate_gemini: github.com/codeload.github.com/raw.githubusercontent.com are on that sandbox's network allowlist, so cloning costs you zero context (only command output does) and lets you actually execute the code. Not usable for private repos (the sandbox has no GitHub credentials). Tool description: reads a file's contents from a GitHub repository. Automatically returns the file in chunks if it exceeds 100,000 characters, with pagination info so you can call read_file_chunked for subsequent pages.",
+    "USE: single, specifically-named file, exact path already known.\n" +
+    "RULE: >2 files needed, OR request = understand/review/summarize a repo or directory (any phrasing: 'read the repo', 'dig into it', 'get up to speed') -> delegate_gemini instead. Never loop read_file manually for that.\n" +
+    "RULE: repo is PUBLIC and goal = run/test/lint code (not just read it) -> git clone via bash_tool instead (github.com/codeload.github.com/raw.githubusercontent.com allowlisted; zero context cost; can execute code). PUBLIC REPOS ONLY -- no GitHub creds in sandbox.\n" +
+    "DOES: reads a file's contents from a GitHub repository. Auto-chunks if >100,000 chars -- use read_file_chunked for subsequent pages.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -102,7 +105,10 @@ export function register(server) {
 
   server.tool(
     "get_file_tree",
-    "RULE for the calling model: use this only to get a single tree snapshot. If the tree comes back with more than roughly 10 files, or your next step would be reading or searching multiple files from it, stop -- call delegate_gemini for the whole investigation instead of chaining get_file_tree into manual read_file loops. This applies no matter how the request is worded -- a 'thorough read', 'quick look', 'full understanding', or 'dig deeper' into a repo are all the same underlying task. If the repo is PUBLIC and the goal is to run/test/lint multiple files rather than just read them, `git clone` it in bash_tool instead -- see read_file's description for why (zero context cost, can execute code, public repos only). Tool description: recursively lists all files and folders in a GitHub repository (full tree).",
+    "USE: one-time single tree snapshot.\n" +
+    "RULE: result has >~10 files, OR next step = reading/searching multiple files from it -> STOP, use delegate_gemini for the whole investigation instead. Applies regardless of phrasing ('thorough read', 'quick look', 'dig deeper' all count). Never chain this into manual read_file loops.\n" +
+    "RULE: repo is PUBLIC and goal = run/test/lint multiple files (not just read them) -> git clone via bash_tool instead (see read_file's description; zero context cost, can execute code, public repos only).\n" +
+    "DOES: recursively lists all files and folders in a GitHub repository (full tree).",
     {
       owner: z.string().describe("Repository owner (user or org)"),
       repo:  z.string().describe("Repository name"),
