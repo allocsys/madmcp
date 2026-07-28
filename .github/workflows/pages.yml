@@ -1,0 +1,54 @@
+name: Pages
+
+# Only builds/deploys the docs/ site when docs/ actually changed -- avoids
+# an unrelated backend commit (e.g. server.js, connectors/*) triggering a
+# pages rebuild every time. This replaces GitHub's automatic
+# "pages build and deployment" workflow, which has no path filtering when
+# Pages is set to deploy from a branch.
+#
+# Requires repo Settings -> Pages -> Source to be switched to
+# "GitHub Actions" (currently set to "Deploy from a branch"). Until that's
+# switched, the old branch-based Pages build will keep running alongside
+# this one.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload docs/ as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
