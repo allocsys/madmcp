@@ -283,11 +283,14 @@ export const GITHUB_APP_ID              = process.env.GITHUB_APP_ID;
 export const GITHUB_APP_INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID;
 export const GITHUB_APP_PRIVATE_KEY     = process.env.GITHUB_APP_PRIVATE_KEY;
 
-// Server-side cache buffer (connectors/github/app_auth.js): a cached token
-// is only reused if AT LEAST this many seconds of validity remain; otherwise
-// a fresh one is minted. Exists so a token doesn't get handed out with (say)
-// 10 seconds left, expiring mid-clone on a large repo/slow connection.
-export const GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS = Number(process.env.GITHUB_APP_TOKEN_CACHE_BUFFER_SECONDS) || 300;
+// Grace period (connectors/github/app_auth.js): how long a freshly minted
+// clone token is allowed to live before this server auto-revokes it via
+// GitHub's revoke endpoint, making it effectively single-use rather than
+// relying on GitHub's own ~1hr installation-token TTL. Should comfortably
+// cover how long a `git clone` of the target repo(s) takes to run -- 3
+// minutes by default; raise it if clones of a particularly large private
+// repo are getting cut off mid-transfer.
+export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS) || 180;
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
