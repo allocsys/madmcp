@@ -46,7 +46,7 @@ export async function findPageByEntityId(entity_id) {
     // Fail loudly rather than silently falling back to nothing found --
     // silently treating "index unreachable" as "no duplicate exists" would
     // just reintroduce the exact bug this fix is for.
-    throw new Error(`Notion entity index database (${NOTION_INDEX_DATABASE_ID}) is unreachable, so entity_id dedup can't be verified: ${err.message}. Fix NOTION_INDEX_DATABASE_ID / the database's sharing settings before creating entity-tracked pages.`);
+    throw new Error(`Notion entity index database (${NOTION_INDEX_DATABASE_ID}) is unreachable, so entity_id dedup can't be verified: ${err.message}. Fix NOTION_INDEX_DATABASE_ID / the database's sharing settings before creating entity-tracked pages.`, { cause: err });
   }
   if (!rows.length) return null;
   const row = rows[0];
