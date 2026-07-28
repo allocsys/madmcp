@@ -4,7 +4,8 @@
     "deploymentEnabled": {
       "main": true,
       "feature/*": false,
-      "fix/*": false
+      "fix/*": false,
+      "test/*": false
     }
   },
   "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(README\\.md|demo\\.html|test/.*|\\.github/.*)$\"'"
