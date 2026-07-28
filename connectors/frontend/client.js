@@ -68,7 +68,7 @@ async function callOpenRouter(prompt) {
     const isAbort = err.name === "AbortError";
     throw new Error(isAbort
       ? `OpenRouter request timed out after ${FRONTEND_REQUEST_TIMEOUT_MS}ms (model: ${OPENROUTER_MODEL})`
-      : `OpenRouter request failed (network error, model: ${OPENROUTER_MODEL}): ${err.message}`);
+      : `OpenRouter request failed (network error, model: ${OPENROUTER_MODEL}): ${err.message}`, { cause: err });
   } finally {
     clearTimeout(timeout);
   }
