@@ -106,13 +106,24 @@ export async function validateJsx(content, { typescript = false } = {}) {
     return { valid: true, errors: [], skipped: "‘@babel/parser’ is not installed -- syntax check skipped." };
   }
   try {
-    parse(content, {
+    // errorRecovery: true means @babel/parser does NOT throw for most
+    // syntax errors -- it instead returns an AST with an `errors` array
+    // attached, so it can keep parsing past the first mistake. That's
+    // useful for tools that want a best-effort AST despite bad input, but
+    // it means a bare try/catch here would silently treat recoverable
+    // syntax errors as valid. Check ast.errors explicitly rather than
+    // relying on parse() to throw.
+    const ast = parse(content, {
       sourceType: "module",
       plugins: typescript ? ["jsx", "typescript"] : ["jsx"],
       errorRecovery: true,
     });
+    if (ast.errors && ast.errors.length) {
+      return { valid: false, errors: ast.errors.map((e) => e.message || String(e)) };
+    }
     return { valid: true, errors: [] };
   } catch (err) {
+    // Non-recoverable errors (parser gives up entirely) still throw.
     return { valid: false, errors: [err.message || String(err)] };
   }
 }
