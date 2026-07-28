@@ -4,7 +4,6 @@
 // To add a new group: create connectors/github/<name>.js and call register().
 // ---------------------------------------------------------------------------
 
-import { register as registerDownload  } from "./download.js";
 import { register as registerFiles     } from "./files.js";
 import { register as registerBranches  } from "./branches.js";
 import { register as registerPRs       } from "./prs.js";
@@ -21,7 +20,6 @@ import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
 
 export function register(server) {
-  registerDownload(server);
   registerFiles(server);
   registerBranches(server);
   registerPRs(server);

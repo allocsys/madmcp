@@ -3,15 +3,16 @@
 // PRIVATE-repo clone tokens (2026-07-28 plan, see Notion entity_id
 // madmcp-github-app-scoped-clone-token-plan).
 //
-// WHY THIS EXISTS: download_repo (./download.js) returns full file contents
-// as a JSON payload straight into the calling model's context — expensive
-// and, for a repo the model just needs to run/test/lint (not read), overkill
-// compared to a real `git clone` into the model's own sandbox. Public repos
-// already support that today (github.com/codeload.github.com/
-// raw.githubusercontent.com are on the sandbox's own network allowlist, no
-// token needed). Private repos can't, since a clone needs credentials and
-// the sandbox has none. This module supplies those credentials in the
-// narrowest, shortest-lived form practical:
+// WHY THIS EXISTS: the old download_repo tool returned full file contents
+// as a JSON payload straight into the calling model's context — expensive,
+// and overkill for a repo the model just needs to run/test/lint (not read).
+// It has since been removed (2026-07-28) now that this module covers its
+// run/test/lint use case via a real `git clone` into the model's own
+// sandbox. Public repos already support that today (github.com/
+// codeload.github.com/raw.githubusercontent.com are on the sandbox's own
+// network allowlist, no token needed). Private repos can't, since a clone
+// needs credentials and the sandbox has none. This module supplies those
+// credentials in the narrowest, shortest-lived form practical:
 //   - a GitHub App (NOT the broad, long-lived GITHUB_TOKEN used everywhere
 //     else in this connector), scoped to contents:read only
 //   - installed only on the specific repo(s) that need this

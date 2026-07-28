@@ -197,7 +197,7 @@ and final answer to a Notion page under a fixed Gemini root page
 ### GitHub
 File/repo ops: `read_file`, `read_file_chunked`, `get_file_at_commit`, `list_directory`,
 `get_file_tree`, `create_repo_file`, `overwrite_file`, `overwrite_files`, `str_replace_file`, `rename_file`,
-`delete_file`, `diff_files`, `download_repo`
+`delete_file`, `diff_files`
 
 Branches & commits: `list_branches`, `create_branch`, `list_commits`, `get_commit`, `list_contributors`
 
