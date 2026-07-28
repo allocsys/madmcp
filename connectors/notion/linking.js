@@ -255,7 +255,7 @@ export async function findLinkCandidates({ title, content }) {
     for (const hit of searchData.results || []) {
       if (hit.object !== "page" || seenPageIds.has(hit.id)) continue;
       seenPageIds.add(hit.id);
-      let candContent = "", candMarkers = {};
+      let candContent, candMarkers;
       try {
         const blocksData = await notionRequest(`/blocks/${hit.id}/children?page_size=100`);
         const blocks = blocksData.results || [];
