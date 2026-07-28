@@ -79,6 +79,7 @@ Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-
 [![Gemini Key](https://img.shields.io/badge/Gemini-API_Key-4285F4?style=flat-square&logo=googlegemini)](https://aistudio.google.com/apikey)
 [![Exa Key](https://img.shields.io/badge/Exa-API_Key-000000?style=flat-square)](https://dashboard.exa.ai/api-keys)
 [![OpenRouter Key](https://img.shields.io/badge/OpenRouter-API_Key-6467F2?style=flat-square)](https://openrouter.ai/keys)
+[![Upstash Redis](https://img.shields.io/badge/Upstash-Redis-00E9A3?style=flat-square)](https://console.upstash.com/redis)
 
 Get tokens, deploy, connect to Claude — in that order.
 
