@@ -6,6 +6,9 @@
     <title>Env Bundler</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
     <style>
+        * {
+            box-sizing: border-box;
+        }
         body {
             font-family: Inter, sans-serif;
             margin: 0;
@@ -24,18 +27,35 @@
         }
         .header {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 28px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        .header .eyebrow {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #4CAF50;
+            background-color: rgba(76, 175, 80, 0.12);
+            padding: 4px 10px;
+            border-radius: 999px;
         }
         .header h1 {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 700;
             margin: 0;
+            letter-spacing: -0.01em;
         }
         .header p {
             font-size: 14px;
-            color: #666;
+            color: #9a9a9a;
+            line-height: 1.5;
+            max-width: 560px;
+            margin: 0;
         }
         .card {
             margin-bottom: 20px;
@@ -139,6 +159,7 @@
 <body>
     <div class="container">
         <div class="header">
+            <span class="eyebrow">Local only</span>
             <h1>Env Bundler</h1>
             <p>No data leaves the browser / nothing is uploaded anywhere, it's purely local assembly.</p>
         </div>
