@@ -6,27 +6,63 @@
     <title>Env Bundler</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
     <style>
+        * {
+            box-sizing: border-box;
+        }
         body {
             font-family: Inter, sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #f9f9f9;
+            background-color: #121212;
+            color: #fff;
         }
         .container {
             max-width: 800px;
             margin: 40px auto;
             padding: 20px;
-            background-color: #fff;
-            border: 1px solid #ddd;
+            background-color: #1a1a1a;
+            border: 1px solid #333;
             border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+        }
+        .header {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 28px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        .header .eyebrow {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #4CAF50;
+            background-color: rgba(76, 175, 80, 0.12);
+            padding: 4px 10px;
+            border-radius: 999px;
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: -0.01em;
+        }
+        .header p {
+            font-size: 14px;
+            color: #9a9a9a;
+            line-height: 1.5;
+            max-width: 560px;
+            margin: 0;
         }
         .card {
             margin-bottom: 20px;
             padding: 20px;
-            border: 1px solid #ddd;
+            border: 1px solid #333;
             border-radius: 10px;
-            background-color: #f9f9f9;
+            background-color: #1a1a1a;
         }
         .card-header {
             display: flex;
@@ -34,15 +70,21 @@
             justify-content: space-between;
             margin-bottom: 10px;
         }
-        .card-header button {
-            background-color: #4CAF50;
-            color: #fff;
-            border: none;
-            padding: 10px 20px;
-            font-size: 16px;
-            cursor: pointer;
+        .card-header h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0;
         }
-        .card-header button:hover {
+        .card-header a {
+            font-size: 14px;
+            color: #4CAF50;
+            text-decoration: none;
+            border-radius: 5px;
+            padding: 5px 10px;
+            background-color: #2f2f2f;
+            transition: background-color 0.2s ease;
+        }
+        .card-header a:hover {
             background-color: #3e8e41;
         }
         .card-body {
@@ -50,45 +92,82 @@
             flex-direction: column;
         }
         .card-body label {
+            font-size: 14px;
             margin-bottom: 10px;
         }
         .card-body input, .card-body textarea {
             width: 100%;
             padding: 10px;
             margin-bottom: 20px;
-            border: 1px solid #ddd;
+            border: 1px solid #333;
             border-radius: 10px;
+            background-color: #1a1a1a;
+            color: #fff;
+            transition: border-color 0.2s ease;
+        }
+        .card-body input:focus, .card-body textarea:focus {
+            border-color: #4CAF50;
         }
         .bundle {
             position: sticky;
             top: 0;
-            background-color: #fff;
+            background-color: #1a1a1a;
             padding: 20px;
-            border: 1px solid #ddd;
+            border: 1px solid #333;
             border-radius: 10px;
+        }
+        .bundle h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0;
         }
         .bundle pre {
             white-space: pre-wrap;
             word-wrap: break-word;
+            font-size: 14px;
+            font-family: monospace;
         }
-        .note {
+        .bundle button {
+            font-size: 14px;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            background-color: #4CAF50;
+            transition: background-color 0.2s ease;
+        }
+        .bundle button:hover {
+            background-color: #3e8e41;
+        }
+        .progress {
             font-size: 14px;
             color: #666;
+            margin-bottom: 10px;
         }
-        .optional {
-            font-size: 14px;
-            color: #999;
+        @media (max-width: 768px) {
+            .container {
+                margin: 20px auto;
+            }
+            .bundle {
+                position: static;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Env Bundler</h1>
+        <div class="header">
+            <span class="eyebrow">Local only</span>
+            <h1>Env Bundler</h1>
+            <p>No data leaves the browser / nothing is uploaded anywhere, it's purely local assembly.</p>
+        </div>
         <p>Click each badge to go generate that provider's key, paste the value into the box, then copy the single bundled .env block at the bottom into Vercel/Render's environment variables.</p>
-        <p class="note">No data leaves the browser / nothing is uploaded anywhere, it's purely local assembly.</p>
+        <div class="progress" id="progress">0 of 13 filled</div>
         <div class="card">
             <div class="card-header">
-                <h2>GITHUB_TOKEN</h2>
+                <h2><span class="badge">GITHUB_TOKEN</span></h2>
                 <a href="https://github.com/settings/tokens/new" target="_blank">Generate Token</a>
             </div>
             <div class="card-body">
@@ -98,7 +177,7 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>CLOUDFLARE_API_TOKEN</h2>
+                <h2><span class="badge">CLOUDFLARE_API_TOKEN</span></h2>
                 <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank">Generate Token</a>
             </div>
             <div class="card-body">
@@ -108,18 +187,18 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>CLOUDFLARE_ACCOUNT_ID</h2>
+                <h2><span class="badge">CLOUDFLARE_ACCOUNT_ID</span></h2>
                 <a href="https://dash.cloudflare.com/" target="_blank">Copy Account ID</a>
             </div>
             <div class="card-body">
                 <label for="cloudflare-account-id">CLOUDFLARE_ACCOUNT_ID</label>
                 <input type="text" id="cloudflare-account-id" placeholder="Paste account ID">
-                <p class="note">not created, just copy from the account overview sidebar</p>
+                <p>not created, just copy from the account overview sidebar</p>
             </div>
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>NOTION_TOKEN</h2>
+                <h2><span class="badge">NOTION_TOKEN</span></h2>
                 <a href="https://www.notion.so/my-integrations" target="_blank">Generate Token</a>
             </div>
             <div class="card-body">
@@ -129,7 +208,7 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>MEM0_API_KEY</h2>
+                <h2><span class="badge">MEM0_API_KEY</span></h2>
                 <a href="https://app.mem0.ai/dashboard/api-keys" target="_blank">Generate API Key</a>
             </div>
             <div class="card-body">
@@ -139,7 +218,7 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>GEMINI_API_KEY</h2>
+                <h2><span class="badge">GEMINI_API_KEY</span></h2>
                 <a href="https://aistudio.google.com/apikey" target="_blank">Generate API Key</a>
             </div>
             <div class="card-body">
@@ -149,20 +228,20 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>EXA_API_KEYS</h2>
+                <h2><span class="badge">EXA_API_KEYS</span></h2>
                 <a href="https://dashboard.exa.ai/api-keys" target="_blank">Generate API Keys</a>
             </div>
             <div class="card-body">
-                <label for="exa-api-keys">EXA_API_KEYS</label>
+                <label for="exa-api-key-1">EXA_API_KEYS</label>
                 <input type="text" id="exa-api-key-1" placeholder="Paste API key value">
                 <button id="add-exa-api-key">Add another key</button>
                 <div id="exa-api-keys-container"></div>
-                <p class="note">comma-separated, you can generate and combine multiple keys</p>
+                <p>comma-separated, you can generate and combine multiple keys</p>
             </div>
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>OPENROUTER_API_KEY</h2>
+                <h2><span class="badge">OPENROUTER_API_KEY</span></h2>
                 <a href="https://openrouter.ai/keys" target="_blank">Generate API Key</a>
             </div>
             <div class="card-body">
@@ -172,18 +251,18 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>CONTEXT7_API_KEY</h2>
+                <h2><span class="badge">CONTEXT7_API_KEY</span></h2>
                 <a href="https://context7.com/dashboard" target="_blank">Generate API Key</a>
             </div>
             <div class="card-body">
                 <label for="context7-api-key">CONTEXT7_API_KEY</label>
                 <input type="text" id="context7-api-key" placeholder="Paste API key value">
-                <p class="optional">works unauthenticated at low rate limits</p>
+                <p>works unauthenticated at low rate limits</p>
             </div>
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN</h2>
+                <h2><span class="badge">UPSTASH_REDIS_REST_URL</span> and <span class="badge">UPSTASH_REDIS_REST_TOKEN</span></h2>
                 <a href="https://console.upstash.com/redis" target="_blank">Generate credentials</a>
             </div>
             <div class="card-body">
@@ -191,12 +270,12 @@
                 <input type="text" id="upstash-redis-rest-url" placeholder="Paste URL value">
                 <label for="upstash-redis-rest-token">UPSTASH_REDIS_REST_TOKEN</label>
                 <input type="text" id="upstash-redis-rest-token" placeholder="Paste token value">
-                <p class="optional">optional</p>
+                <p>optional</p>
             </div>
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>MCP_SHARED_KEY</h2>
+                <h2><span class="badge">MCP_SHARED_KEY</span></h2>
             </div>
             <div class="card-body">
                 <label for="mcp-shared-key">MCP_SHARED_KEY</label>
@@ -206,7 +285,7 @@
         </div>
         <div class="card">
             <div class="card-header">
-                <h2>GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY</h2>
+                <h2><span class="badge">GITHUB_APP_ID</span>, <span class="badge">GITHUB_APP_INSTALLATION_ID</span>, and <span class="badge">GITHUB_APP_PRIVATE_KEY</span></h2>
                 <a href="https://github.com/settings/apps/new" target="_blank">Create GitHub App</a>
             </div>
             <div class="card-body">
@@ -216,8 +295,8 @@
                 <input type="text" id="github-app-installation-id" placeholder="Paste installation ID value">
                 <label for="github-app-private-key">GITHUB_APP_PRIVATE_KEY</label>
                 <textarea id="github-app-private-key" placeholder="Paste private key value"></textarea>
-                <p class="note">multi-step flow: create app, install it to get installation ID, download private key .pem, copy app ID</p>
-                <p class="optional">optional</p>
+                <p>multi-step flow: create app, install it to get installation ID, download private key .pem, copy app ID</p>
+                <p>optional</p>
             </div>
         </div>
         <div class="bundle">
@@ -249,6 +328,7 @@
         const githubAppIdInput = document.getElementById('github-app-id');
         const githubAppInstallationIdInput = document.getElementById('github-app-installation-id');
         const githubAppPrivateKeyInput = document.getElementById('github-app-private-key');
+        const progress = document.getElementById('progress');
 
         let exaApiKeys = [];
 
@@ -288,6 +368,8 @@
             if (githubAppInstallationIdInput.value) bundle.push(`GITHUB_APP_INSTALLATION_ID=${githubAppInstallationIdInput.value}`);
             if (githubAppPrivateKeyInput.value) bundle.push(`GITHUB_APP_PRIVATE_KEY="${githubAppPrivateKeyInput.value.replace(/\n/g, '\\n')}"`);
             bundleOutput.textContent = bundle.join('\n');
+            const filled = bundle.length;
+            progress.textContent = `${filled} of 13 filled`;
         }
 
         githubTokenInput.addEventListener('input', updateBundle);
