@@ -92,7 +92,8 @@ export async function queryTelemetry({
 export function register(server) {
   server.tool(
     "cf_workers_observability_keys",
-    "List all the keys available in your Workers Observability telemetry (logs, traces, events) so you know what fields you can filter/group by.",
+    "DOES: List all keys available in Workers Observability telemetry (logs/traces/events) -- what fields you can filter/group by.\n" +
+    "RULE: call this before cf_workers_observability_query if you don't already know the field names to filter on.",
     {
       dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
       timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis"),
@@ -107,7 +108,7 @@ export function register(server) {
 
   server.tool(
     "cf_workers_observability_values",
-    "List the unique values seen for a given telemetry key (logs/traces/events), useful for building filters — e.g. see all distinct $workers.event.response.status values in range.",
+    "DOES: List unique values seen for a given telemetry key in range (e.g. all distinct $workers.event.response.status values) -- for building filters.",
     {
       key: z.string().describe("The telemetry key to list values for, e.g. '$workers.event.response.status'"),
       dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
@@ -129,7 +130,9 @@ export function register(server) {
 
   server.tool(
     "cf_workers_observability_query",
-    "Query Workers Logs, traces, and events (invocation logs, console.log output, exceptions, request/response metadata, trace spans). Covers the same data as the Observability dashboard's Overview, Invocations, and Events tabs. Use cf_workers_observability_keys first to discover filterable fields.",
+    "DOES: Query Workers logs/traces/events (invocation logs, console.log output, exceptions, request/response metadata, trace spans) -- same data as the Observability dashboard's Overview/Invocations/Events tabs.\n" +
+    "RULE: comparing two scripts over the same timeframe -> use cf_workers_observability_compare instead (normalizes rates, not raw counts).\n" +
+    "RULE: don't know filterable field names -> cf_workers_observability_keys first.",
     {
       timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis"),
       timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
