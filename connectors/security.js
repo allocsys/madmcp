@@ -24,7 +24,14 @@ export function isIpv4(ip) {
 export function isIpInCidr(ip, cidr) {
   const [range, bitsStr] = cidr.split("/");
   if (!isIpv4(ip) || !isIpv4(range)) return false;
+  // Reject anything that isn't a bare, in-range IPv4 prefix length (0-32)
+  // instead of letting parseInt/NaN/negative/>32 values fall through to JS's
+  // shift-amount-mod-32 semantics, which silently computes the WRONG mask
+  // instead of erroring -- e.g. "/33" would otherwise behave like "/1",
+  // "/xyz" like "/32", and "/24abc" would parse as a valid /24.
+  if (bitsStr !== undefined && !/^\d{1,2}$/.test(bitsStr)) return false;
   const bits = bitsStr === undefined ? 32 : parseInt(bitsStr, 10);
+  if (bits > 32) return false;
   const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
   return (ipToLong(ip) & mask) === (ipToLong(range) & mask);
 }

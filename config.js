@@ -286,11 +286,14 @@ export const GITHUB_APP_PRIVATE_KEY     = process.env.GITHUB_APP_PRIVATE_KEY;
 // Grace period (connectors/github/app_auth.js): how long a freshly minted
 // clone token is allowed to live before this server auto-revokes it via
 // GitHub's revoke endpoint, making it effectively single-use rather than
-// relying on GitHub's own ~1hr installation-token TTL. Should comfortably
-// cover how long a `git clone` of the target repo(s) takes to run -- 3
-// minutes by default; raise it if clones of a particularly large private
-// repo are getting cut off mid-transfer.
-export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS) || 180;
+// relying on GitHub's own ~1hr installation-token TTL. Enforced via
+// @vercel/functions' waitUntil() (requires Fluid Compute), not a bare
+// setTimeout -- Vercel can freeze/tear down a serverless invocation right
+// after its response is sent, so a plain unref()'d timer isn't reliable
+// there. 30s by default -- short, to minimize compute kept alive per call;
+// raise it (env var) if clones of a particularly large private repo start
+// getting cut off mid-transfer.
+export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS) || 30;
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 

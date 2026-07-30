@@ -2,7 +2,7 @@
 // connectors/github/clone_token.js — get_repo_clone_token tool.
 // See app_auth.js's file header for the full design rationale (why this
 // exists, why the token has to pass through the calling model, why it's
-// cached server-side).
+// NOT cached server-side -- every call mints a fresh one-time token).
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";

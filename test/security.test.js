@@ -72,6 +72,36 @@ describe("isIpInCidr", () => {
     expect(isIpInCidr("not-an-ip", "10.0.0.0/8")).toBe(false);
     expect(isIpInCidr("10.0.0.1", "not-a-range/8")).toBe(false);
   });
+
+  it("treats a /31 as a two-address range", () => {
+    expect(isIpInCidr("10.0.0.0", "10.0.0.0/31")).toBe(true);
+    expect(isIpInCidr("10.0.0.1", "10.0.0.0/31")).toBe(true);
+    expect(isIpInCidr("10.0.0.2", "10.0.0.0/31")).toBe(false);
+  });
+
+  it("treats a /1 as half the address space", () => {
+    expect(isIpInCidr("1.2.3.4", "0.0.0.0/1")).toBe(true);
+    expect(isIpInCidr("200.0.0.1", "0.0.0.0/1")).toBe(false);
+    expect(isIpInCidr("200.0.0.1", "128.0.0.0/1")).toBe(true);
+  });
+
+  it("rejects a prefix length above 32 instead of wrapping via JS shift-mod-32 semantics", () => {
+    // Without the explicit bits > 32 guard, "/33" would silently behave
+    // like "/1" because JS's << operator takes the shift amount mod 32.
+    expect(isIpInCidr("1.2.3.4", "0.0.0.0/33")).toBe(false);
+    expect(isIpInCidr("255.255.255.255", "0.0.0.0/33")).toBe(false);
+  });
+
+  it("rejects a non-numeric or trailing-junk prefix length instead of coercing it via parseInt", () => {
+    // Without the /^\d{1,2}$/ guard, parseInt("xyz", 10) is NaN (bits > 32
+    // check fails open) and parseInt("24abc", 10) silently parses as 24.
+    expect(isIpInCidr("10.0.0.1", "10.0.0.0/xyz")).toBe(false);
+    expect(isIpInCidr("10.0.0.1", "10.0.0.0/24abc")).toBe(false);
+  });
+
+  it("rejects a negative prefix length", () => {
+    expect(isIpInCidr("1.2.3.4", "0.0.0.0/-1")).toBe(false);
+  });
 });
 
 describe("normalizeIp", () => {
@@ -106,5 +136,69 @@ describe("getClientIp", () => {
   it("normalizes a ::ffff:-prefixed socket address", () => {
     const req = { headers: {}, socket: { remoteAddress: "::ffff:192.168.1.50" } };
     expect(getClientIp(req)).toBe("192.168.1.50");
+  });
+
+  it("takes only the leftmost entry out of a long spoofed chain, ignoring every hop after it", () => {
+    // A malicious client can send its own multi-hop X-Forwarded-For; since
+    // this server trusts the header as-is (see the NOTE in security.js),
+    // the leftmost entry is whatever the client put there -- this test
+    // documents that behavior rather than asserting it's un-spoofable.
+    const req = {
+      headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8, 9.10.11.12" },
+      socket: { remoteAddress: "10.0.0.1" },
+    };
+    expect(getClientIp(req)).toBe("1.2.3.4");
+  });
+
+  it("treats an empty X-Forwarded-For header as absent and falls back to the socket address", () => {
+    const req = { headers: { "x-forwarded-for": "" }, socket: { remoteAddress: "192.168.1.50" } };
+    expect(getClientIp(req)).toBe("192.168.1.50");
+  });
+
+  it("returns an empty string for a whitespace-only X-Forwarded-For header, WITHOUT falling back to the socket address", () => {
+    // NOTE: this is a real gap, not a hardening test -- the header-presence
+    // check (`forwarded ? ... : socket.remoteAddress`) only looks at whether
+    // the header exists, not whether it's meaningful after trim(). A
+    // whitespace-only header is truthy, so the socket-address fallback
+    // never runs, and the caller silently gets "" instead of the real
+    // client IP. If getClientIp's result feeds an IP allowlist check, this
+    // means a request with `X-Forwarded-For: ' '` fails open/closed
+    // (depending on how the caller treats "") rather than using the
+    // trustworthy socket address that was available the whole time.
+    const req = { headers: { "x-forwarded-for": "   " }, socket: { remoteAddress: "192.168.1.50" } };
+    expect(getClientIp(req)).toBe("");
+  });
+
+  it("trims surrounding whitespace around the leftmost entry", () => {
+    const req = { headers: { "x-forwarded-for": "   203.0.113.7  , 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("203.0.113.7");
+  });
+
+  it("handles a leading empty entry (leading comma) by returning the empty string rather than throwing", () => {
+    const req = { headers: { "x-forwarded-for": ", 5.6.7.8" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("");
+  });
+
+  it("passes through a non-IPv4 leftmost entry unvalidated (getClientIp does not itself validate IP shape)", () => {
+    // getClientIp only splits/trims/normalizes; format validation, if any,
+    // is the caller's responsibility (e.g. via isIpv4 before use in an
+    // allowlist check). This documents that it won't reject garbage itself.
+    const req = { headers: { "x-forwarded-for": "not-an-ip, 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("not-an-ip");
+  });
+
+  it("normalizes a ::ffff:-prefixed leftmost X-Forwarded-For entry the same as a socket address", () => {
+    const req = { headers: { "x-forwarded-for": "::ffff:203.0.113.7, 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("203.0.113.7");
+  });
+
+  it("passes through an IPv6 leftmost entry unchanged (no ::ffff: prefix to strip)", () => {
+    const req = { headers: { "x-forwarded-for": "2001:db8::1, 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("2001:db8::1");
+  });
+
+  it("returns an empty string when there is neither an X-Forwarded-For header nor a socket address", () => {
+    const req = { headers: {}, socket: {} };
+    expect(getClientIp(req)).toBe("");
   });
 });
