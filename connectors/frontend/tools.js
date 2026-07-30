@@ -2,7 +2,7 @@
 // connectors/frontend/tools.js — delegate_designer
 //
 // Bounded generate -> validate -> fix loop (NOT an open-ended investigation
-// loop like delegate_gemini's function-calling agent). Given a task (+
+// loop like delegate_agent's function-calling agent). Given a task (+
 // optionally an existing file to improve), sends a prompt to whichever LLM
 // FRONTEND_PROVIDER points at (see client.js), syntax-validates the result
 // (see validate.js), and -- if invalid -- feeds the specific errors back to
@@ -14,7 +14,7 @@
 //
 // RESUMABILITY: a 3-attempt loop is 3 sequential LLM calls, which can
 // plausibly exceed a hosting platform's own request-duration ceiling (the
-// same constraint documented on delegate_gemini's HARD_MAX_STEPS -- see
+// same constraint documented on delegate_agent's HARD_MAX_STEPS -- see
 // connectors/gemini/delegate.js) even though no single attempt does. Before
 // starting each attempt, elapsed time is checked against
 // FRONTEND_TOTAL_BUDGET_MS; if exceeded, progress is checkpointed to Redis
@@ -28,7 +28,7 @@
 //    manipulated task could point this tool at config.js or other
 //    secret-adjacent files and have their contents shipped to a
 //    THIRD-PARTY LLM API as prompt text. There is no arbitrary-path
-//    fallback the way delegate_gemini's github_read_file has.
+//    fallback the way delegate_agent's github_read_file has.
 //  - WRITE: `write_path` must ALSO match FRONTEND_ALLOWED_EXTENSIONS, so a
 //    bad generation can't land on server.js/package.json/workflows/etc --
 //    files this tool has no legitimate reason to touch.
