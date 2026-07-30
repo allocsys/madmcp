@@ -12,6 +12,15 @@
 import { z } from "zod";
 import { githubRequest, githubGraphQL } from "./client.js";
 
+// GitHub's `state` field is only "open"/"closed" -- a closed-and-merged PR
+// and a closed-without-merging PR both report state: "closed". The list and
+// single-PR endpoints both also return `merged_at` (null unless merged), so
+// use that to tell the two apart instead of state alone.
+function prStatusLabel(pr) {
+  if (pr.state === "closed") return pr.merged_at ? "merged" : "closed";
+  return pr.state;
+}
+
 export function register(server) {
 
   server.tool(
@@ -37,14 +46,14 @@ export function register(server) {
         const data = await githubRequest(`/repos/${owner}/${repo}/pulls?state=${state}&per_page=${per_page}`);
         if (!data.length) return { content: [{ type: "text", text: `No ${state} pull requests found.` }] };
         const lines = data.map((pr) =>
-          `#${pr.number} [${pr.state}] ${pr.title}\n  ${pr.head.label} → ${pr.base.label} | by ${pr.user.login} | ${pr.created_at.slice(0, 10)}\n  ${pr.html_url}`
+          `#${pr.number} [${prStatusLabel(pr)}] ${pr.title}\n  ${pr.head.label} → ${pr.base.label} | by ${pr.user.login} | ${pr.created_at.slice(0, 10)}\n  ${pr.html_url}`
         );
         return { content: [{ type: "text", text: lines.join("\n\n") }] };
       }
 
       const pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
       const sections = [
-        `#${pr.number} [${pr.state}${pr.draft ? ", draft" : ""}] ${pr.title}\n` +
+        `#${pr.number} [${prStatusLabel(pr)}${pr.draft ? ", draft" : ""}] ${pr.title}\n` +
         `${pr.head.label} → ${pr.base.label} | by ${pr.user.login} | opened ${pr.created_at.slice(0, 10)}\n` +
         `${pr.html_url}\n\n${pr.body || "(no description)"}`
       ];
