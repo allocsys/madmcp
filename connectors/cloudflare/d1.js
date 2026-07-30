@@ -11,14 +11,19 @@ function textResult(data) {
 
 export function register(server) {
   server.tool(
-    "cf_d1_databases_list",
-    "List all of the D1 databases in your Cloudflare account",
+    "cf_d1_database",
+    "DOES: Get a single D1 database (pass database_id), OR list all D1 databases in your Cloudflare account (omit database_id).\n" +
+    "RULE: database_id set -> name/page/per_page ignored.",
     {
-      name: z.string().optional().describe("Filter by database name"),
-      page: z.number().optional().describe("Page number"),
-      per_page: z.number().optional().describe("Results per page"),
+      database_id: z.string().optional().describe("If provided, fetch this single database instead of listing."),
+      name: z.string().optional().describe("Filter by database name when listing. Ignored if database_id is given."),
+      page: z.number().optional().describe("Page number when listing. Ignored if database_id is given."),
+      per_page: z.number().optional().describe("Results per page when listing. Ignored if database_id is given."),
     },
-    async ({ name, page, per_page }) => {
+    async ({ database_id, name, page, per_page }) => {
+      if (database_id) {
+        return textResult(await cfAccountRequest(`/d1/database/${database_id}`));
+      }
       const params = new URLSearchParams();
       if (name) params.set("name", name);
       if (page) params.set("page", String(page));
@@ -27,13 +32,6 @@ export function register(server) {
       const result = await cfAccountRequest(`/d1/database${qs}`);
       return textResult(result);
     }
-  );
-
-  server.tool(
-    "cf_d1_database_get",
-    "Get a D1 database in your Cloudflare account",
-    { database_id: z.string() },
-    async ({ database_id }) => textResult(await cfAccountRequest(`/d1/database/${database_id}`))
   );
 
   server.tool(
