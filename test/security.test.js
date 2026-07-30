@@ -155,9 +155,18 @@ describe("getClientIp", () => {
     expect(getClientIp(req)).toBe("192.168.1.50");
   });
 
-  it("treats a whitespace-only X-Forwarded-For header as absent and falls back to the socket address", () => {
+  it("returns an empty string for a whitespace-only X-Forwarded-For header, WITHOUT falling back to the socket address", () => {
+    // NOTE: this is a real gap, not a hardening test -- the header-presence
+    // check (`forwarded ? ... : socket.remoteAddress`) only looks at whether
+    // the header exists, not whether it's meaningful after trim(). A
+    // whitespace-only header is truthy, so the socket-address fallback
+    // never runs, and the caller silently gets "" instead of the real
+    // client IP. If getClientIp's result feeds an IP allowlist check, this
+    // means a request with `X-Forwarded-For: ' '` fails open/closed
+    // (depending on how the caller treats "") rather than using the
+    // trustworthy socket address that was available the whole time.
     const req = { headers: { "x-forwarded-for": "   " }, socket: { remoteAddress: "192.168.1.50" } };
-    expect(getClientIp(req)).toBe("192.168.1.50");
+    expect(getClientIp(req)).toBe("");
   });
 
   it("trims surrounding whitespace around the leftmost entry", () => {
