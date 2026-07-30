@@ -11,15 +11,20 @@ function textResult(data) {
 
 export function register(server) {
   server.tool(
-    "cf_hyperdrive_configs_list",
-    "List Hyperdrive configurations in your Cloudflare account",
+    "cf_hyperdrive_config",
+    "DOES: Get a single Hyperdrive configuration (pass hyperdrive_id), OR list all Hyperdrive configurations in your Cloudflare account (omit hyperdrive_id).\n" +
+    "RULE: hyperdrive_id set -> page/per_page/order/direction ignored.",
     {
-      page: z.number().optional(),
-      per_page: z.number().optional(),
-      order: z.enum(["id", "name"]).optional(),
-      direction: z.enum(["asc", "desc"]).optional(),
+      hyperdrive_id: z.string().optional().describe("If provided, fetch this single configuration instead of listing."),
+      page: z.number().optional().describe("Page number when listing. Ignored if hyperdrive_id is given."),
+      per_page: z.number().optional().describe("Results per page when listing. Ignored if hyperdrive_id is given."),
+      order: z.enum(["id", "name"]).optional().describe("Sort field when listing. Ignored if hyperdrive_id is given."),
+      direction: z.enum(["asc", "desc"]).optional().describe("Sort direction when listing. Ignored if hyperdrive_id is given."),
     },
-    async ({ page, per_page, order, direction }) => {
+    async ({ hyperdrive_id, page, per_page, order, direction }) => {
+      if (hyperdrive_id) {
+        return textResult(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`));
+      }
       const params = new URLSearchParams();
       if (page) params.set("page", String(page));
       if (per_page) params.set("per_page", String(per_page));
@@ -28,13 +33,6 @@ export function register(server) {
       const qs = params.toString() ? `?${params.toString()}` : "";
       return textResult(await cfAccountRequest(`/hyperdrive/configs${qs}`));
     }
-  );
-
-  server.tool(
-    "cf_hyperdrive_config_get",
-    "Get details of a specific Hyperdrive configuration in your Cloudflare account",
-    { hyperdrive_id: z.string() },
-    async ({ hyperdrive_id }) => textResult(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`))
   );
 
   server.tool(
