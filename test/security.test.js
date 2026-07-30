@@ -72,6 +72,36 @@ describe("isIpInCidr", () => {
     expect(isIpInCidr("not-an-ip", "10.0.0.0/8")).toBe(false);
     expect(isIpInCidr("10.0.0.1", "not-a-range/8")).toBe(false);
   });
+
+  it("treats a /31 as a two-address range", () => {
+    expect(isIpInCidr("10.0.0.0", "10.0.0.0/31")).toBe(true);
+    expect(isIpInCidr("10.0.0.1", "10.0.0.0/31")).toBe(true);
+    expect(isIpInCidr("10.0.0.2", "10.0.0.0/31")).toBe(false);
+  });
+
+  it("treats a /1 as half the address space", () => {
+    expect(isIpInCidr("1.2.3.4", "0.0.0.0/1")).toBe(true);
+    expect(isIpInCidr("200.0.0.1", "0.0.0.0/1")).toBe(false);
+    expect(isIpInCidr("200.0.0.1", "128.0.0.0/1")).toBe(true);
+  });
+
+  it("rejects a prefix length above 32 instead of wrapping via JS shift-mod-32 semantics", () => {
+    // Without the explicit bits > 32 guard, "/33" would silently behave
+    // like "/1" because JS's << operator takes the shift amount mod 32.
+    expect(isIpInCidr("1.2.3.4", "0.0.0.0/33")).toBe(false);
+    expect(isIpInCidr("255.255.255.255", "0.0.0.0/33")).toBe(false);
+  });
+
+  it("rejects a non-numeric or trailing-junk prefix length instead of coercing it via parseInt", () => {
+    // Without the /^\d{1,2}$/ guard, parseInt("xyz", 10) is NaN (bits > 32
+    // check fails open) and parseInt("24abc", 10) silently parses as 24.
+    expect(isIpInCidr("10.0.0.1", "10.0.0.0/xyz")).toBe(false);
+    expect(isIpInCidr("10.0.0.1", "10.0.0.0/24abc")).toBe(false);
+  });
+
+  it("rejects a negative prefix length", () => {
+    expect(isIpInCidr("1.2.3.4", "0.0.0.0/-1")).toBe(false);
+  });
 });
 
 describe("normalizeIp", () => {
