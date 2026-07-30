@@ -253,4 +253,121 @@ describe("connectors/github/files.js", () => {
       expect(result.content[0].text).toMatch(/^Created a\.txt/);
     });
   });
+
+  describe("delete_file", () => {
+    it("deletes an existing file, sending its current sha in the DELETE body", async () => {
+      githubRequest
+        .mockResolvedValueOnce({ sha: "file-sha-1" }) // existence/GET check
+        .mockResolvedValueOnce({});                   // DELETE
+
+      const result = await server.tools.delete_file({
+        owner: "allocsys", repo: "madmcp", path: "gone.txt", message: "remove gone.txt",
+      });
+
+      expect(result.content[0].text).toMatch(/^Deleted gone\.txt/);
+      const deleteCall = githubRequest.mock.calls[1];
+      expect(deleteCall[1].method).toBe("DELETE");
+      expect(deleteCall[1].body.sha).toBe("file-sha-1");
+      expect(deleteCall[1].body.message).toBe("remove gone.txt");
+    });
+
+    it("passes branch through to both the existence check and the DELETE", async () => {
+      githubRequest
+        .mockResolvedValueOnce({ sha: "file-sha-2" })
+        .mockResolvedValueOnce({});
+
+      await server.tools.delete_file({
+        owner: "allocsys", repo: "madmcp", path: "gone.txt", message: "remove", branch: "feature-x",
+      });
+
+      const getCall = githubRequest.mock.calls[0];
+      expect(getCall[0]).toContain("?ref=feature-x");
+      const deleteCall = githubRequest.mock.calls[1];
+      expect(deleteCall[1].body.branch).toBe("feature-x");
+    });
+
+    it("propagates the error when the file does not exist", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
+
+      await expect(server.tools.delete_file({
+        owner: "allocsys", repo: "madmcp", path: "missing.txt", message: "m",
+      })).rejects.toThrow(/404/);
+
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("rename_file", () => {
+    it("moves a file via blob+tree+commit, adding the new path and removing the old one", async () => {
+      readFileViaBlob.mockResolvedValue("moved content\n");
+      githubRequest
+        .mockResolvedValueOnce({ default_branch: "main" })          // repo info
+        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })       // ref lookup
+        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })   // base commit
+        .mockResolvedValueOnce({ sha: "new-blob-sha" })              // new blob
+        .mockResolvedValueOnce({ sha: "new-tree-sha" })              // new tree
+        .mockResolvedValueOnce({ sha: "new-commit-sha1234" })        // new commit
+        .mockResolvedValueOnce({});                                  // ref update
+
+      const result = await server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "old/name.txt", new_path: "new/name.txt",
+      });
+
+      expect(result.content[0].text).toMatch(/^Renamed old\/name\.txt → new\/name\.txt/);
+
+      const treeCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/trees"));
+      expect(treeCall[1].body.base_tree).toBe("base-tree-sha");
+      expect(treeCall[1].body.tree).toEqual([
+        { path: "new/name.txt", mode: "100644", type: "blob", sha: "new-blob-sha" },
+        { path: "old/name.txt", mode: "100644", type: "blob", sha: null },
+      ]);
+
+      const commitCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/commits") && c[1]?.method === "POST");
+      expect(commitCall[1].body.message).toBe("rename old/name.txt to new/name.txt");
+
+      const refUpdateCall = githubRequest.mock.calls.find((c) => c[1]?.method === "PATCH");
+      expect(refUpdateCall[1].body.sha).toBe("new-commit-sha1234");
+    });
+
+    it("uses a custom commit message when provided", async () => {
+      readFileViaBlob.mockResolvedValue("content\n");
+      githubRequest
+        .mockResolvedValueOnce({ default_branch: "main" })
+        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
+        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
+        .mockResolvedValueOnce({ sha: "blob-sha" })
+        .mockResolvedValueOnce({ sha: "tree-sha" })
+        .mockResolvedValueOnce({ sha: "commit-sha" })
+        .mockResolvedValueOnce({});
+
+      await server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", message: "tidy up naming",
+      });
+
+      const commitCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/commits") && c[1]?.method === "POST");
+      expect(commitCall[1].body.message).toBe("tidy up naming");
+    });
+
+    it("targets the given branch instead of the repo default", async () => {
+      readFileViaBlob.mockResolvedValue("content\n");
+      githubRequest
+        .mockResolvedValueOnce({ default_branch: "main" })
+        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
+        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
+        .mockResolvedValueOnce({ sha: "blob-sha" })
+        .mockResolvedValueOnce({ sha: "tree-sha" })
+        .mockResolvedValueOnce({ sha: "commit-sha" })
+        .mockResolvedValueOnce({});
+
+      await server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", branch: "feature-y",
+      });
+
+      expect(readFileViaBlob).toHaveBeenCalledWith("allocsys", "madmcp", "a.txt", "feature-y");
+      const refLookupCall = githubRequest.mock.calls.find((c) => c[0].includes("/git/ref/heads/"));
+      expect(refLookupCall[0]).toContain("feature-y");
+      const refUpdateCall = githubRequest.mock.calls.find((c) => c[1]?.method === "PATCH");
+      expect(refUpdateCall[0]).toContain("feature-y");
+    });
+  });
 });
