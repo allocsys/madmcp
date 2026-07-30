@@ -70,17 +70,30 @@ function mintOk(overrides = {}) {
 }
 
 describe("connectors/github/app_auth.js", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     global.fetch = vi.fn();
+    // waitUntil's mock instance is shared across the whole file (the
+    // vi.mock factory above only runs once, not per-test), so its call
+    // history must be cleared explicitly -- vi.restoreAllMocks() below
+    // restores console.error-style spies but doesn't touch a plain vi.fn().
+    const { waitUntil } = await import("@vercel/functions");
+    waitUntil.mockClear();
   });
 
   afterEach(() => {
+    // Switching back to real timers discards any pending FAKE timers
+    // outright. That's only safe because every test below that calls
+    // getCloneToken() (which schedules a real setTimeout for the revoke)
+    // does so under vi.useFakeTimers() -- a test that calls it under REAL
+    // timers schedules an actual multi-second timer that outlives the
+    // test and can fire mid-suite, polluting a later test's mocks.
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   describe("buildAppJwt (via getCloneToken's mint call)", () => {
     it("signs a well-formed RS256 App JWT and sends it as the mint call's Bearer token", async () => {
+      vi.useFakeTimers();
       global.fetch.mockResolvedValueOnce(mintOk());
       const { getCloneToken } = await loadAppAuth();
 
@@ -105,6 +118,7 @@ describe("connectors/github/app_auth.js", () => {
     });
 
     it("still produces a validly signed JWT when the private key is \\n-escaped (env-var-safe form)", async () => {
+      vi.useFakeTimers();
       global.fetch.mockResolvedValueOnce(mintOk());
       const escapedKey = privateKey.replace(/\n/g, "\\n");
       const { getCloneToken } = await loadAppAuth({ GITHUB_APP_PRIVATE_KEY: escapedKey });
@@ -142,6 +156,7 @@ describe("connectors/github/app_auth.js", () => {
     });
 
     it("scopes the mint request to exactly the one repo, contents:read only", async () => {
+      vi.useFakeTimers();
       global.fetch.mockResolvedValueOnce(mintOk());
       const { getCloneToken } = await loadAppAuth();
 
@@ -152,6 +167,7 @@ describe("connectors/github/app_auth.js", () => {
     });
 
     it("returns the minted token and its GitHub-issued expiry", async () => {
+      vi.useFakeTimers();
       global.fetch.mockResolvedValueOnce(mintOk({ token: "ghs_xyz", expires_at: "2026-08-01T12:34:56Z" }));
       const { getCloneToken } = await loadAppAuth();
 
@@ -189,6 +205,7 @@ describe("connectors/github/app_auth.js", () => {
 
   describe("getCloneToken — waitUntil-scheduled revoke (single-use guard)", () => {
     it("schedules exactly one waitUntil call, and does not block on it before returning", async () => {
+      vi.useFakeTimers();
       global.fetch.mockResolvedValueOnce(mintOk());
       const { getCloneToken } = await loadAppAuth();
       const { waitUntil } = await import("@vercel/functions");
