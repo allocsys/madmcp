@@ -93,15 +93,22 @@ async function callGenerateContent(body, requestedModel) {
       const isRateLimited = err.status === 429;
       const isOverloaded  = err.status === 503;
       const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
-      if ((!isRateLimited && !isOverloaded && !isNetworkTransient) || isLast) throw err;
+      if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
       if (isRateLimited) {
         // Rate-limited on this model -- record a cooldown (best-effort; never
-        // blocks or throws on its own) so future calls can skip straight past
-        // it. No equivalent recording for 503: there's no per-model quota
-        // hint to parse, and an overload isn't reliably tied to this model
+        // blocks or throws on its own) so future calls -- including a
+        // resumed/retried one -- can skip straight past it. Recorded even
+        // when this is the LAST model in the chain (isLast below): a 429 on
+        // the last model still means it's exhausted for the window, and
+        // skipping the setModelCooldown call in that case (as this used to)
+        // meant a resume would skip the earlier cooling-down models but walk
+        // straight back into this same exhausted one and fail identically.
+        // No equivalent recording for 503: there's no per-model quota hint to
+        // parse, and an overload isn't reliably tied to this model
         // specifically the way a 429 is.
         await setModelCooldown(model, parseRetryDelaySeconds(err.message));
       }
+      if (isLast) throw err;
       // Fall through to try the next model either way.
     }
   }
