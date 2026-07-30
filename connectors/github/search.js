@@ -148,13 +148,24 @@ export function parseTar(buffer) {
   return entries;
 }
 
-// Fetches (or returns from cache) every regular file in a repo's default
-// branch as { name, size, content } entries, with GitHub's single wrapping
-// top-level directory (`<owner>-<repo>-<sha7>/...`) stripped off each name.
-async function getRepoEntries(owner, repo) {
-  const repoInfo = await githubRequest(`/repos/${owner}/${repo}`);
-  const branchData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${repoInfo.default_branch}`);
-  const sha = branchData.object.sha;
+// Fetches (or returns from cache) every regular file in a repo at `ref`
+// (branch, tag, or commit SHA -- defaults to the repo's default branch) as
+// { name, size, content } entries, with GitHub's single wrapping top-level
+// directory (`<owner>-<repo>-<sha7>/...`) stripped off each name.
+async function getRepoEntries(owner, repo, ref) {
+  let sha;
+  if (ref) {
+    try {
+      const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+      sha = refData.object.sha;
+    } catch {
+      sha = ref; // not a branch name -- treat as a tag or commit SHA directly
+    }
+  } else {
+    const repoInfo = await githubRequest(`/repos/${owner}/${repo}`);
+    const branchData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${repoInfo.default_branch}`);
+    sha = branchData.object.sha;
+  }
   const cacheKey = `${owner}/${repo}@${sha}`;
 
   const cached = tarballCache.get(cacheKey);
@@ -169,11 +180,11 @@ async function getRepoEntries(owner, repo) {
   return entries;
 }
 
-async function fallbackCodeSearch({ owner, repo, query, per_page }) {
+async function fallbackCodeSearch({ owner, repo, query, per_page, ref }) {
   const searchTerm = stripQualifiers(query);
   if (!searchTerm) return null; // qualifier-only query -- nothing to grep for
 
-  const entries = await getRepoEntries(owner, repo);
+  const entries = await getRepoEntries(owner, repo, ref);
 
   const eligible = entries.filter((item) => {
     if (item.size > FALLBACK_MAX_BYTES) return false;
@@ -210,7 +221,7 @@ export function register(server) {
     "search_issues",
     "DOES: Search issues/PRs cross-repo via GitHub issue-search syntax (label:, is:issue, is:pr, stars:>N, org:, -repo:, etc). Returns title, repo, state, labels, assignee, date, URL per result.\n" +
     "RULE: cross-repo discovery (bounty hunting, good-first-issue scanning) -> this tool. Single known repo -> list_issues instead.\n" +
-    "RULE: broader open-ended hunt (many searches -> read candidates -> narrow down) -> delegate_gemini instead of chaining this manually.",
+    "RULE: broader open-ended hunt (many searches -> read candidates -> narrow down) -> delegate_agent instead of chaining this manually.",
     {
       query:    z.string().describe("GitHub issue-search query string using standard qualifiers: label:, is:issue, is:pr, is:open, is:closed, stars:>N, org:, repo:, -repo: (exclude), -org: (exclude), created:, assignee:, no:assignee, etc. Combine with spaces (AND). e.g. 'label:bounty is:issue is:open stars:>100 -org:mergeos-bounties'"),
       sort:     z.enum(["created", "updated", "comments"]).optional().describe("Sort field (default: best-match relevance if omitted)"),
@@ -236,19 +247,50 @@ export function register(server) {
     "search_code",
     "DOES: Search code across GitHub repos.\n" +
     "RULE: query scoped via repo:owner/name AND index returns nothing -> auto-falls back to a direct content search of that repo (handles GitHub's known private-repo search-index gap; fetches the repo as a tarball and greps it locally -- see fallbackCodeSearch).\n" +
-    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_gemini instead of chaining this manually.",
+    "RULE: need to search a NON-default branch -> pass `ref` (branch, tag, or commit SHA) alongside a repo:owner/name qualifier in the query. GitHub's real /search/code index only ever covers the default branch, so any `ref` always uses the local content-search fallback directly (skips the real API call entirely) -- requires repo:owner/name in the query since there's no other way to know which repo to fetch.\n" +
+    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually.",
     {
       query:    z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
       per_page: z.number().optional().describe("Number of results to return, max 100 (default: 10)"),
+      ref:      z.string().optional().describe("Branch, tag, or commit SHA to search instead of the default branch. Requires a repo:owner/name qualifier in `query`. GitHub's search index only covers the default branch, so setting this always uses the local content-search fallback rather than the real API."),
     },
-    async ({ query, per_page = 10 }) => {
+    async ({ query, per_page = 10, ref }) => {
+      const scoped = extractRepoQualifier(query);
+
+      if (ref) {
+        if (!scoped) {
+          return { content: [{ type: "text", text: "`ref` requires a repo:owner/name qualifier in the query -- GitHub's search index only covers the default branch, so a specific repo must be named for the branch-aware fallback to know what to fetch." }], isError: true };
+        }
+        let fb;
+        try {
+          fb = await fallbackCodeSearch({ ...scoped, query, per_page, ref });
+        } catch (err) {
+          return { content: [{ type: "text", text: `Branch search failed: ${err?.message ?? String(err)}` }], isError: true };
+        }
+        if (fb?.matches.length) {
+          const lines = fb.matches.map((m) => `📄 ${scoped.owner}/${scoped.repo}/${m.path}:${m.line}\n  ${m.snippet}`);
+          return {
+            content: [{
+              type: "text",
+              text: `Searched ${scoped.owner}/${scoped.repo}@${ref} directly (GitHub's code-search index only covers the default branch, so a \`ref\` always uses the local content-search fallback) -- scanned ${fb.scanned} file(s)` +
+                `${fb.truncated ? ", capped — repo has more than this covers" : ""}:\n\n${lines.join("\n\n")}`,
+            }],
+          };
+        }
+        return {
+          content: [{
+            type: "text",
+            text: `No results found on ${scoped.owner}/${scoped.repo}@${ref} (scanned ${fb?.scanned ?? 0} file(s)${fb?.truncated ? ", capped — repo has more" : ""}).`,
+          }],
+        };
+      }
+
       const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${per_page}`);
       if (data.items?.length) {
         const lines = data.items.map((item) => `📄 ${item.repository.full_name}/${item.path} (${item.html_url})`);
         return { content: [{ type: "text", text: `Found ${data.total_count} result(s), showing ${data.items.length}:\n\n${lines.join("\n")}` }] };
       }
 
-      const scoped = extractRepoQualifier(query);
       if (scoped) {
         const fb = await fallbackCodeSearch({ ...scoped, query, per_page }).catch(() => null);
         if (fb?.matches.length) {

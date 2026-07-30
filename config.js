@@ -35,7 +35,7 @@ export const NOTION_VERSION = "2022-06-28";
 // 2026-07-27). Notion's documented average rate limit is ~3 requests/second
 // per integration; this spacing keeps a single madmcp instance comfortably
 // under that even when several Notion calls land in the same parallelized
-// delegate_gemini step. Mirrors GITHUB_MIN_REQUEST_INTERVAL_MS/
+// delegate_agent step. Mirrors GITHUB_MIN_REQUEST_INTERVAL_MS/
 // GITHUB_MAX_RETRIES/GITHUB_RETRY_BASE_MS above -- same override pattern.
 export const NOTION_MIN_REQUEST_INTERVAL_MS = Number(process.env.NOTION_MIN_REQUEST_INTERVAL_MS) || 350;
 export const NOTION_MAX_RETRIES             = Number(process.env.NOTION_MAX_RETRIES) || 3;
@@ -246,7 +246,7 @@ export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSI
   .filter(Boolean);
 
 // Bounds delegate_designer's generate -> validate -> fix loop (connectors/
-// frontend/validate.js + checkpoint.js). Mirrors delegate_gemini's
+// frontend/validate.js + checkpoint.js). Mirrors delegate_agent's
 // HARD_MAX_STEPS reasoning -- both bounds LLM call cost and keeps a single
 // resumable unit of work small. A run that can't converge within this many
 // attempts writes its best (most-recently-generated) attempt with an
@@ -258,7 +258,7 @@ export const FRONTEND_MAX_ATTEMPTS = Number(process.env.FRONTEND_MAX_ATTEMPTS) |
 // FRONTEND_REQUEST_TIMEOUT_MS above, which bounds a single LLM call. A
 // 3-attempt loop (3 LLM calls) can plausibly exceed a hosting platform's
 // own request-duration ceiling (the same constraint that motivated
-// delegate_gemini's checkpoint/resume, see its HARD_MAX_STEPS comment) even
+// delegate_agent's checkpoint/resume, see its HARD_MAX_STEPS comment) even
 // though no single attempt does. When exceeded, the loop checkpoints
 // (connectors/frontend/checkpoint.js) and returns a resume_run_id instead of
 // continuing past the platform's own limit. Set comfortably below that

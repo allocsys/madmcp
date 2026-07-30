@@ -12,7 +12,7 @@
 // file existed.
 //
 // SIMPLER THAN connectors/gemini/checkpoint.js ON PURPOSE: that file exists
-// because delegate_gemini's `contents` array grows every step and can get
+// because delegate_agent's `contents` array grows every step and can get
 // large (many tool-call turns), which is why it splits state across a
 // Redis LIST (append-only) and a small meta blob. delegate_designer's loop
 // has no equivalent growth problem -- it's at most FRONTEND_MAX_ATTEMPTS

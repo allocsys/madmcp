@@ -4,7 +4,7 @@
 // Lets Gemini run its OWN multi-step tool-use loop server-side (via Gemini
 // function calling) to answer an open-ended question, instead of the
 // calling model doing 5-10 separate manual tool round-trips. One
-// delegate_gemini call in, one synthesized answer out.
+// delegate_agent call in, one synthesized answer out.
 //
 // SCOPE: every delegated function below is READ-ONLY. Gemini is never given
 // a write-capable function here -- writes stay confined to the fixed
@@ -22,12 +22,12 @@
 // does NOT affect the other -- they are different objects read by different
 // models for different purposes.
 // Concretely: connectors/github/files.js's read_file/get_file_tree descriptions
-// carry "RULE for the calling model: ... use delegate_gemini instead" text
+// carry "RULE for the calling model: ... use delegate_agent instead" text
 // aimed at steering Claude away from manual multi-file loops. Do NOT copy
-// that kind of "use delegate_gemini instead" language onto github_read_file/
+// that kind of "use delegate_agent instead" language onto github_read_file/
 // github_get_file_tree/etc. below -- Gemini calling one of these FUNCTIONS
-// *is* delegate_gemini already running; a self-referential "delegate to
-// delegate_gemini" hint here would be nonsensical and could confuse Gemini
+// *is* delegate_agent already running; a self-referential "delegate to
+// delegate_agent" hint here would be nonsensical and could confuse Gemini
 // into stalling instead of just calling the function. Keep these
 // descriptions plain and factual, matching what they actually do.
 //
@@ -974,7 +974,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
   // max_steps -- and say so explicitly instead.
   if (checkpoint && startStep > cappedSteps) {
     return {
-      answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call delegate_gemini again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
+      answer: `(This run already completed ${startStep - 1} step(s), which meets or exceeds the requested max_steps of ${cappedSteps} -- no new steps were taken this call. The checkpoint has NOT been discarded. Call delegate_agent again with resume_run_id: "${runId}" and a higher max_steps to continue, or treat the ${transcript.length} tool call(s) below as the result so far.)`,
       steps: startStep - 1,
       transcript,
       runId,
@@ -1026,7 +1026,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       const redisOk = isRedisConfigured();
       const resumeHint = isTransientGeminiError(err)
         ? (redisOk
-            ? ` ${transcript.length} tool call(s) already completed this run are saved. Call delegate_gemini again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
+            ? ` ${transcript.length} tool call(s) already completed this run are saved. Call delegate_agent again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.`
             : ` ${transcript.length} tool call(s) were completed this run, but Redis is NOT configured in this environment, so nothing was actually saved -- resume_run_id: "${runId}" will NOT work no matter how soon you retry. ` +
               `The completed tool calls are listed in this run's transcript/Notion log (if log_to_notion was set) for manual reference, but the only way to continue is a fresh call with the full task text.`)
         : ` This does not look like a transient error (not a 429/503) -- resuming with resume_run_id: "${runId}" will likely reproduce the same failure, so check the underlying cause (e.g. GEMINI_API_KEY, request format, safety/recitation block) before retrying. The ${transcript.length} tool call(s) already completed are still saved if you want to resume anyway${redisOk ? "" : " (though note: Redis is NOT configured in this environment, so nothing was actually saved regardless)"}.`;
@@ -1214,7 +1214,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       });
       const errMessage = err?.message ?? String(err);
       return {
-        answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call delegate_gemini again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Unexpected error while processing step ${step}'s function calls: ${errMessage} -- ${transcript.length} tool call(s) already completed this run are saved. Call delegate_agent again with resume_run_id: "${runId}" to continue from here instead of starting over. Checkpoint expires in 1 hour.)`,
         steps: step - 1,
         transcript,
         runId,

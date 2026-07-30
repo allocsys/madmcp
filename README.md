@@ -26,7 +26,7 @@
 manual tool calls to run an investigation itself, it can hand an open-ended,
 read-only investigation (or a single page + question) to Gemini, which runs
 its own tool-use loop server-side and returns one synthesized answer. This
-is split across two tools along a security boundary: `delegate_gemini`
+is split across two tools along a security boundary: `delegate_agent`
 covers GitHub, Cloudflare, and Notion (no web access), while
 `delegate_research` covers the live web (a precision single-page mode, or
 a single-shot wide research mode via Exa's `/answer` endpoint) with no
@@ -165,14 +165,14 @@ See **Configuration** below for the full variable reference.
 ## Connectors & tools
 
 ### ⭐ Gemini (delegation) — the flagship feature
-The two delegation tools split along a security boundary: `delegate_gemini`
+The two delegation tools split along a security boundary: `delegate_agent`
 has no web access, `delegate_research` has no access to GitHub/Notion/
 Cloudflare. This means a malicious page or search result encountered
 mid-research can influence at most that run's own answer — it has no
 internal-system data to exfiltrate, because that loop never has access to
 any in the first place.
 
-`delegate_gemini` — hand an open-ended, multi-step, read-only investigation
+`delegate_agent` — hand an open-ended, multi-step, read-only investigation
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
 the last week") to Gemini instead of making 5-10 separate manual tool calls.
 Gemini runs its own loop server-side across GitHub, Cloudflare, and Notion
@@ -193,7 +193,7 @@ selected by which args are passed:
   nothing to resume via `resume_run_id` (that Gemini-loop architecture was
   retired 2026-07-27).
 
-Progress on `delegate_gemini` runs is checkpointed to Redis after every
+Progress on `delegate_agent` runs is checkpointed to Redis after every
 completed step. If the underlying Gemini API call fails partway through
 (429/503/network blip), the response includes a `resume_run_id` and
 everything gathered so far instead of losing the run outright — pass that
@@ -201,7 +201,7 @@ id back on a follow-up call to continue from the last completed step
 (checkpoint TTL: 1 hour) rather than re-running, and re-paying for, steps
 already done. Wide-mode `delegate_research` is a single Exa call with no
 steps to checkpoint — a failure just returns an error, and `resume_run_id`
-is accepted only for parameter compatibility with `delegate_gemini`.
+is accepted only for parameter compatibility with `delegate_agent`.
 
 Both tools can optionally log their task/question, step-by-step tool calls,
 and final answer to a Notion page under a fixed Gemini root page
@@ -275,11 +275,11 @@ All tokens are optional independently — a connector's tools fail at call time
 | `MEM0_API_KEY` | Mem0 tools (`MEM0_USER_ID` optional, defaults to `default`) |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
-| `GEMINI_API_KEY` | Gemini tools (`delegate_gemini`, `delegate_research`) — required, throws if unset |
+| `GEMINI_API_KEY` | Gemini tools (`delegate_agent`, `delegate_research`) — required, throws if unset |
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
-| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) | Optional — persists per-model rate-limit cooldowns and `delegate_gemini` resume checkpoints across invocations; fails open if neither pair is set. Either naming works — the raw Upstash Marketplace integration names them `UPSTASH_REDIS_REST_*`, Vercel's own "KV" product (also Upstash-backed) names them `KV_REST_API_*`. |
+| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) | Optional — persists per-model rate-limit cooldowns and `delegate_agent` resume checkpoints across invocations; fails open if neither pair is set. Either naming works — the raw Upstash Marketplace integration names them `UPSTASH_REDIS_REST_*`, Vercel's own "KV" product (also Upstash-backed) names them `KV_REST_API_*`. |
 | `DEFAULT_OWNER` | Default GitHub owner when omitted from a call (defaults to `allocsys`) |
 | `GITHUB_MIN_REQUEST_INTERVAL_MS` | Minimum spacing between outgoing GitHub REST requests, to avoid secondary rate limits (default `300`) |
 | `GITHUB_MAX_RETRIES` | Max retries on GitHub secondary-rate-limit/429 responses (default `3`) |
