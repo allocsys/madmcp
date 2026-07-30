@@ -5,7 +5,7 @@
 // WHY REDIS, NOT IN-MEMORY: Vercel serverless functions don't guarantee a
 // warm/reused instance between invocations (especially on the Hobby plan,
 // which lacks Pro's "cold start prevention" / reserved concurrency), so an
-// in-process Map would only help within a single delegate_gemini call's
+// in-process Map would only help within a single delegate_agent call's
 // own multi-step loop -- it can't prevent separate tool calls from re-hitting
 // a model that was already rate-limited seconds ago in a prior invocation.
 // Redis's native TTL gives "key expires itself" for free, matching the data
