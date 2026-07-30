@@ -40,7 +40,7 @@ of relying on manual copy/paste between tabs.
 ### Agent-driven self-modification
 
 `DEFAULT_OWNER` defaults to `your forked repo`, and the GitHub connector exposes
-full read/write/PR tooling (`read_file`, `str_replace_file`, `overwrite_file`,
+full read/write/PR tooling (`read_file`, `edit_file`,
 `create_pull_request`, `merge_pull_request`, etc.) — not a read-only subset.
 That combination means an agent connected to this server has direct write
 access to this very repo: it can read its own source, diagnose a bug or a
@@ -52,7 +52,7 @@ way. Worth being precise about what this is *not*: the server doesn't
 modify itself unprompted on some schedule — every change still starts with
 an agent invoked by a person. What's notable is that there's no separate
 admin path or special-cased self-access; a connected agent uses the exact
-same `str_replace_file`/`create_pull_request` tools on this repo as on any
+same `edit_file`/`create_pull_request` tools on this repo as on any
 other repo it has a token for.
 
 ## Live demo
@@ -209,13 +209,13 @@ and final answer to a Notion page under a fixed Gemini root page
 
 ### GitHub
 File/repo ops: `read_file`, `read_file_chunked`, `get_file_at_commit`, `list_directory`,
-`get_file_tree`, `create_repo_file`, `overwrite_file`, `overwrite_files`, `str_replace_file`, `rename_file`,
+`get_file_tree`, `create_repo_file`, `edit_file`, `overwrite_files`, `rename_file`,
 `delete_file`, `diff_files`
 
 Branches & commits: `list_branches`, `create_branch`, `list_commits`, `get_commit`, `list_contributors`
 
 Issues & PRs: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`,
-`get_pull_requests`, `create_pull_request`, `update_pull_request`, `get_pr_comments`, `get_pr_reviews`,
+`get_pull_requests`, `create_pull_request`, `update_pull_request`, `get_pr_activity`,
 `review_pull_request`, `merge_pull_request`
 
 Releases & tags: `list_releases`, `create_release`, `list_tags`
@@ -229,13 +229,13 @@ CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_ch
 Review control: `request_reviewers`, `remove_requested_reviewers`, `get_pr_mergeability`, `add_review_comment`, `get_branch_protection`, `list_notifications`
 
 ### Cloudflare
-D1: `cf_d1_databases_list`, `cf_d1_database_get`, `cf_d1_database_create`, `cf_d1_database_delete`, `cf_d1_database_query`
+D1: `cf_d1_database` (list/get), `cf_d1_database_create`, `cf_d1_database_delete`, `cf_d1_database_query`
 
-KV: `cf_kv_namespaces_list`, `cf_kv_namespace_get/create/update/delete`
+KV: `cf_kv_namespace` (list/get), `cf_kv_namespace_create/update/delete`
 
-R2: `cf_r2_buckets_list`, `cf_r2_bucket_get/create/delete`
+R2: `cf_r2_bucket` (list/get), `cf_r2_bucket_create/delete`
 
-Hyperdrive: `cf_hyperdrive_configs_list`, `cf_hyperdrive_config_get/create/update/delete`
+Hyperdrive: `cf_hyperdrive_config` (list/get), `cf_hyperdrive_config_create/update/delete`
 
 Workers: `cf_workers_list`, `cf_workers_get_worker`, `cf_workers_get_worker_code`
 
