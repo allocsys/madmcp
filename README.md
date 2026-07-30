@@ -72,7 +72,7 @@ yet, open `demo.html` directly.)
 
 Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-click links to each provider's key-creation page, or use the env bundler below to collect them all and copy out a single `.env` block:
 
-[![Env Bundler](https://img.shields.io/badge/Env-Bundler-ECD53F?style=flat-square&logo=dotenv&logoColor=333333)](https://allocsys.github.io/madmcp/index.html)
+[![Env Bundler](https://img.shields.io/badge/Env-Bundler-ECD53F?style=flat-square&logo=dotenv&logoColor=333333)](https://allocsys.github.io/madmcp/env.html)
 [![GitHub Token](https://img.shields.io/badge/GitHub-Token-181717?style=flat-square&logo=github)](https://github.com/settings/tokens/new)
 [![Cloudflare Token](https://img.shields.io/badge/Cloudflare-Token-F38020?style=flat-square&logo=cloudflare)](https://dash.cloudflare.com/profile/api-tokens)
 [![Notion Integration](https://img.shields.io/badge/Notion-Integration-000000?style=flat-square&logo=notion)](https://www.notion.so/my-integrations)
