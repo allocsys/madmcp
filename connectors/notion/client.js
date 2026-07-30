@@ -9,7 +9,7 @@ import { createThrottle, sleep, defaultRetryDelayMs } from "../shared/rate-limit
 // One shared queue for the whole process -- see createThrottle's own header
 // for why a fresh throttle per call would be pointless. Spaces out every
 // outgoing Notion request (even ones issued concurrently, e.g. several
-// Notion calls in the same parallelized delegate_gemini step) by at least
+// Notion calls in the same parallelized delegate_agent step) by at least
 // NOTION_MIN_REQUEST_INTERVAL_MS, and retries 429/transient-5xx responses
 // with backoff instead of throwing on the first hit. Mirrors
 // connectors/github/client.js's scheduleThrottled + retry loop, which Notion
