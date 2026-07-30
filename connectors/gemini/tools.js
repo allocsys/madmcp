@@ -148,7 +148,7 @@ export function register(server) {
       }
 
       // On a resumed run, task may be undefined here -- runResearch returns
-      // the effective task text it actually used, mirroring delegate_gemini's
+      // the effective task text it actually used, mirroring delegate_agent's
       // handling below.
       const effectiveTask = task || result.task || "(resumed run)";
 
