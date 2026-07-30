@@ -877,10 +877,10 @@ export function register(server) {
   // full replace with no field/substring PATCH, so a GET+PUT round trip is
   // unavoidable either way — but the *caller-side* cost of reproducing the
   // whole document was the real bottleneck, not the API call count. This
-  // mirrors the github connector's str_replace_file: send only find/replace
-  // pairs, apply them to the fetched current content, PUT the result. Each
-  // `find` must appear exactly once in the current content (same safety
-  // rule as str_replace_file) — ambiguous or missing matches fail loudly
+  // mirrors the github connector's edit_file `replacements` mode: send only
+  // find/replace pairs, apply them to the fetched current content, PUT the
+  // result. Each `find` must appear exactly once in the current content
+  // (same safety rule as edit_file) — ambiguous or missing matches fail loudly
   // rather than silently no-op'ing or replacing the wrong occurrence.
   // Mutually exclusive with `content`: pick one mode per call.
   server.tool(
@@ -892,7 +892,7 @@ export function register(server) {
       replacements: z.array(z.object({
         find:    z.string().describe("Exact string to find in the current memory content — must appear exactly once"),
         replace: z.string().describe("String to replace it with"),
-      })).optional().describe("List of find-and-replace operations to apply sequentially to the memory's current content, without resending the full body. Each `find` must match exactly once in the content at the time it's applied (fails loudly on zero or multiple matches, same rule as the github str_replace_file tool). Mutually exclusive with `content`."),
+      })).optional().describe("List of find-and-replace operations to apply sequentially to the memory's current content, without resending the full body. Each `find` must match exactly once in the content at the time it's applied (fails loudly on zero or multiple matches, same rule as the github edit_file tool's `replacements` mode). Mutually exclusive with `content`."),
       status:    z.enum(STATUS_VALUES).optional().describe("New lifecycle status (open/resolved/superseded) for this memory. Omit to leave status unchanged. Existing tags/entity_id/other metadata are preserved regardless."),
       relations: z.array(z.object({
         to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
