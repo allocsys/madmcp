@@ -11,15 +11,20 @@ function textResult(data) {
 
 export function register(server) {
   server.tool(
-    "cf_kv_namespaces_list",
-    "List all of the KV namespaces in your Cloudflare account",
+    "cf_kv_namespace",
+    "DOES: Get a single KV namespace (pass namespace_id), OR list all KV namespaces in your Cloudflare account (omit namespace_id).\n" +
+    "RULE: namespace_id set -> page/per_page/order/direction ignored.",
     {
-      page: z.number().optional(),
-      per_page: z.number().optional(),
-      order: z.enum(["id", "title"]).optional(),
-      direction: z.enum(["asc", "desc"]).optional(),
+      namespace_id: z.string().optional().describe("If provided, fetch this single namespace instead of listing."),
+      page: z.number().optional().describe("Page number when listing. Ignored if namespace_id is given."),
+      per_page: z.number().optional().describe("Results per page when listing. Ignored if namespace_id is given."),
+      order: z.enum(["id", "title"]).optional().describe("Sort field when listing. Ignored if namespace_id is given."),
+      direction: z.enum(["asc", "desc"]).optional().describe("Sort direction when listing. Ignored if namespace_id is given."),
     },
-    async ({ page, per_page, order, direction }) => {
+    async ({ namespace_id, page, per_page, order, direction }) => {
+      if (namespace_id) {
+        return textResult(await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`));
+      }
       const params = new URLSearchParams();
       if (page) params.set("page", String(page));
       if (per_page) params.set("per_page", String(per_page));
@@ -28,13 +33,6 @@ export function register(server) {
       const qs = params.toString() ? `?${params.toString()}` : "";
       return textResult(await cfAccountRequest(`/storage/kv/namespaces${qs}`));
     }
-  );
-
-  server.tool(
-    "cf_kv_namespace_get",
-    "Get details of a kv namespace in your Cloudflare account",
-    { namespace_id: z.string() },
-    async ({ namespace_id }) => textResult(await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`))
   );
 
   server.tool(
