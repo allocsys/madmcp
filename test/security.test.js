@@ -137,4 +137,59 @@ describe("getClientIp", () => {
     const req = { headers: {}, socket: { remoteAddress: "::ffff:192.168.1.50" } };
     expect(getClientIp(req)).toBe("192.168.1.50");
   });
+
+  it("takes only the leftmost entry out of a long spoofed chain, ignoring every hop after it", () => {
+    // A malicious client can send its own multi-hop X-Forwarded-For; since
+    // this server trusts the header as-is (see the NOTE in security.js),
+    // the leftmost entry is whatever the client put there -- this test
+    // documents that behavior rather than asserting it's un-spoofable.
+    const req = {
+      headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8, 9.10.11.12" },
+      socket: { remoteAddress: "10.0.0.1" },
+    };
+    expect(getClientIp(req)).toBe("1.2.3.4");
+  });
+
+  it("treats an empty X-Forwarded-For header as absent and falls back to the socket address", () => {
+    const req = { headers: { "x-forwarded-for": "" }, socket: { remoteAddress: "192.168.1.50" } };
+    expect(getClientIp(req)).toBe("192.168.1.50");
+  });
+
+  it("treats a whitespace-only X-Forwarded-For header as absent and falls back to the socket address", () => {
+    const req = { headers: { "x-forwarded-for": "   " }, socket: { remoteAddress: "192.168.1.50" } };
+    expect(getClientIp(req)).toBe("192.168.1.50");
+  });
+
+  it("trims surrounding whitespace around the leftmost entry", () => {
+    const req = { headers: { "x-forwarded-for": "   203.0.113.7  , 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("203.0.113.7");
+  });
+
+  it("handles a leading empty entry (leading comma) by returning the empty string rather than throwing", () => {
+    const req = { headers: { "x-forwarded-for": ", 5.6.7.8" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("");
+  });
+
+  it("passes through a non-IPv4 leftmost entry unvalidated (getClientIp does not itself validate IP shape)", () => {
+    // getClientIp only splits/trims/normalizes; format validation, if any,
+    // is the caller's responsibility (e.g. via isIpv4 before use in an
+    // allowlist check). This documents that it won't reject garbage itself.
+    const req = { headers: { "x-forwarded-for": "not-an-ip, 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("not-an-ip");
+  });
+
+  it("normalizes a ::ffff:-prefixed leftmost X-Forwarded-For entry the same as a socket address", () => {
+    const req = { headers: { "x-forwarded-for": "::ffff:203.0.113.7, 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("203.0.113.7");
+  });
+
+  it("passes through an IPv6 leftmost entry unchanged (no ::ffff: prefix to strip)", () => {
+    const req = { headers: { "x-forwarded-for": "2001:db8::1, 10.0.0.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    expect(getClientIp(req)).toBe("2001:db8::1");
+  });
+
+  it("returns an empty string when there is neither an X-Forwarded-For header nor a socket address", () => {
+    const req = { headers: {}, socket: {} };
+    expect(getClientIp(req)).toBe("");
+  });
 });
