@@ -17,7 +17,7 @@
 // it's ever wanted back.
 //
 // resume_run_id: tools.js's delegate_research still accepts this param for
-// wide mode (shared validation with delegate_gemini's checkpoint/resume
+// wide mode (shared validation with delegate_agent's checkpoint/resume
 // story), but there is no longer anything to resume -- a single Exa call
 // either succeeds or fails in one shot, with nothing partial to save. If a
 // caller passes resume_run_id without a task, that's surfaced as a failed
