@@ -51,6 +51,7 @@
 // ---------------------------------------------------------------------------
 
 import crypto from "node:crypto";
+import { waitUntil } from "@vercel/functions";
 import { GITHUB_API } from "../../config.js";
 import {
   GITHUB_APP_ID,
@@ -178,10 +179,17 @@ async function revokeInstallationToken(token) {
 export async function getCloneToken(owner, repo) {
   const minted = await mintInstallationToken(owner, repo);
 
-  const revokeTimer = setTimeout(() => {
-    revokeInstallationToken(minted.token);
-  }, GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS * 1000);
-  revokeTimer.unref();
+  // waitUntil (not a bare setTimeout/unref()) so the platform keeps this
+  // invocation alive long enough for the delayed revoke to actually run --
+  // Vercel can freeze/tear down a serverless invocation right after its
+  // response is sent, which would otherwise silently drop the revoke.
+  waitUntil(
+    new Promise((resolve) => {
+      setTimeout(() => {
+        revokeInstallationToken(minted.token).finally(resolve);
+      }, GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS * 1000);
+    })
+  );
 
   return { token: minted.token, expiresAt: minted.expiresAt };
 }
