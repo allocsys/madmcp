@@ -16,7 +16,7 @@
 // 2026-07-27 a single, WEB-ONLY call to Exa's /answer endpoint (search +
 // synthesis in one shot), not a multi-step Gemini loop -- see research.js's
 // header for why that loop was retired and why this stays WEB-ONLY (kept
-// separate from delegate_gemini's GitHub/Notion/Cloudflare/Context7/Mem0
+// separate from delegate_agent's GitHub/Notion/Cloudflare/Context7/Mem0
 // access) regardless of provider.
 //
 // NOTE ON WHY PRECISION MODE SAVES TOKENS AND OTHER SIMILAR-LOOKING TOOLS
@@ -53,16 +53,16 @@ export function register(server) {
     "DOES: Web research, ONE of two mutually-exclusive modes selected by which args you pass.\n" +
     "MODE url+question (PRECISION, via Gemini): fetches the URL, hands page + question to Gemini, returns ONLY Gemini's compact answer -- not the raw page. Use for a specific answer from a page (e.g. 'does this doc mention rate limits?').\n" +
     "NOT: exact wording, code snippets to copy, or content to edit -> use web_fetch instead.\n" +
-    "MODE task (WIDE, via Exa): single-shot Exa /answer call (search+synthesis in one), returns answer+sources. Use for 'current status of X' or comparing multiple sources. WEB-ONLY -- no GitHub/Notion/Cloudflare -> use delegate_gemini for internal-systems investigations instead.\n" +
+    "MODE task (WIDE, via Exa): single-shot Exa /answer call (search+synthesis in one), returns answer+sources. Use for 'current status of X' or comparing multiple sources. WEB-ONLY -- no GitHub/Notion/Cloudflare -> use delegate_agent for internal-systems investigations instead.\n" +
     "RULE: pass EITHER url+question OR task -- never both, never neither.\n" +
-    "RULE (wide mode): single-shot only -- max_steps/resume_run_id accepted for param compatibility with delegate_gemini but have no real effect.",
+    "RULE (wide mode): single-shot only -- max_steps/resume_run_id accepted for param compatibility with delegate_agent but have no real effect.",
     {
       url:              z.string().url().optional().describe("PRECISION MODE: the URL to fetch. Must be paired with `question`; do not combine with `task`."),
       question:         z.string().optional().describe("PRECISION MODE: the specific question to answer using the page's content. Be specific -- vague questions get vague answers. Must be paired with `url`."),
       max_source_chars: z.number().optional().describe(`PRECISION MODE only: truncate the fetched page to this many characters before sending to Gemini (default: ${DEFAULT_MAX_SOURCE_CHARS}).`),
       task:             z.string().optional().describe("WIDE MODE: the research task/question, described with enough context for a single Exa /answer call to act on without needing to ask you anything back -- it can't. Do not combine with `url`/`question`."),
       max_steps:        z.number().optional().describe("WIDE MODE only: accepted for parameter compatibility with delegate_gemini, but has no effect -- wide mode is always a single Exa /answer call regardless of this value."),
-      resume_run_id:    z.string().optional().describe("WIDE MODE only: accepted for parameter compatibility with delegate_gemini, but wide mode is a single-shot Exa call with no checkpoint -- passing this returns a result explaining there's nothing to resume, rather than continuing a prior run."),
+      resume_run_id:    z.string().optional().describe("WIDE MODE only: accepted for parameter compatibility with delegate_agent, but wide mode is a single-shot Exa call with no checkpoint -- passing this returns a result explaining there's nothing to resume, rather than continuing a prior run."),
       show_transcript:  z.boolean().optional().describe("WIDE MODE only: include the full step-by-step tool-call transcript in the response, even on a successful run (default: false)."),
       log_to_notion:    z.boolean().optional().describe("Whether to log this call's inputs/outputs as a page under the Gemini section of Notion (default: false). The write always targets the fixed Gemini root page -- this cannot be redirected elsewhere."),
     },
@@ -86,8 +86,8 @@ export function register(server) {
       if (hasWideArgs && !task && !resume_run_id) {
         return { content: [{ type: "text", text: "Wide mode requires task, unless resuming a live checkpoint via resume_run_id." }], isError: true };
       }
-      // Same off-by-invalid-input guard as delegate_gemini's max_steps check --
-      // see tools.js's delegate_gemini handler comment for the full reasoning.
+      // Same off-by-invalid-input guard as delegate_agent's max_steps check --
+      // see tools.js's delegate_agent handler comment for the full reasoning.
       if (hasWideArgs && max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
         return { content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 30 regardless of a larger value.` }], isError: true };
       }
@@ -177,7 +177,7 @@ export function register(server) {
   );
 
   server.tool(
-    "delegate_gemini",
+    "delegate_agent",
     "DOES: Open-ended, multi-step READ-ONLY investigation across GitHub/Notion/Cloudflare -- Gemini runs its own server-side loop (bounded by max_steps) reading files/trees/commits/logs/pages across as many turns as needed, cross-checks claims BETWEEN sources, flags discrepancies, returns one synthesized answer.\n" +
     "RULE: default choice for multi-file or open-ended investigation -- prefer over manual read_file/get_file_tree/list_directory loops UNLESS you need exactly one named file.\n" +
     "NOT: web access -> use delegate_research (task param, wide mode) instead. NOT: any write -> read-only by design.\n" +
@@ -187,7 +187,7 @@ export function register(server) {
       task:          z.string().optional().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused). Optional ONLY when resume_run_id is given and its checkpoint is still live; required otherwise -- omitting it on a fresh run (no resume_run_id, or an expired one) returns an error rather than silently proceeding with no task."),
       max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 20, hard cap 30 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
-      resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_gemini call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
+      resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
     },
     async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false }) => {
