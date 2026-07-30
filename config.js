@@ -290,10 +290,10 @@ export const GITHUB_APP_PRIVATE_KEY     = process.env.GITHUB_APP_PRIVATE_KEY;
 // @vercel/functions' waitUntil() (requires Fluid Compute), not a bare
 // setTimeout -- Vercel can freeze/tear down a serverless invocation right
 // after its response is sent, so a plain unref()'d timer isn't reliable
-// there. 20s by default -- short, to minimize compute kept alive per call;
+// there. 30s by default -- short, to minimize compute kept alive per call;
 // raise it (env var) if clones of a particularly large private repo start
 // getting cut off mid-transfer.
-export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS) || 20;
+export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS) || 30;
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
