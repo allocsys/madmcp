@@ -99,43 +99,43 @@ export function register(server) {
   );
 
   server.tool(
-    "get_pr_comments",
-    "DOES: General conversation thread on a PR (same as issue comments -- NOT inline code-review comments).\n" +
-    "NOT: inline diff comments (none of these tools currently expose those) or formal approve/request-changes reviews -> use get_pr_reviews for that.",
+    "get_pr_activity",
+    "DOES: PR conversation comments and/or formal reviews (approve/request-changes/comment verdicts). Use `type` to pick one or both.\n" +
+    "NOT: inline diff comments (none of these tools currently expose those).",
     {
       owner:       z.string().describe("Repository owner (user or org)"),
       repo:        z.string().describe("Repository name"),
       pull_number: z.number().describe("Pull request number"),
-      per_page:    z.number().optional().describe("Number of comments to return, max 100 (default: 30)"),
+      type:        z.enum(["comments", "reviews", "both"]).optional().describe("Which activity to fetch (default: both)"),
+      per_page:    z.number().optional().describe("Number of items to return per type, max 100 (default: 30)"),
     },
-    async ({ owner, repo, pull_number, per_page = 30 }) => {
-      const data = await githubRequest(`/repos/${owner}/${repo}/issues/${pull_number}/comments?per_page=${per_page}`);
-      if (!data.length) return { content: [{ type: "text", text: `No comments on PR #${pull_number}.` }] };
-      const lines = data.map((c) =>
-        `${c.user.login} (${c.created_at.slice(0, 16).replace("T", " ")}):\n${c.body}\n  ${c.html_url}`
-      );
-      return { content: [{ type: "text", text: `${data.length} comment(s) on PR #${pull_number}:\n\n${lines.join("\n\n---\n\n")}` }] };
-    }
-  );
+    async ({ owner, repo, pull_number, type = "both", per_page = 30 }) => {
+      const sections = [];
 
-  server.tool(
-    "get_pr_reviews",
-    "DOES: Formal reviews on a PR -- approve/request-changes/comment verdicts plus each reviewer's summary comment.\n" +
-    "NOT: the plain conversation thread -> use get_pr_comments for that.",
-    {
-      owner:       z.string().describe("Repository owner (user or org)"),
-      repo:        z.string().describe("Repository name"),
-      pull_number: z.number().describe("Pull request number"),
-      per_page:    z.number().optional().describe("Number of reviews to return, max 100 (default: 30)"),
-    },
-    async ({ owner, repo, pull_number, per_page = 30 }) => {
-      const data = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/reviews?per_page=${per_page}`);
-      if (!data.length) return { content: [{ type: "text", text: `No reviews on PR #${pull_number} yet.` }] };
-      const lines = data.map((r) =>
-        `${r.user.login} — ${r.state} (${(r.submitted_at || "").slice(0, 16).replace("T", " ")})` +
-        `${r.body ? `:\n${r.body}` : ""}\n  ${r.html_url}`
-      );
-      return { content: [{ type: "text", text: `${data.length} review(s) on PR #${pull_number}:\n\n${lines.join("\n\n---\n\n")}` }] };
+      if (type === "comments" || type === "both") {
+        const comments = await githubRequest(`/repos/${owner}/${repo}/issues/${pull_number}/comments?per_page=${per_page}`);
+        sections.push(
+          comments.length
+            ? `${comments.length} comment(s) on PR #${pull_number}:\n\n` + comments.map((c) =>
+                `${c.user.login} (${c.created_at.slice(0, 16).replace("T", " ")}):\n${c.body}\n  ${c.html_url}`
+              ).join("\n\n---\n\n")
+            : `No comments on PR #${pull_number}.`
+        );
+      }
+
+      if (type === "reviews" || type === "both") {
+        const reviews = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/reviews?per_page=${per_page}`);
+        sections.push(
+          reviews.length
+            ? `${reviews.length} review(s) on PR #${pull_number}:\n\n` + reviews.map((r) =>
+                `${r.user.login} — ${r.state} (${(r.submitted_at || "").slice(0, 16).replace("T", " ")})` +
+                `${r.body ? `:\n${r.body}` : ""}\n  ${r.html_url}`
+              ).join("\n\n---\n\n")
+            : `No reviews on PR #${pull_number} yet.`
+        );
+      }
+
+      return { content: [{ type: "text", text: sections.join("\n\n===\n\n") }] };
     }
   );
 
