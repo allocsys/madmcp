@@ -165,7 +165,7 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
   const children = [...markerBlocks, ...relationBlocks, ...contentBlocks];
 
   // Notion's page-create endpoint rejects more than 100 children blocks in
-  // a single call (live failure 2026-07-25: a long delegate_gemini
+  // a single call (live failure 2026-07-25: a long delegate_agent
   // transcript produced 199 blocks and got a 400 "body.children.length
   // should be <= 100"). Create the page with the first 100, then PATCH the
   // rest on afterward in further batches of <=100 -- same post-creation
