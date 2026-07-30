@@ -3,12 +3,12 @@
 //
 // NOTE ON "RULE for the calling model..." TEXT BELOW: these descriptions are
 // what the MCP-calling model (e.g. Claude) sees when deciding which tool to
-// use, and are the only place the "prefer delegate_gemini" routing hints
+// use, and are the only place the "prefer delegate_agent" routing hints
 // live. They are read by a DIFFERENT model, for a DIFFERENT purpose, than
 // the FUNCTIONS declarations Gemini sees in connectors/gemini/delegate.js
 // during its own internal tool-calling loop -- editing one has no effect on
 // the other. Do not assume changes here propagate to delegate.js, and never
-// port this "use delegate_gemini instead" phrasing onto delegate.js's own
+// port this "use delegate_agent instead" phrasing onto delegate.js's own
 // function declarations (see the warning at the top of that file for why).
 //
 // NOTE ON "clone via bash_tool" TEXT BELOW (added 2026-07-28, see Notion
@@ -16,14 +16,14 @@
 // the calling model's own sandbox (bash_tool) can `git clone` a PUBLIC repo
 // straight from github.com/codeload.github.com/raw.githubusercontent.com --
 // all three are already on that sandbox's network allowlist. That's a THIRD
-// option alongside read_file and delegate_gemini, and for its specific use
+// option alongside read_file and delegate_agent, and for its specific use
 // case (needing multiple files locally to run/test/lint, not just read) it
 // beats both: unlike read_file it doesn't put file contents in the calling
 // model's context at all (only command output does), and unlike
-// delegate_gemini it lets the calling model actually EXECUTE the code
+// delegate_agent it lets the calling model actually EXECUTE the code
 // (npm test, eslint, etc.), not just read/summarize it. Only works for
 // PUBLIC repos -- the sandbox has no GitHub credentials, so a private repo
-// clone will simply fail auth, at which point read_file/delegate_gemini are
+// clone will simply fail auth, at which point read_file/delegate_agent are
 // still the right fallback.
 // ---------------------------------------------------------------------------
 
@@ -37,7 +37,7 @@ export function register(server) {
   server.tool(
     "read_file",
     "USE: single, specifically-named file, exact path already known.\n" +
-    "RULE: >2 files needed, OR request = understand/review/summarize a repo or directory (any phrasing: 'read the repo', 'dig into it', 'get up to speed') -> delegate_gemini instead. Never loop read_file manually for that.\n" +
+    "RULE: >2 files needed, OR request = understand/review/summarize a repo or directory (any phrasing: 'read the repo', 'dig into it', 'get up to speed') -> delegate_agent instead. Never loop read_file manually for that.\n" +
     "RULE: repo is PUBLIC and goal = run/test/lint code (not just read it) -> git clone via bash_tool instead (github.com/codeload.github.com/raw.githubusercontent.com allowlisted; zero context cost; can execute code). PUBLIC REPOS ONLY -- no GitHub creds in sandbox.\n" +
     "DOES: reads a file's contents from a GitHub repository. Auto-chunks if >100,000 chars -- use read_file_chunked for subsequent pages.",
     {
@@ -66,7 +66,7 @@ export function register(server) {
   server.tool(
     "read_file_chunked",
     "DOES: Read a slice of a large file. Use when read_file times out or is truncated.\n" +
-    "RULE: chunking through several large files for one open-ended question -> delegate_gemini instead of many manual round-trips.",
+    "RULE: chunking through several large files for one open-ended question -> delegate_agent instead of many manual round-trips.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
@@ -89,7 +89,7 @@ export function register(server) {
   server.tool(
     "list_directory",
     "DOES: List files/folders at a path.\n" +
-    "RULE: drilling into many directories one at a time to map an unfamiliar repo -> delegate_gemini instead, server-side in one call.",
+    "RULE: drilling into many directories one at a time to map an unfamiliar repo -> delegate_agent instead, server-side in one call.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -108,7 +108,7 @@ export function register(server) {
   server.tool(
     "get_file_tree",
     "USE: one-time single tree snapshot.\n" +
-    "RULE: result has >~10 files, OR next step = reading/searching multiple files from it -> STOP, use delegate_gemini for the whole investigation instead. Applies regardless of phrasing ('thorough read', 'quick look', 'dig deeper' all count). Never chain this into manual read_file loops.\n" +
+    "RULE: result has >~10 files, OR next step = reading/searching multiple files from it -> STOP, use delegate_agent for the whole investigation instead. Applies regardless of phrasing ('thorough read', 'quick look', 'dig deeper' all count). Never chain this into manual read_file loops.\n" +
     "RULE: repo is PUBLIC and goal = run/test/lint multiple files (not just read them) -> git clone via bash_tool instead (see read_file's description; zero context cost, can execute code, public repos only).\n" +
     "DOES: recursively lists all files and folders in a GitHub repository (full tree).",
     {
