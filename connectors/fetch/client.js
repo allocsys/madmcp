@@ -15,6 +15,7 @@
 
 import dns from "node:dns/promises";
 import net from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const MAX_REDIRECTS = 5;
 
@@ -82,7 +83,13 @@ async function assertSafeUrl(urlStr) {
   if (!addresses.length || addresses.some(isPrivateIP)) {
     throw new Error(`Blocked: "${hostname}" resolves to a private, loopback, or link-local address, which this tool is not allowed to reach.`);
   }
-  return parsed;
+  // Return the resolved address alongside the parsed URL so the caller can
+  // pin the actual TCP connection to it (see fetchUrl below). Without this,
+  // fetch() would re-resolve the hostname itself a moment later — if the
+  // attacker controls DNS for the host, they can serve a public IP here and
+  // a private/metadata IP on the real connection (DNS rebinding / TOCTOU),
+  // slipping past this check entirely.
+  return { parsed, address: addresses[0] };
 }
 
 // Strip HTML tags and collapse whitespace into readable plain text. Lives
@@ -107,11 +114,35 @@ export function htmlToText(html) {
     .trim();
 }
 
+// A dns.lookup-compatible function that ignores whatever hostname it's asked
+// to resolve and always answers with the single pre-validated `address`.
+// Handles both the plain (err, address, family) callback form and the
+// { all: true } form (an array of {address, family}) that Node's Happy
+// Eyeballs / autoSelectFamily connection logic uses.
+export function pinnedLookup(address) {
+  const family = net.isIP(address);
+  return (_hostname, options, callback) => {
+    if (options && options.all) {
+      callback(null, [{ address, family }]);
+    } else {
+      callback(null, address, family);
+    }
+  };
+}
+
+// Builds a dispatcher that forces the TCP connection to `address` while
+// leaving the request's Host header / TLS SNI on the original hostname
+// (undici derives those from the URL, not from this lookup override) — so
+// the connection goes exactly where assertSafeUrl() validated it would.
+export function pinnedDispatcher(address) {
+  return new Agent({ connect: { lookup: pinnedLookup(address) } });
+}
+
 export async function fetchUrl(url, { method = "GET", headers = {}, body } = {}) {
   let currentUrl = url;
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
-    const parsed = await assertSafeUrl(currentUrl);
-    const res = await fetch(parsed, {
+    const { parsed, address } = await assertSafeUrl(currentUrl);
+    const res = await undiciFetch(parsed, {
       method,
       headers: {
         "User-Agent": "madmcp-server/2.0",
@@ -119,6 +150,7 @@ export async function fetchUrl(url, { method = "GET", headers = {}, body } = {})
       },
       body: body === undefined ? undefined : (typeof body === "string" ? body : JSON.stringify(body)),
       redirect: "manual",
+      dispatcher: pinnedDispatcher(address),
     });
 
     // Manual redirect handling: re-validate the Location header through the
