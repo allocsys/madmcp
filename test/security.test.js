@@ -155,18 +155,13 @@ describe("getClientIp", () => {
     expect(getClientIp(req)).toBe("192.168.1.50");
   });
 
-  it("returns an empty string for a whitespace-only X-Forwarded-For header, WITHOUT falling back to the socket address", () => {
-    // NOTE: this is a real gap, not a hardening test -- the header-presence
-    // check (`forwarded ? ... : socket.remoteAddress`) only looks at whether
-    // the header exists, not whether it's meaningful after trim(). A
-    // whitespace-only header is truthy, so the socket-address fallback
-    // never runs, and the caller silently gets "" instead of the real
-    // client IP. If getClientIp's result feeds an IP allowlist check, this
-    // means a request with `X-Forwarded-For: ' '` fails open/closed
-    // (depending on how the caller treats "") rather than using the
-    // trustworthy socket address that was available the whole time.
+  it("falls back to the socket address for a whitespace-only X-Forwarded-For header (#67)", () => {
+    // Previously a whitespace-only header passed the truthy presence check
+    // and short-circuited the socket-address fallback, silently returning
+    // "" instead of the real client IP. Now the trimmed value is checked
+    // for meaningfulness before use, so this falls back correctly.
     const req = { headers: { "x-forwarded-for": "   " }, socket: { remoteAddress: "192.168.1.50" } };
-    expect(getClientIp(req)).toBe("");
+    expect(getClientIp(req)).toBe("192.168.1.50");
   });
 
   it("trims surrounding whitespace around the leftmost entry", () => {
@@ -174,9 +169,9 @@ describe("getClientIp", () => {
     expect(getClientIp(req)).toBe("203.0.113.7");
   });
 
-  it("handles a leading empty entry (leading comma) by returning the empty string rather than throwing", () => {
+  it("falls back to the socket address when the leftmost entry is empty (leading comma) (#67)", () => {
     const req = { headers: { "x-forwarded-for": ", 5.6.7.8" }, socket: { remoteAddress: "10.0.0.1" } };
-    expect(getClientIp(req)).toBe("");
+    expect(getClientIp(req)).toBe("10.0.0.1");
   });
 
   it("passes through a non-IPv4 leftmost entry unvalidated (getClientIp does not itself validate IP shape)", () => {
