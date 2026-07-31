@@ -70,10 +70,12 @@ export const NOTION_RETRY_BASE_MS           = Number(process.env.NOTION_RETRY_BA
 export const NOTION_INDEX_DATABASE_ID = process.env.NOTION_INDEX_DATABASE_ID || "3a745572-b580-8160-856b-cf6544c8ffa8";
 
 // Parent page for new pages created by sync_mem0_to_notion (connectors/sync/
-// mem0_notion.js). Defaults to the "Memory Index" page (id below) that the
-// 2026-07-18 manual batch sync populated -- override via env var if that
-// page is ever moved/recreated, same pattern as NOTION_INDEX_PAGE_ID above.
-export const NOTION_SYNC_PARENT_PAGE_ID = process.env.NOTION_SYNC_PARENT_PAGE_ID || "3a045572-b580-81c5-a067-df834ca9ecc2";
+// mem0_notion.js). Was the "Memory Index" page, but that page went 404
+// (deleted/unshared) during a manual Notion reorg on 2026-08-01. Now
+// defaults to the "Claude" page (id below), adopted as the new root --
+// override via env var if that page is ever moved/recreated, same pattern
+// as NOTION_INDEX_PAGE_ID above.
+export const NOTION_SYNC_PARENT_PAGE_ID = process.env.NOTION_SYNC_PARENT_PAGE_ID || "3a045572-b580-8007-b622-c120958557bf";
 
 export const MEM0_API_KEY   = process.env.MEM0_API_KEY;
 export const MEM0_API       = "https://api.mem0.ai";
