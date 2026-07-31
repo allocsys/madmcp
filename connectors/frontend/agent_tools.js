@@ -45,8 +45,18 @@ function assertAllowedExtension(path, label) {
   }
 }
 
-function isConflictError(err) {
-  return /GitHub API error \(409\)/.test(err.message) || /sha (does not match|was not supplied)/i.test(err.message);
+// Used only when we DID send a base_sha: any 409 on a sha-bearing PUT means
+// the sha we sent no longer matches what's on the branch.
+function isStaleShaError(err) {
+  return /GitHub API error \(409\)/.test(err.message) || /sha does not match/i.test(err.message);
+}
+
+// Used only when we DIDN'T send a base_sha: GitHub's Contents API refuses to
+// overwrite an existing file without a sha, and says so in the error text.
+// Deliberately narrower than isStaleShaError -- a generic 409 with no
+// base_sha in play should NOT be assumed to be about sha state at all.
+function isMissingShaError(err) {
+  return /sha was not supplied/i.test(err.message);
 }
 
 // -- read_file ---------------------------------------------------------
@@ -134,13 +144,18 @@ export async function writeFile(owner, repo, path, { content, patch, baseSha, br
     });
     return { path, content: finalContent, sha: result.content.sha, commitSha: result.commit.sha };
   } catch (err) {
-    if (isConflictError(err)) {
+    if (baseSha && isStaleShaError(err)) {
       const conflictErr = new Error(
-        baseSha
-          ? `Write conflict on "${path}": the file changed on "${branch}" since it was read (base_sha ${baseSha} is stale). ` +
-            `Re-read the file and retry instead of overwriting blindly. Original error: ${err.message}`
-          : `Write conflict on "${path}": this file already exists on "${branch}", so it can't be created blind. ` +
-            `Use read_file to get its current content and sha, then retry write_file with that sha as base_sha. Original error: ${err.message}`
+        `Write conflict on "${path}": the file changed on "${branch}" since it was read (base_sha ${baseSha} is stale). ` +
+        `Re-read the file and retry instead of overwriting blindly. Original error: ${err.message}`
+      );
+      conflictErr.conflict = true;
+      throw conflictErr;
+    }
+    if (!baseSha && isMissingShaError(err)) {
+      const conflictErr = new Error(
+        `Write conflict on "${path}": this file already exists on "${branch}", so it can't be created blind. ` +
+        `Use read_file to get its current content and sha, then retry write_file with that sha as base_sha. Original error: ${err.message}`
       );
       conflictErr.conflict = true;
       throw conflictErr;
