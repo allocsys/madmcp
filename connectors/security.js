@@ -50,6 +50,7 @@ export function normalizeIp(ip) {
 // tuned to the actual number of trusted hops, or the header becomes spoofable.
 export function getClientIp(req) {
   const forwarded = req.headers["x-forwarded-for"];
-  const raw = forwarded ? forwarded.split(",")[0].trim() : req.socket.remoteAddress;
+  const forwardedIp = forwarded ? forwarded.split(",")[0].trim() : "";
+  const raw = forwardedIp || req.socket.remoteAddress;
   return normalizeIp(raw || "");
 }
