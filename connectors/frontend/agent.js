@@ -228,7 +228,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     try {
       repoInfo = await githubRequest(`/repos/${owner}/${repo}`);
     } catch (err) {
-      throw new Error(`Failed to look up ${owner}/${repo}: ${err.message}`);
+      throw new Error(`Failed to look up ${owner}/${repo}: ${err.message}`, { cause: err });
     }
     if (branch === repoInfo.default_branch) {
       throw new Error(`Refusing to run: "${branch}" is ${owner}/${repo}'s default branch. Create/use a feature branch instead -- this agent never writes directly to the default branch.`);
