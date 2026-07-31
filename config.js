@@ -290,6 +290,19 @@ export const FRONTEND_V2_HARD_MAX_STEPS = Number(process.env.FRONTEND_V2_HARD_MA
 // alongside FRONTEND_V2_DEFAULT_STEPS above, same source.
 export const FRONTEND_V2_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_V2_MAX_VALIDATE_CALLS) || 5;
 
+// Step 5 (rollout, issue #61): registers a SEPARATE "delegate_designer_v2"
+// MCP tool (connectors/frontend/tools.js) backed by runDesignAgent
+// (agent.js), alongside -- not replacing -- v1's existing "delegate_designer"
+// tool. Off by default: unset/anything other than the literal string "true"
+// means v2 is not registered at all (not just disabled-but-visible), so a
+// calling model can't discover or accidentally reach for it before it's
+// been deliberately dark-launched. Flip to "true" to make v2 available for
+// real-world use alongside v1 while conflict/error rates are monitored (see
+// the design doc's rollout step); v1 stays registered and unaffected either
+// way, and only gets retired in a later change once v2 is trusted enough to
+// become the default.
+export const FRONTEND_DESIGNER_V2_ENABLED = process.env.FRONTEND_DESIGNER_V2_ENABLED === "true";
+
 // ---------------------------------------------------------------------------
 // GitHub App -- scoped, short-lived clone tokens for PRIVATE repos (2026-07-28
 // plan, see Notion entity_id madmcp-github-app-scoped-clone-token-plan).
