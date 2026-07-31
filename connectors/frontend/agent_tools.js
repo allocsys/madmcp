@@ -134,10 +134,13 @@ export async function writeFile(owner, repo, path, { content, patch, baseSha, br
     });
     return { path, content: finalContent, sha: result.content.sha, commitSha: result.commit.sha };
   } catch (err) {
-    if (baseSha && isConflictError(err)) {
+    if (isConflictError(err)) {
       const conflictErr = new Error(
-        `Write conflict on "${path}": the file changed on "${branch}" since it was read (base_sha ${baseSha} is stale). ` +
-        `Re-read the file and retry instead of overwriting blindly. Original error: ${err.message}`
+        baseSha
+          ? `Write conflict on "${path}": the file changed on "${branch}" since it was read (base_sha ${baseSha} is stale). ` +
+            `Re-read the file and retry instead of overwriting blindly. Original error: ${err.message}`
+          : `Write conflict on "${path}": this file already exists on "${branch}", so it can't be created blind. ` +
+            `Use read_file to get its current content and sha, then retry write_file with that sha as base_sha. Original error: ${err.message}`
       );
       conflictErr.conflict = true;
       throw conflictErr;
