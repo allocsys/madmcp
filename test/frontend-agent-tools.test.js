@@ -189,6 +189,16 @@ describe("writeFile", () => {
 
     expect(err.conflict).toBeUndefined();
   });
+
+  it("labels a missing-sha error as a conflict when content mode is used with no base_sha on a file that already exists", async () => {
+    githubRequest.mockRejectedValueOnce(new Error('GitHub API error (422): {"message":"a.html sha was not supplied"}'));
+
+    const err = await writeFile(OWNER, REPO, "a.html", { content: "x", branch: "feature" }).catch((e) => e);
+
+    expect(err.conflict).toBe(true);
+    expect(err.message).toMatch(/already exists/i);
+    expect(err.message).toMatch(/read_file/);
+  });
 });
 
 describe("validate (re-export)", () => {
