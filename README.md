@@ -284,8 +284,8 @@ All tokens are optional independently — a connector's tools fail at call time
 | `GITHUB_MIN_REQUEST_INTERVAL_MS` | Minimum spacing between outgoing GitHub REST requests, to avoid secondary rate limits (default `300`) |
 | `GITHUB_MAX_RETRIES` | Max retries on GitHub secondary-rate-limit/429 responses (default `3`) |
 | `GITHUB_RETRY_BASE_MS` | Fallback backoff base when GitHub omits `Retry-After` (default `1500`, doubles per retry) |
-| `NOTION_INDEX_DATABASE_ID` | Database used for entity_id → page_id dedup lookups (has a working default) |
-| `NOTION_SYNC_PARENT_PAGE_ID` | Parent page for pages created by `sync_mem0_to_notion` (has a working default) |
+| `NOTION_INDEX_DATABASE_ID` | Database used for entity_id → page_id dedup lookups. **Set this yourself** if you're self-hosting — the default points to a database in the original deployer's own Notion workspace, which your integration won't have access to. Create a database in your workspace, share it with your integration (notion.so/my-integrations), and use its ID (the 32-char segment in its URL). |
+| `NOTION_SYNC_PARENT_PAGE_ID` | Parent page for pages created by `sync_mem0_to_notion`. **Set this yourself** if you're self-hosting, same reason as above — the default points to a page in the original deployer's workspace. Share a page in your own workspace with your integration and use its page ID. |
 | `MCP_SHARED_KEY` | Shared-secret auth for `/mcp`. Unset = endpoint is open to anyone with the URL — set this in any real deployment. |
 | `IP_ALLOWLIST_ENABLED` | Set `false` to disable the IP allowlist (default: enabled) |
 | `ALLOWED_IP_RANGES` | Comma-separated CIDR ranges allowed to call `/mcp` (defaults to Anthropic's published connector range) |
