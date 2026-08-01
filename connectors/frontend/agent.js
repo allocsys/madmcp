@@ -460,6 +460,12 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
       };
     }
 
+    if (consecutiveAllRepeatSteps === 2) {
+      responseParts.push({
+        text: "[SYSTEM NOTE: the last 2 steps consisted entirely of calls identical to ones already made this run. One more step like that and tools will be withheld to force a plain-text answer instead. If you're re-reading to double-check, that's fine once -- but if you're retrying the same write and getting the same result, stop and explain what's blocking it instead of repeating the call.]",
+      });
+    }
+
     const remainingAfterThisStep = cappedSteps - step;
     if (remainingAfterThisStep === 1) {
       responseParts.push({
