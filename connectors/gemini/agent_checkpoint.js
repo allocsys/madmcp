@@ -40,7 +40,7 @@ function metaKey(runId) {
 //     saveCheckpoint call for this runId (may be an empty array -- e.g. a
 //     geminiChat failure that happens before any new turn was pushed --
 //     in which case the list simply isn't touched this call, only meta is).
-//     The caller (delegate.js) is responsible for tracking which slice of
+//     The caller (agent_delegate.js) is responsible for tracking which slice of
 //     its in-memory `contents` array is new; this function has no way to
 //     know that on its own since it never sees the full array.
 //   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
