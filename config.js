@@ -219,8 +219,8 @@ export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSI
 // cross-system investigation surface, so it doesn't need investigation-scale
 // step counts to do useful work. Resolved 2026-08-01 per the Notion design
 // doc's open question -- see issue #61.
-export const FRONTEND_V2_DEFAULT_STEPS  = Number(process.env.FRONTEND_V2_DEFAULT_STEPS) || 12;
-export const FRONTEND_V2_HARD_MAX_STEPS = Number(process.env.FRONTEND_V2_HARD_MAX_STEPS) || 20;
+export const FRONTEND_DEFAULT_STEPS  = Number(process.env.FRONTEND_DEFAULT_STEPS) || 12;
+export const FRONTEND_HARD_MAX_STEPS = Number(process.env.FRONTEND_HARD_MAX_STEPS) || 20;
 
 // validate() calls do NOT count against the step budget above (a validate
 // call is cheap -- local syntax checking, no LLM/network round trip beyond
@@ -228,8 +228,8 @@ export const FRONTEND_V2_HARD_MAX_STEPS = Number(process.env.FRONTEND_V2_HARD_MA
 // that's better spent on read_file/write_file turns). Capped independently,
 // PER FILE PATH, so a model stuck in a validate/tweak/validate loop on one
 // file can't thrash indefinitely without ever burning a step -- resolved
-// alongside FRONTEND_V2_DEFAULT_STEPS above, same source.
-export const FRONTEND_V2_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_V2_MAX_VALIDATE_CALLS) || 5;
+// alongside FRONTEND_DEFAULT_STEPS above, same source.
+export const FRONTEND_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_MAX_VALIDATE_CALLS) || 5;
 
 // ---------------------------------------------------------------------------
 // GitHub App -- scoped, short-lived clone tokens for PRIVATE repos (2026-07-28
