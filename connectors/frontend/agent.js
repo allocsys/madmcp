@@ -193,6 +193,19 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   let effectiveRepo = repo;
   let effectiveBranch = branch;
   let effectiveTask = task;
+  // Stuck-loop detection (mirrors connectors/gemini/delegate.js's fix #4):
+  // repeatCounts tracks how many times each exact (function name + JSON-
+  // stringified args) signature has been called THIS RUN, persisted across
+  // resumes so a resumed run doesn't forget what it already tried.
+  // resultCache holds the actual result text per signature -- deliberately
+  // NOT persisted in the checkpoint (same reasoning as delegate.js: keeps
+  // checkpoint writes small; a resumed run re-executing one exact-repeat
+  // call and re-caching it is a correctness no-op). consecutiveAllRepeatSteps
+  // counts how many steps IN A ROW consisted ENTIRELY of repeat calls -- a
+  // single repeat mixed with new calls is normal exploration, not stuck.
+  let repeatCounts = new Map();
+  let resultCache = new Map();
+  let consecutiveAllRepeatSteps = 0;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
 
@@ -206,6 +219,11 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     effectiveRepo = checkpoint.repo;
     effectiveBranch = checkpoint.branch;
     effectiveTask = checkpoint.task;
+    // Checkpoints saved before this fix existed won't have these fields --
+    // fall back to empty/zero rather than erroring, same defensive pattern
+    // as validateCounts/writtenFiles above.
+    repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
+    consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
   } else if (resume_run_id) {
     // A resume was requested but its checkpoint didn't load (expired past
     // the 1-hour TTL, Redis unavailable, or an invalid/typo'd runId). Same
