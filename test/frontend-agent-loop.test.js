@@ -173,3 +173,38 @@ describe("runDesignAgent -- #59 reproduction across an interrupt/resume cycle", 
     expect(readFile).not.toHaveBeenCalled();
   });
 });
+
+describe("runDesignAgent -- final-step guard (live-test finding, 2026-08-01)", () => {
+  it("discards a function call attempted on the final step instead of executing it, and offers a usable resume_run_id", async () => {
+    // max_steps: 1 makes step 1 both the first and the final step (tools
+    // withheld). Gemini attempts write_file anyway despite no tools being
+    // declared -- this is the exact live-reproduced case: it must NOT be
+    // executed.
+    geminiChat.mockResolvedValueOnce(functionCallCandidate(
+      "write_file",
+      { path: "a.html", content: "<div>should not land</div>" },
+      "call-1"
+    ));
+
+    const result = await runDesignAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "x", max_steps: 1 });
+
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(result.failed).toBe(true);
+    expect(result.writtenFiles).toEqual([]);
+    expect(result.answer).toMatch(/discarded rather than executed/i);
+    expect(result.answer).toContain(`resume_run_id: "${result.runId}"`);
+    // Checkpoint must survive this stop so the resume_run_id is actually usable.
+    expect(fakeCheckpoints.has(result.runId)).toBe(true);
+  });
+
+  it("keeps the checkpoint alive and returns a usable resume_run_id when the model gives no answer and no function call on the final step", async () => {
+    geminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [] }, finishReason: "STOP" });
+
+    const result = await runDesignAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "x", max_steps: 1 });
+
+    expect(result.failed).toBe(true);
+    expect(result.answer).toMatch(/stopped without a final answer/i);
+    expect(result.answer).toContain(`resume_run_id: "${result.runId}"`);
+    expect(fakeCheckpoints.has(result.runId)).toBe(true);
+  });
+});
