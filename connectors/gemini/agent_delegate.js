@@ -574,13 +574,50 @@ const FUNCTIONS = [
   },
   {
     name: "github_search_code",
-    description: "Search code across GitHub using GitHub's code-search syntax (e.g. 'foo repo:owner/name', 'extension:js useState').",
-    parameters: { type: "object", properties: { query: { type: "string" }, per_page: { type: "number" } }, required: ["query"] },
-    execute: async ({ query, per_page = 20 }) => {
+    description: "Search code across GitHub using GitHub's code-search syntax (e.g. 'foo repo:owner/name', 'extension:js useState'). If the query is scoped to a single repo via repo:owner/name and GitHub's index returns nothing (a known gap for private repos), or if `ref` is given (GitHub's index only ever covers the default branch), this automatically falls back to fetching that repo as a tarball and grepping it locally instead of just reporting no results.",
+    parameters: { type: "object", properties: {
+      query: { type: "string", description: "Search query, e.g. 'foo repo:owner/name' or 'extension:js useState'" },
+      per_page: { type: "number", description: "Number of results to return, max 100 (default 20)" },
+      ref: { type: "string", description: "Branch, tag, or commit SHA to search instead of the default branch. Requires a repo:owner/name qualifier in the query -- GitHub's search index only covers the default branch, so this always uses the local content-search fallback rather than the real API." },
+    }, required: ["query"] },
+    execute: async ({ query, per_page = 20, ref }) => {
+      const scoped = extractRepoQualifier(query);
+
+      if (ref) {
+        if (!scoped) {
+          return "Error: `ref` requires a repo:owner/name qualifier in the query -- GitHub's search index only covers the default branch, so a specific repo must be named for the branch-aware fallback to know what to fetch.";
+        }
+        let fb;
+        try {
+          fb = await fallbackCodeSearch({ ...scoped, query, per_page, ref });
+        } catch (err) {
+          return `Branch search failed: ${err?.message ?? String(err)}`;
+        }
+        if (fb?.matches.length) {
+          const lines = fb.matches.map((m) => `${scoped.owner}/${scoped.repo}/${m.path}:${m.line} -- ${m.snippet}`);
+          return `Searched ${scoped.owner}/${scoped.repo}@${ref} directly (GitHub's code-search index only covers the default branch) -- scanned ${fb.scanned} file(s)${fb.truncated ? ", capped -- repo has more" : ""}:\n${lines.join("\n")}`;
+        }
+        return `No results found on ${scoped.owner}/${scoped.repo}@${ref} (scanned ${fb?.scanned ?? 0} file(s)${fb?.truncated ? ", capped -- repo has more" : ""}).`;
+      }
+
       const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${Math.min(per_page, 100)}`);
-      if (!data.items?.length) return "No results found.";
-      const text = `Found ${data.total_count} total, showing ${data.items.length}:\n` + data.items.map(i => `${i.repository.full_name}: ${i.path}`).join("\n");
-      return text.length > 15000 ? text.slice(0, 15000) + "\n...[truncated]" : text;
+      if (data.items?.length) {
+        const text = `Found ${data.total_count} total, showing ${data.items.length}:\n` + data.items.map(i => `${i.repository.full_name}: ${i.path}`).join("\n");
+        return text.length > 15000 ? text.slice(0, 15000) + "\n...[truncated]" : text;
+      }
+
+      if (scoped) {
+        const fb = await fallbackCodeSearch({ ...scoped, query, per_page }).catch(() => null);
+        if (fb?.matches.length) {
+          const lines = fb.matches.map((m) => `${scoped.owner}/${scoped.repo}/${m.path}:${m.line} -- ${m.snippet}`);
+          return `GitHub's code-search index returned nothing for this repo (a known gap for private repos), so this used a direct content search instead (scanned ${fb.scanned} file(s)${fb.truncated ? ", capped -- repo has more" : ""}):\n${lines.join("\n")}`;
+        }
+        if (fb) {
+          return `No results found. Also tried a direct content search of ${scoped.owner}/${scoped.repo} (GitHub's search index can return empty for private repos regardless of permissions) -- scanned ${fb.scanned} file(s)${fb.truncated ? " (capped, repo has more)" : ""}, no match.`;
+        }
+      }
+
+      return "No results found.";
     },
   },
 
