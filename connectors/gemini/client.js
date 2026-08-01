@@ -143,7 +143,7 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 // connectors/gemini/agent_delegate.js's GitHub/Notion/Cloudflare investigation loop.
 // Unlike geminiGenerate,
 // this takes/returns the raw `contents` conversation array and the raw
-// candidate, since the caller (delegate.js) needs to inspect whether the
+// candidate, since the caller (agent_delegate.js) needs to inspect whether the
 // response is a functionCall (keep looping) or plain text (done), which a
 // single flattened string can't represent.
 //
@@ -154,7 +154,7 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 // example, but current Gemini 3 models (see the generateContent docs) expect
 // function results back as role: "user" wrapping a functionResponse part,
 // with functionResponse.id echoing the originating functionCall.id. See
-// delegate.js for how a turn is actually built -- don't "fix" it back to
+// agent_delegate.js for how a turn is actually built -- don't "fix" it back to
 // role: "function" without re-checking current docs against the model in use.
 export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolConfig, maxOutputTokens } = {}) {
   const body = { contents };
