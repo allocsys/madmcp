@@ -192,49 +192,10 @@ export const EXA_API = "https://api.exa.ai/answer";
 export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS) || 55000;
 
 // ---------------------------------------------------------------------------
-// Frontend/design delegate (connectors/frontend/) -- provider-agnostic text
-// generation used ONLY by delegate_designer for one-shot HTML/CSS/
-// component generation. FRONTEND_PROVIDER selects which backend client.js
-// calls; swapping providers is a config change, not a code change. Add a
-// new provider by branching in connectors/frontend/client.js and adding its
-// own key/model config here -- keep a provider's config block even when it's
-// not the current default, since flipping back only works if it's still here.
-export const FRONTEND_PROVIDER = process.env.FRONTEND_PROVIDER || "cloudflare";
-
-// -- cloudflare: Workers AI (api.cloudflare.com/.../ai/run/{model}) --
-// Reuses CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID below -- no separate key
-// needed for this provider. Free daily neuron allocation; see
-// https://developers.cloudflare.com/workers-ai/platform/pricing/ for current
-// limits, which drift over time. Default model is a general instruct model,
-// not design-specialized -- override via env var if a better-suited model
-// becomes available on Workers AI.
-export const CLOUDFLARE_AI_MODEL = process.env.CLOUDFLARE_AI_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-
-// Workers AI defaults max_tokens to a low cap (256 for most chat models) when
-// the request omits it -- discovered 2026-07-28 when delegate_designer's
-// cloudflare provider kept silently truncating generated files partway
-// through (e.g. mid <style>/<body>) regardless of task size or attempt
-// count, which looked like a model-capability problem but was actually just
-// this unset request parameter. Override via env var if a given model's own
-// max output is smaller than this, or if generations still truncate on
-// larger files.
-export const CLOUDFLARE_AI_MAX_TOKENS = Number(process.env.CLOUDFLARE_AI_MAX_TOKENS) || 4096;
-
-// -- openrouter: openrouter.ai (OpenAI-compatible /chat/completions) --
-// Optional -- only required if FRONTEND_PROVIDER=openrouter. Default model
-// is a free (":free"-suffixed) route; override via env var, but check
-// https://openrouter.ai/models for which routes are still free before
-// changing it.
-export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-export const OPENROUTER_API     = "https://openrouter.ai/api/v1";
-export const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL || "qwen/qwen3-coder:free";
-
-// -- gemini: reuses the existing Gemini connector's geminiGenerate() and its
-// GEMINI_API_KEY/GEMINI_MODEL config above -- no separate keys needed here.
-
-// Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS/
-// EXA_REQUEST_TIMEOUT_MS above -- applies to whichever provider is active.
-export const FRONTEND_REQUEST_TIMEOUT_MS = Number(process.env.FRONTEND_REQUEST_TIMEOUT_MS) || 55000;
+// Frontend/design delegate (connectors/frontend/) -- delegate_designer's
+// write-capable agent loop (agent.js), backed by the existing Gemini
+// connector (geminiChat/GEMINI_API_KEY/GEMINI_MODEL above) -- no separate
+// provider config needed here.
 
 // Extensions delegate_designer is allowed to read as context OR write
 // as output. Fences BOTH the read side (so a manipulated task can't feed a
@@ -247,28 +208,8 @@ export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSI
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-// Bounds delegate_designer's generate -> validate -> fix loop (connectors/
-// frontend/validate.js + checkpoint.js). Mirrors delegate_agent's
-// HARD_MAX_STEPS reasoning -- both bounds LLM call cost and keeps a single
-// resumable unit of work small. A run that can't converge within this many
-// attempts writes its best (most-recently-generated) attempt with an
-// unresolved-issues note rather than looping indefinitely.
-export const FRONTEND_MAX_ATTEMPTS = Number(process.env.FRONTEND_MAX_ATTEMPTS) || 3;
-
-// Wall-clock budget for the WHOLE validate-fix loop within one delegate_
-// designer call, checked before starting each attempt -- distinct from
-// FRONTEND_REQUEST_TIMEOUT_MS above, which bounds a single LLM call. A
-// 3-attempt loop (3 LLM calls) can plausibly exceed a hosting platform's
-// own request-duration ceiling (the same constraint that motivated
-// delegate_agent's checkpoint/resume, see its HARD_MAX_STEPS comment) even
-// though no single attempt does. When exceeded, the loop checkpoints
-// (connectors/frontend/checkpoint.js) and returns a resume_run_id instead of
-// continuing past the platform's own limit. Set comfortably below that
-// limit, not up against it.
-export const FRONTEND_TOTAL_BUDGET_MS = Number(process.env.FRONTEND_TOTAL_BUDGET_MS) || 45000;
-
 // ---------------------------------------------------------------------------
-// delegate_designer v2 (issue #61, tool-calling agent redesign) -- bounds
+// delegate_designer (issue #61 agent redesign) -- bounds
 // connectors/frontend/agent.js's runDesignAgent loop, the read_file/
 // write_file/validate-based replacement for the generate->validate->fix
 // loop above. Deliberately TIGHTER than delegate_agent's 20 default / 30
@@ -289,19 +230,6 @@ export const FRONTEND_V2_HARD_MAX_STEPS = Number(process.env.FRONTEND_V2_HARD_MA
 // file can't thrash indefinitely without ever burning a step -- resolved
 // alongside FRONTEND_V2_DEFAULT_STEPS above, same source.
 export const FRONTEND_V2_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_V2_MAX_VALIDATE_CALLS) || 5;
-
-// Step 5 (rollout, issue #61): registers a SEPARATE "delegate_designer_v2"
-// MCP tool (connectors/frontend/tools.js) backed by runDesignAgent
-// (agent.js), alongside -- not replacing -- v1's existing "delegate_designer"
-// tool. Off by default: unset/anything other than the literal string "true"
-// means v2 is not registered at all (not just disabled-but-visible), so a
-// calling model can't discover or accidentally reach for it before it's
-// been deliberately dark-launched. Flip to "true" to make v2 available for
-// real-world use alongside v1 while conflict/error rates are monitored (see
-// the design doc's rollout step); v1 stays registered and unaffected either
-// way, and only gets retired in a later change once v2 is trusted enough to
-// become the default.
-export const FRONTEND_DESIGNER_V2_ENABLED = process.env.FRONTEND_DESIGNER_V2_ENABLED === "true";
 
 // ---------------------------------------------------------------------------
 // GitHub App -- scoped, short-lived clone tokens for PRIVATE repos (2026-07-28
