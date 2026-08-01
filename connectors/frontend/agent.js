@@ -3,7 +3,7 @@
 // loop (issue #61, Notion "madmcp-delegate-designer-v2-plan" design doc,
 // step 2: "Agent loop wiring").
 //
-// Adapts connectors/gemini/delegate.js's runInvestigation loop -- multi-step
+// Adapts connectors/gemini/agent_delegate.js's runInvestigation loop -- multi-step
 // Gemini function-calling, not a single one-shot completion -- but restricted
 // to exactly three tools (read_file / write_file / validate, all from
 // connectors/frontend/agent_tools.js, built in step 1) instead of
