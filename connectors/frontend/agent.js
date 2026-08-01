@@ -193,6 +193,19 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   let effectiveRepo = repo;
   let effectiveBranch = branch;
   let effectiveTask = task;
+  // Stuck-loop detection (mirrors connectors/gemini/delegate.js's fix #4):
+  // repeatCounts tracks how many times each exact (function name + JSON-
+  // stringified args) signature has been called THIS RUN, persisted across
+  // resumes so a resumed run doesn't forget what it already tried.
+  // resultCache holds the actual result text per signature -- deliberately
+  // NOT persisted in the checkpoint (same reasoning as delegate.js: keeps
+  // checkpoint writes small; a resumed run re-executing one exact-repeat
+  // call and re-caching it is a correctness no-op). consecutiveAllRepeatSteps
+  // counts how many steps IN A ROW consisted ENTIRELY of repeat calls -- a
+  // single repeat mixed with new calls is normal exploration, not stuck.
+  let repeatCounts = new Map();
+  let resultCache = new Map();
+  let consecutiveAllRepeatSteps = 0;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
 
@@ -206,6 +219,11 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     effectiveRepo = checkpoint.repo;
     effectiveBranch = checkpoint.branch;
     effectiveTask = checkpoint.task;
+    // Checkpoints saved before this fix existed won't have these fields --
+    // fall back to empty/zero rather than erroring, same defensive pattern
+    // as validateCounts/writtenFiles above.
+    repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
+    consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
   } else if (resume_run_id) {
     // A resume was requested but its checkpoint didn't load (expired past
     // the 1-hour TTL, Redis unavailable, or an invalid/typo'd runId). Same
@@ -268,6 +286,8 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     branch: effectiveBranch,
     validateCounts: Object.fromEntries(validateCounts),
     writtenFiles,
+    repeatCounts: Object.fromEntries(repeatCounts),
+    consecutiveAllRepeatSteps,
   });
 
   for (let step = startStep; step <= cappedSteps; step++) {
@@ -277,10 +297,21 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     // applies for the identical reason (a text-only reminder alone wasn't
     // reliable enough there either).
     const isFinalStep = step === cappedSteps;
+    // Same withholding, second trigger: 3 consecutive steps that were
+    // ENTIRELY repeat calls means the model is stuck re-trying the same
+    // thing rather than making progress -- force a plain-text answer now
+    // instead of letting it burn the rest of the step budget the same way.
+    // Mirrors connectors/gemini/delegate.js's fix #4; unlike that file, a
+    // stuck loop here can't be quietly served from cache indefinitely
+    // because write_file is never cache-served (see below) -- it would
+    // otherwise keep spending real GitHub API calls, not just wasted model
+    // turns.
+    const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
+    const withholdTools = isFinalStep || stuckLoopForce;
 
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: isFinalStep ? undefined : declarations });
+      candidate = await geminiChat(contents, { tools: withholdTools ? undefined : declarations });
     } catch (err) {
       await saveState(step - 1);
       const redisOk = isRedisConfigured();
@@ -303,17 +334,21 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     const parts = candidate.content?.parts || [];
     const functionCalls = parts.filter((p) => p.functionCall);
 
-    // Guard against the final step: tools were withheld above specifically
-    // so the model can't act here, but Gemini does not always reject an
-    // attempted function call API-side (the MALFORMED_FUNCTION_CALL path
-    // below covers when it does -- sometimes it just returns a function
-    // call anyway despite no tools being declared). Discard it unexecuted
-    // rather than running it, or the "final step never writes" guarantee
-    // this withholding exists for doesn't actually hold.
-    if (isFinalStep && functionCalls.length) {
+    // Guard against a step where tools were withheld (final step OR stuck-
+    // loop force): the model can't legitimately act here, but Gemini does
+    // not always reject an attempted function call API-side (the
+    // MALFORMED_FUNCTION_CALL path below covers when it does -- sometimes
+    // it just returns a function call anyway despite no tools being
+    // declared). Discard it unexecuted rather than running it, or the
+    // "no tools means nothing acts" guarantee this withholding exists for
+    // doesn't actually hold.
+    if (withholdTools && functionCalls.length) {
       await saveState(step - 1);
+      const reason = stuckLoopForce
+        ? `the agent appeared stuck repeating the same call(s) for ${consecutiveAllRepeatSteps} consecutive steps, so tools were withheld to force a plain-text answer instead of continuing to loop`
+        : `the model attempted a function call on the final step, where no tools are available`;
       return {
-        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: the model attempted a function call on the final step, where no tools are available, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: ${reason}, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
         steps: step - 1,
         transcript,
         runId,
@@ -335,8 +370,10 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         // why a run stopping here never actually surfaced a usable
         // resume_run_id despite the message implying resumability.
         await saveState(step - 1);
-        const starvationNote = isFinalStep && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
-          ? ` This was the final allowed step, which never includes tools -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This usually means the task needed more steps than max_steps (${cappedSteps}) allowed. Retry with a higher max_steps.`
+        const starvationNote = withholdTools && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+          ? (stuckLoopForce
+              ? ` Tools were withheld this step because the agent appeared stuck repeating the same call(s) for ${consecutiveAllRepeatSteps} consecutive steps, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available.`
+              : ` This was the final allowed step, which never includes tools -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This usually means the task needed more steps than max_steps (${cappedSteps}) allowed. Retry with a higher max_steps.`)
           : "";
         return {
           answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote} ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.`,
@@ -367,11 +404,23 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
       // depend on the first write's result within the same turn either
       // way), so this doesn't introduce a new ordering hazard beyond what
       // delegate.js already accepts for its own batched calls.
+      // Only read_file and validate are safe to serve from cache on an exact repeat -- both are pure reads with no side effect, so serving a cached result changes nothing about what actually happened. write_file is NEVER cache-served: it has a real side effect (a commit), and silently skipping that on a "repeat" call would let the model believe a write happened when it didn't -- exactly the kind of silent-mismatch bug this whole file's other fixes exist to prevent. An identical write_file call is instead just executed again for real (its repeat count still contributes to stuck-loop detection below, so repeatedly retrying the same failing write still gets caught and stopped -- it just isn't executed from cache while that's happening).
+      const CACHEABLE_TOOLS = new Set(["read_file", "validate"]);
+
       const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
+        const signature = `${name}:${JSON.stringify(args || {})}`;
+        const priorCount = repeatCounts.get(signature) || 0;
+        const isRepeat = priorCount > 0;
+        repeatCounts.set(signature, priorCount + 1);
+
         const fn = FUNCTIONS.find((f) => f.name === name);
         let resultText;
-        if (!fn) {
+        let servedFromCache = false;
+        if (isRepeat && CACHEABLE_TOOLS.has(name) && resultCache.has(signature)) {
+          resultText = resultCache.get(signature);
+          servedFromCache = true;
+        } else if (!fn) {
           resultText = `Error: unknown function "${name}".`;
         } else {
           try {
@@ -383,11 +432,19 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         if (typeof resultText !== "string") {
           resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in its execute().`;
         }
-        return { name, args, id, resultText };
+        if (!servedFromCache && CACHEABLE_TOOLS.has(name)) {
+          resultCache.set(signature, resultText);
+        }
+        return { name, args, id, resultText, isRepeat, servedFromCache };
       }));
 
+      // Stuck-loop tracking: this step counts as "all repeat" only if EVERY call in it was already seen before -- a step that mixes a repeat with a genuinely new call is normal exploration (e.g. re-reading one file while reading a second file for the first time), not a stuck loop.
+      const allRepeatsThisStep = results.length > 0 && results.every((r) => r.isRepeat);
+      consecutiveAllRepeatSteps = allRepeatsThisStep ? consecutiveAllRepeatSteps + 1 : 0;
+
       responseParts = results.map((r) => {
-        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})}) -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
+        const cacheNote = r.servedFromCache ? " [served from cache -- identical call already made this run]" : "";
+        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})})${cacheNote} -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
         return { functionResponse: { name: r.name, id: r.id, response: { result: r.resultText } } };
       });
     } catch (err) {
@@ -401,6 +458,12 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         writtenFiles,
         failed: true,
       };
+    }
+
+    if (consecutiveAllRepeatSteps === 2) {
+      responseParts.push({
+        text: "[SYSTEM NOTE: the last 2 steps consisted entirely of calls identical to ones already made this run. One more step like that and tools will be withheld to force a plain-text answer instead. If you're re-reading to double-check, that's fine once -- but if you're retrying the same write and getting the same result, stop and explain what's blocking it instead of repeating the call.]",
+      });
     }
 
     const remainingAfterThisStep = cappedSteps - step;
