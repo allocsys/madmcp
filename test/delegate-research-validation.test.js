@@ -1,18 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// tools.js's delegate_research handler validates mode selection (precision
-// vs. wide) BEFORE touching any of its real dependencies (Gemini, fetch,
-// research.js's runResearch, Notion). So for the validation-error cases we
-// don't need those dependencies to do anything -- but we still stub them
-// out since tools.js imports them at module load time regardless of which
-// branch a given test exercises, and a couple of tests below exercise the
-// success paths too (where the stubs' return values matter).
+// research_tools.js's delegate_research handler validates mode selection
+// (precision vs. wide) BEFORE touching any of its real dependencies (Gemini,
+// fetch, research_delegate.js's runResearch, Notion). So for the
+// validation-error cases we don't need those dependencies to do anything --
+// but we still stub them out since research_tools.js imports them at module
+// load time regardless of which branch a given test exercises, and a couple
+// of tests below exercise the success paths too (where the stubs' return
+// values matter).
 
 const CLIENT_PATH = "../connectors/gemini/client.js";
-const RESEARCH_PATH = "../connectors/exa/research.js";
+const RESEARCH_PATH = "../connectors/exa/research_delegate.js";
 const FETCH_PATH = "../connectors/fetch/client.js";
 const NOTION_PATH = "../connectors/notion/tools.js";
-const TOOLS_PATH = "../connectors/gemini/tools.js";
+const TOOLS_PATH = "../connectors/exa/research_tools.js";
 
 let geminiGenerate;
 let runResearch;
@@ -21,7 +22,7 @@ let htmlToText;
 let doCreatePage;
 
 // Captures the handler registered under "delegate_research" so it can be
-// invoked directly, the same way tools.js's real MCP server would.
+// invoked directly, the same way the real MCP server would.
 function makeFakeServer() {
   const handlers = new Map();
   return {
@@ -45,7 +46,6 @@ beforeEach(async () => {
   vi.doMock(RESEARCH_PATH, () => ({ runResearch }));
   vi.doMock(FETCH_PATH, () => ({ fetchUrl, htmlToText }));
   vi.doMock(NOTION_PATH, () => ({ doCreatePage }));
-  vi.doMock("../connectors/gemini/delegate.js", () => ({ runInvestigation: vi.fn() }));
 });
 
 afterEach(() => {
@@ -53,7 +53,6 @@ afterEach(() => {
   vi.doUnmock(RESEARCH_PATH);
   vi.doUnmock(FETCH_PATH);
   vi.doUnmock(NOTION_PATH);
-  vi.doUnmock("../connectors/gemini/delegate.js");
 });
 
 async function getHandler() {
