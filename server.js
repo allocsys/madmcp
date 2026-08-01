@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, FRONTEND_PROVIDER, FRONTEND_DESIGNER_V2_ENABLED, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY } from "./config.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
@@ -127,8 +127,7 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       cloudflare: Boolean(CLOUDFLARE_API_TOKEN && CLOUDFLARE_ACCOUNT_ID),
       context7: true, // works unauthenticated at lower rate limits, so always "configured"
       gemini: Boolean(GEMINI_API_KEY),
-      frontend: FRONTEND_PROVIDER, // provider name, not a boolean -- always "configured" in the sense of having a default
-      frontend_designer_v2: FRONTEND_DESIGNER_V2_ENABLED, // issue #61 dark-launch flag -- whether delegate_designer_v2 is registered at all
+      frontend: Boolean(GEMINI_API_KEY), // delegate_designer's agent loop runs on the Gemini connector -- no separate frontend provider config anymore
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });
@@ -169,7 +168,6 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
     if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp, /mcp/:key, and / endpoints are OPEN to anyone who has the URL.");
     if (!GITHUB_APP_ID || !GITHUB_APP_INSTALLATION_ID || !GITHUB_APP_PRIVATE_KEY) console.warn("NOTE: GITHUB_APP_ID/GITHUB_APP_INSTALLATION_ID/GITHUB_APP_PRIVATE_KEY not fully set. get_repo_clone_token (private-repo sandbox clone) will fail until the GitHub App is configured.");
     console.log(`IP allowlist: ${IP_ALLOWLIST_ENABLED ? `ENABLED (${ALLOWED_IP_RANGES.join(", ")})` : "DISABLED"}`);
-    console.log(`delegate_designer_v2 (issue #61 rollout, dark launch): ${FRONTEND_DESIGNER_V2_ENABLED ? "ENABLED -- tool registered alongside v1" : "disabled -- not registered"}`);
   });
 }
 
