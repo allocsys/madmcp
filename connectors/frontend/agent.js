@@ -297,10 +297,21 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     // applies for the identical reason (a text-only reminder alone wasn't
     // reliable enough there either).
     const isFinalStep = step === cappedSteps;
+    // Same withholding, second trigger: 3 consecutive steps that were
+    // ENTIRELY repeat calls means the model is stuck re-trying the same
+    // thing rather than making progress -- force a plain-text answer now
+    // instead of letting it burn the rest of the step budget the same way.
+    // Mirrors connectors/gemini/delegate.js's fix #4; unlike that file, a
+    // stuck loop here can't be quietly served from cache indefinitely
+    // because write_file is never cache-served (see below) -- it would
+    // otherwise keep spending real GitHub API calls, not just wasted model
+    // turns.
+    const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
+    const withholdTools = isFinalStep || stuckLoopForce;
 
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: isFinalStep ? undefined : declarations });
+      candidate = await geminiChat(contents, { tools: withholdTools ? undefined : declarations });
     } catch (err) {
       await saveState(step - 1);
       const redisOk = isRedisConfigured();
