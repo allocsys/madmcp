@@ -20,7 +20,7 @@ import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
 import * as agent      from "./connectors/gemini/agent_tools.js";
 import * as research   from "./connectors/exa/research_tools.js";
-import * as frontend   from "./connectors/frontend/tools.js";
+import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 
 // Build the MCP server once at startup and reuse it across all requests.

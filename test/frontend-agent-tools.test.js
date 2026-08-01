@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/frontend-agent-tools.test.js
 //
-// Unit coverage for connectors/frontend/agent_tools.js (delegate_designer
+// Unit coverage for connectors/frontend/designer_tool_functions.js (delegate_designer
 // v2, issue #61, step 1: "Tools layer"). Covers read_file, applyPatch,
 // write_file, and the re-exported validate -- independently of the step-2
 // agent loop, per the implementation sequence in the Notion design doc.
@@ -20,7 +20,7 @@ vi.mock("../connectors/github/client.js", () => ({
 }));
 
 import { githubRequest } from "../connectors/github/client.js";
-import { readFile, writeFile, applyPatch, validate } from "../connectors/frontend/agent_tools.js";
+import { readFile, writeFile, applyPatch, validate } from "../connectors/frontend/designer_tool_functions.js";
 import { validateByExtension } from "../connectors/frontend/validate.js";
 
 const OWNER = "allocsys";

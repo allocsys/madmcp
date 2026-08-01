@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/agent_tools.js — read/write/validate primitives for
+// connectors/frontend/designer_tool_functions.js — read/write/validate primitives for
 // delegate_designer v2 (issue #61, Notion "madmcp-delegate-designer-v2-plan"
 // design doc). Step 1 of the implementation sequence: "Tools layer" only --
 // these are plain async functions, NOT yet wired up as the agent's

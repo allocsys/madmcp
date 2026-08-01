@@ -210,7 +210,7 @@ export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSI
 
 // ---------------------------------------------------------------------------
 // delegate_designer (issue #61 agent redesign) -- bounds
-// connectors/frontend/agent.js's runDesignAgent loop, the read_file/
+// connectors/frontend/designer_delegate.js's runDesignAgent loop, the read_file/
 // write_file/validate-based replacement for the generate->validate->fix
 // loop above. Deliberately TIGHTER than delegate_agent's 20 default / 30
 // hard cap (see the GEMINI connector's HARD_MAX_STEPS in connectors/gemini/

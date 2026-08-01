@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/agent.js — delegate_designer's tool-calling agent
+// connectors/frontend/designer_delegate.js — delegate_designer's tool-calling agent
 // loop (issue #61, Notion "madmcp-delegate-designer-v2-plan" design doc,
 // step 2: "Agent loop wiring").
 //
 // Adapts connectors/gemini/agent_delegate.js's runInvestigation loop -- multi-step
 // Gemini function-calling, not a single one-shot completion -- but restricted
 // to exactly three tools (read_file / write_file / validate, all from
-// connectors/frontend/agent_tools.js, built in step 1) instead of
+// connectors/frontend/designer_tool_functions.js, built in step 1) instead of
 // delegate_agent's large read-only cross-system surface, and WRITE-capable
 // rather than read-only.
 //
@@ -17,9 +17,9 @@
 // no code path for the model to redirect a read/write at a different
 // repo/branch than the one this run was started against. Extension fencing
 // (FRONTEND_ALLOWED_EXTENSIONS) is enforced one level down, inside
-// agent_tools.js's readFile/writeFile themselves -- not repeated here.
+// designer_tool_functions.js's readFile/writeFile themselves -- not repeated here.
 // Default-branch refusal is checked once up front (connectors/frontend/
-// tools.js).
+// designer_tools.js).
 //
 // NOT YET WIRED TO AN MCP TOOL: this file exports runDesignAgent as a plain
 // function, unit-testable independently (mirrors step 1's "build the tools
@@ -31,8 +31,8 @@
 
 import { randomUUID } from "node:crypto";
 import { geminiChat } from "../gemini/client.js";
-import { readFile, writeFile, validate as validateFile } from "./agent_tools.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./agent_checkpoint.js";
+import { readFile, writeFile, validate as validateFile } from "./designer_tool_functions.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./designer_checkpoint.js";
 import { isRedisConfigured } from "../gemini/cooldown.js";
 import { githubRequest } from "../github/client.js";
 import {
@@ -126,7 +126,7 @@ function buildFunctions({ owner, repo, branch, validateCounts, writtenFiles }) {
           writtenFiles.push(result.path);
           return `Wrote ${result.path} (commit ${result.commitSha.slice(0, 7)}, new sha ${result.sha}).`;
         } catch (err) {
-          // Conflict errors (agent_tools.js's `.conflict = true`) are a
+          // Conflict errors (designer_tool_functions.js's `.conflict = true`) are a
           // normal, expected outcome the model should react to (re-read,
           // re-diff, retry) -- per the design doc, NOT a hard tool failure.
           // Returning the message as a regular string result (rather than

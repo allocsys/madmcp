@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/tools.js — delegate_designer
+// connectors/frontend/designer_tools.js — delegate_designer
 //
 // Write-capable tool-calling agent for HTML/CSS/SCSS/JSX/TSX/Vue files
-// (issue #61 redesign). Thin wrapper around runDesignAgent (agent.js):
+// (issue #61 redesign). Thin wrapper around runDesignAgent (designer_delegate.js):
 // validation and response-shaping here deliberately mirror connectors/
 // gemini/agent_tools.js's delegate_agent (same resume_run_id / max_steps /
 // show_transcript conventions), since this is architecturally the same
@@ -30,7 +30,7 @@
 // were deleted alongside it -- nothing else in the codebase imported them.
 //
 // SCOPE FENCING (deliberate, not incidental), enforced at the TOOL layer
-// inside agent_tools.js's own read_file/write_file (not just prompt
+// inside designer_tool_functions.js's own read_file/write_file (not just prompt
 // instructions), per issue #61:
 //  - READ/WRITE: both fenced to FRONTEND_ALLOWED_EXTENSIONS -- a bad or
 //    manipulated task can't point this at config.js or other
@@ -43,7 +43,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { runDesignAgent } from "./agent.js";
+import { runDesignAgent } from "./designer_delegate.js";
 import {
   DEFAULT_OWNER, FRONTEND_ALLOWED_EXTENSIONS, FRONTEND_DEFAULT_STEPS,
 } from "../../config.js";
