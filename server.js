@@ -18,7 +18,8 @@ import * as mem0       from "./connectors/mem/tools.js";
 import * as fetch      from "./connectors/fetch/tools.js";
 import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
-import * as gemini     from "./connectors/gemini/tools.js";
+import * as agent      from "./connectors/gemini/agent_tools.js";
+import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 
@@ -35,7 +36,8 @@ mem0.register(mcpServer);
 fetch.register(mcpServer);
 cloudflare.register(mcpServer);
 context7.register(mcpServer);
-gemini.register(mcpServer);
+agent.register(mcpServer);
+research.register(mcpServer);
 frontend.register(mcpServer);
 sync.register(mcpServer);
 
