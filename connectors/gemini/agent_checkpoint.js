@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/checkpoint.js — Redis-backed checkpointing for
+// connectors/gemini/agent_checkpoint.js — Redis-backed checkpointing for
 // delegate_agent's multi-step loop, so a run that dies partway through
 // (Gemini 503/429, network blip, function timeout) doesn't lose every tool
 // call it already made.
