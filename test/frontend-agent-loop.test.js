@@ -208,3 +208,77 @@ describe("runDesignAgent -- final-step guard (live-test finding, 2026-08-01)", (
     expect(fakeCheckpoints.has(result.runId)).toBe(true);
   });
 });
+
+describe("runDesignAgent -- stuck-loop detection (2026-08-01 fix)", () => {
+  it("serves an identical read_file repeat from cache instead of re-executing, and withholds tools to force a plain-text answer after 3 consecutive all-repeat steps", async () => {
+    readFile.mockResolvedValueOnce({ path: "a.html", content: "<div>hi</div>", sha: "sha-A" });
+    // Same exact call, 4 more times in a row -- steps 2-4 are repeats
+    // (served from cache, no second readFile execution), step 5 is where
+    // consecutiveAllRepeatSteps hits 3 entering the loop and tools get
+    // withheld; the model is made to answer in plain text there instead.
+    // max_steps: 6 so step 5 is NOT the final step either -- isolating that
+    // the withholding is caused by the stuck loop, not step-cap coincidence.
+    for (let i = 0; i < 4; i++) {
+      geminiChat.mockResolvedValueOnce(functionCallCandidate("read_file", { path: "a.html" }, `call-${i + 1}`));
+    }
+    geminiChat.mockResolvedValueOnce(textCandidate("Stopping -- kept getting the same content back."));
+
+    const result = await runDesignAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "x", max_steps: 6 });
+
+    // Only the first call actually hit readFile -- the next 3 identical
+    // calls were served from cache.
+    expect(readFile).toHaveBeenCalledTimes(1);
+    // The 5th geminiChat call is the one made once tools were withheld for
+    // being stuck -- confirm no tools were declared for it.
+    expect(geminiChat.mock.calls[4][1].tools).toBeUndefined();
+    expect(result.failed).toBeFalsy();
+    expect(result.answer).toMatch(/kept getting the same content back/i);
+  });
+
+  it("never serves write_file from cache, even on an exact repeat -- always executes the write for real", async () => {
+    writeFile.mockResolvedValueOnce({ path: "a.html", content: "<div>v1</div>", sha: "sha-1", commitSha: "commit1" });
+    writeFile.mockResolvedValueOnce({ path: "a.html", content: "<div>v1</div>", sha: "sha-2", commitSha: "commit2" });
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("write_file", { path: "a.html", content: "<div>v1</div>" }, "call-1"));
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("write_file", { path: "a.html", content: "<div>v1</div>" }, "call-2"));
+    geminiChat.mockResolvedValueOnce(textCandidate("Done (wrote twice, as instructed)."));
+
+    const result = await runDesignAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "x", max_steps: 3 });
+
+    // Both identical write_file calls actually executed -- never skipped
+    // via the cache, unlike read_file/validate.
+    expect(writeFile).toHaveBeenCalledTimes(2);
+    expect(result.writtenFiles).toEqual(["a.html", "a.html"]);
+    expect(result.failed).toBeFalsy();
+  });
+
+  it("does not count a step mixing a repeat with a genuinely new call as a stuck-loop step", async () => {
+    readFile.mockResolvedValueOnce({ path: "a.html", content: "<div>a</div>", sha: "sha-A" });
+    readFile.mockResolvedValueOnce({ path: "b.html", content: "<div>b</div>", sha: "sha-B" });
+    readFile.mockResolvedValueOnce({ path: "c.html", content: "<div>c</div>", sha: "sha-C" });
+    // Step 1: read a.html (new). Step 2: read a.html again (repeat) + read
+    // b.html (new) in the same step -- mixed, so this should NOT advance
+    // consecutiveAllRepeatSteps. Step 3: read c.html (new). Step 4: final,
+    // text answer.
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("read_file", { path: "a.html" }, "call-1"));
+    geminiChat.mockResolvedValueOnce({
+      content: {
+        role: "model",
+        parts: [
+          { functionCall: { name: "read_file", args: { path: "a.html" }, id: "call-2" } },
+          { functionCall: { name: "read_file", args: { path: "b.html" }, id: "call-3" } },
+        ],
+      },
+    });
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("read_file", { path: "c.html" }, "call-4"));
+    geminiChat.mockResolvedValueOnce(textCandidate("Read all three files."));
+
+    const result = await runDesignAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "x", max_steps: 4 });
+
+    // Never withheld for being stuck -- the 4th (final) call withholds tools
+    // only because it's the final step, and the run still reaches a real
+    // text answer normally.
+    expect(result.failed).toBeFalsy();
+    expect(result.answer).toMatch(/read all three files/i);
+    expect(readFile).toHaveBeenCalledTimes(3);
+  });
+});
