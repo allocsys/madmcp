@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/delegate.js — read-only investigation loop.
+// connectors/gemini/agent_delegate.js — read-only investigation loop.
 //
 // Lets Gemini run its OWN multi-step tool-use loop server-side (via Gemini
 // function calling) to answer an open-ended question, instead of the
@@ -8,7 +8,7 @@
 //
 // SCOPE: every delegated function below is READ-ONLY. Gemini is never given
 // a write-capable function here -- writes stay confined to the fixed
-// GEMINI_NOTION_ROOT_PAGE_ID path in tools.js, same isolation rule as
+// GEMINI_NOTION_ROOT_PAGE_ID path in agent_tools.js, same isolation rule as
 // delegate_research. This file only reaches into GitHub/Cloudflare/Notion's
 // existing client-layer functions (not the MCP tool layer) to avoid
 // round-tripping through the MCP server for its own internal calls.
@@ -40,7 +40,7 @@
 
 import { randomUUID } from "node:crypto";
 import { geminiChat } from "./client.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./checkpoint.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./agent_checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
@@ -800,7 +800,7 @@ const FUNCTION_DECLARATIONS = [{
 
 // SCOPE NOTE (2026-07-27): this file deliberately has NO web access (no
 // web_fetch, no Google Search grounding) -- that lives entirely in
-// connectors/exa/research.js, behind the separate delegate_research
+// connectors/exa/research_delegate.js, behind the separate delegate_research
 // tool. Keeping the two apart is a security boundary, not just a UX split:
 // this loop reads private GitHub/Notion/Cloudflare/Context7/Mem0 data, and
 // research.js's Exa call reads untrusted public web content -- a single loop
@@ -809,7 +809,7 @@ const FUNCTION_DECLARATIONS = [{
 // read from those private systems (e.g. via a crafted outbound fetch to an
 // attacker-controlled URL). Neither loop can do that, because neither ever
 // has both capabilities available at once. Do NOT re-add web_fetch or a
-// google_search tool here -- add web capability to research.js instead.
+// google_search tool here -- add web capability to research_delegate.js instead.
 
 const SYSTEM_PREAMBLE =
   "You are a read-only investigation agent. Use the available functions to gather whatever " +
