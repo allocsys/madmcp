@@ -286,6 +286,8 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     branch: effectiveBranch,
     validateCounts: Object.fromEntries(validateCounts),
     writtenFiles,
+    repeatCounts: Object.fromEntries(repeatCounts),
+    consecutiveAllRepeatSteps,
   });
 
   for (let step = startStep; step <= cappedSteps; step++) {
