@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// connectors/exa/research.js — backs delegate_research's "wide mode"
-// (a `task`, no `url`/`question`) in tools.js -- the precision mode (single
-// url + question, one geminiGenerate call) stays inline in tools.js since
-// it's a genuinely different, simpler code path.
+// connectors/exa/research_delegate.js — backs delegate_research's "wide mode"
+// (a `task`, no `url`/`question`) in research_tools.js -- the precision mode
+// (single url + question, one geminiGenerate call) stays inline in
+// research_tools.js since it's a genuinely different, simpler code path.
 //
 // NO GEMINI "FIRST TRY" (2026-07-27): this used to run a multi-step Gemini
 // loop first (native Google Search grounding + a web_fetch function tool),
@@ -16,7 +16,7 @@
 // implementation (from when this file lived under connectors/gemini/) if
 // it's ever wanted back.
 //
-// resume_run_id: tools.js's delegate_research still accepts this param for
+// resume_run_id: research_tools.js's delegate_research still accepts this param for
 // wide mode (shared validation with delegate_agent's checkpoint/resume
 // story), but there is no longer anything to resume -- a single Exa call
 // either succeeds or fails in one shot, with nothing partial to save. If a
@@ -30,7 +30,7 @@ import { exaWebSearch } from "./client.js";
 
 // Runs wide-mode research via a single Exa /answer call. Returns the same
 // { answer, steps, transcript, runId, task, failed? } shape the prior
-// Gemini-loop implementation returned, so tools.js's delegate_research
+// Gemini-loop implementation returned, so research_tools.js's delegate_research
 // handler (and its Notion logging / transcript display) needs no changes.
 export async function runResearch({ task, resume_run_id }) {
   const runId = randomUUID();

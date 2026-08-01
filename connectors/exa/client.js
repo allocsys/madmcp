@@ -4,11 +4,11 @@
 // Auth header: "x-api-key: <api_key>"
 //
 // NOT A FALLBACK ANYMORE (2026-07-27): this file used to plug a gap in
-// research.js's Gemini-native-search-grounding loop (for older
+// research_delegate.js's Gemini-native-search-grounding loop (for older
 // GEMINI_FALLBACK_MODELS that rejected the search+web_fetch tool
-// combination). That loop is gone -- research.js (same directory) now
+// combination). That loop is gone -- research_delegate.js (same directory) now
 // calls exaWebSearch() below directly, as the only implementation of wide
-// mode, not as a fallback for anything. See research.js's header for that
+// mode, not as a fallback for anything. See research_delegate.js's header for that
 // history and the full rationale.
 //
 // FORMERLY OPENAI (2026-07-27): this file replaces connectors/openai/
@@ -132,7 +132,7 @@ async function callAnswer(query) {
 // plain text (the model's own synthesis) -- same shape a caller would get
 // from Gemini's native Google Search grounding or the OpenAI web_search
 // tool this replaces. Throws if every key in the cascade fails; the caller
-// (research.js's function execute() wrapper) turns that into an
+// (research_delegate.js's function execute() wrapper) turns that into an
 // "Error: ..." string rather than crashing the research loop.
 export async function exaWebSearch(query) {
   const data = await callAnswer(query);

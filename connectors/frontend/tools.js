@@ -4,7 +4,7 @@
 // Write-capable tool-calling agent for HTML/CSS/SCSS/JSX/TSX/Vue files
 // (issue #61 redesign). Thin wrapper around runDesignAgent (agent.js):
 // validation and response-shaping here deliberately mirror connectors/
-// gemini/tools.js's delegate_agent (same resume_run_id / max_steps /
+// gemini/agent_tools.js's delegate_agent (same resume_run_id / max_steps /
 // show_transcript conventions), since this is architecturally the same
 // kind of step-bounded, checkpointable tool-calling loop -- just
 // write-capable and scoped to frontend files instead of read-only/
@@ -69,7 +69,7 @@ export function register(server) {
     async ({ owner = DEFAULT_OWNER, repo, branch, task, max_steps, resume_run_id, show_transcript = false }) => {
       // Same "task is only genuinely optional when resuming a live
       // checkpoint" reasoning as delegate_agent's handler in
-      // connectors/gemini/tools.js.
+      // connectors/gemini/agent_tools.js.
       if (!task && !resume_run_id) {
         return {
           content: [{ type: "text", text: "Missing required argument: task must be provided unless resuming a live checkpoint via resume_run_id." }],

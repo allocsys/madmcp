@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/tools.js
+// connectors/exa/research_tools.js
 //
-// delegate_research (2026-07-27 rename + split, was Delegate_web_fetch): one
-// tool, two mutually-exclusive modes, selected by which args are passed --
+// Registers delegate_research: one tool, two mutually-exclusive modes,
+// selected by which args are passed --
 // PRECISION MODE (url + question): fetches a URL and hands the page content
 // + question to Gemini in a single call, returning ONLY Gemini's answer --
 // not the raw page. This is the original token-saving mechanism (see plan
@@ -10,14 +10,27 @@
 // 500,000 raw characters into the calling model's context by default. This
 // mode instead lets Gemini read the firehose server-side and returns a
 // compact answer, at the cost of one extra API call + latency. Stays inline
-// in this file (not research.js) since it's a genuinely simpler, one-shot
-// code path with no loop.
-// WIDE MODE (task): delegates to runResearch() in research.js -- as of
-// 2026-07-27 a single, WEB-ONLY call to Exa's /answer endpoint (search +
-// synthesis in one shot), not a multi-step Gemini loop -- see research.js's
+// in this file (not research_delegate.js) since it's a genuinely simpler,
+// one-shot code path with no loop.
+// WIDE MODE (task): delegates to runResearch() in research_delegate.js --
+// a single, WEB-ONLY call to Exa's /answer endpoint (search + synthesis in
+// one shot), not a multi-step Gemini loop -- see research_delegate.js's
 // header for why that loop was retired and why this stays WEB-ONLY (kept
 // separate from delegate_agent's GitHub/Notion/Cloudflare/Context7/Mem0
 // access) regardless of provider.
+//
+// MOVED HERE FROM gemini/agent_tools.js (2026-08-01): delegate_research's
+// registration used to live inside gemini/tools.js (now agent_tools.js)
+// alongside delegate_agent, purely because precision mode calls out to
+// Gemini's geminiGenerate(). That co-location was flagged as a structural
+// inconsistency in the delegation-naming-convention Notion plan (Phase 3):
+// every OTHER MCP tool registration lives in its own connector's tools.js,
+// but delegate_research (an Exa-backed tool) didn't have one of its own.
+// This file resolves that as "Option B" from the plan -- delegate_research
+// now has its own registration file here, importing geminiGenerate from
+// ../gemini/client.js for precision mode the same way any other cross-
+// connector helper would be imported. No behavior change from the move --
+// same handler logic, same validation, same Notion logging.
 //
 // NOTE ON WHY PRECISION MODE SAVES TOKENS AND OTHER SIMILAR-LOOKING TOOLS
 // DON'T: any argument a caller passes INTO a tool call (e.g. "summarize this
@@ -32,14 +45,13 @@
 // argument-based path for a Gemini-driven write to land anywhere else in
 // the workspace (Memory Index, Entity Index, Job Leads, etc.), which the
 // Claude-side dedup/sync tools depend on staying uncontaminated. Reads are
-// unrestricted -- future Gemini tools that need Notion context can query
-// any page/database via the existing connectors/notion/client.js exports.
+// unrestricted -- future tools that need Notion context can query any
+// page/database via the existing connectors/notion/client.js exports.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { geminiGenerate } from "./client.js";
-import { runInvestigation } from "./delegate.js";
-import { runResearch } from "../exa/research.js";
+import { geminiGenerate } from "../gemini/client.js";
+import { runResearch } from "./research_delegate.js";
 import { fetchUrl, htmlToText } from "../fetch/client.js";
 import { doCreatePage } from "../notion/tools.js";
 import { GEMINI_NOTION_ROOT_PAGE_ID } from "../../config.js";
@@ -87,7 +99,7 @@ export function register(server) {
         return { content: [{ type: "text", text: "Wide mode requires task, unless resuming a live checkpoint via resume_run_id." }], isError: true };
       }
       // Same off-by-invalid-input guard as delegate_agent's max_steps check --
-      // see tools.js's delegate_agent handler comment for the full reasoning.
+      // see agent_tools.js's delegate_agent handler comment for the full reasoning.
       if (hasWideArgs && max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
         return { content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 30 regardless of a larger value.` }], isError: true };
       }
@@ -139,7 +151,7 @@ export function register(server) {
         return { content: [{ type: "text", text: `${answer}${notionNote}` }] };
       }
 
-      // ---- Wide mode: multi-step, web-only research loop (research.js) ----
+      // ---- Wide mode: single-shot, web-only research call (research_delegate.js) ----
       let result;
       try {
         result = await runResearch({ task, max_steps, resume_run_id });
@@ -149,7 +161,7 @@ export function register(server) {
 
       // On a resumed run, task may be undefined here -- runResearch returns
       // the effective task text it actually used, mirroring delegate_agent's
-      // handling below.
+      // handling in agent_tools.js.
       const effectiveTask = task || result.task || "(resumed run)";
 
       let notionNote = "";
@@ -168,90 +180,6 @@ export function register(server) {
         }
       }
 
-      const transcriptBlock = result.transcript?.length && (result.failed || show_transcript)
-        ? `\n\n${result.failed ? "Tool calls completed before the failure" : "Tool call transcript"}:\n${result.transcript.join("\n")}`
-        : "";
-
-      return { content: [{ type: "text", text: `${result.answer}${transcriptBlock}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: !!result.failed };
-    }
-  );
-
-  server.tool(
-    "delegate_agent",
-    "DOES: Open-ended, multi-step READ-ONLY investigation across GitHub/Notion/Cloudflare -- Gemini runs its own server-side loop (bounded by max_steps) reading files/trees/commits/logs/pages across as many turns as needed, cross-checks claims BETWEEN sources, flags discrepancies, returns one synthesized answer.\n" +
-    "RULE: default choice for multi-file or open-ended investigation -- prefer over manual read_file/get_file_tree/list_directory loops UNLESS you need exactly one named file.\n" +
-    "NOT: web access -> use delegate_research (task param, wide mode) instead. NOT: any write -> read-only by design.\n" +
-    "USE FOR: e.g. 'why is CI failing on PR #42', 'summarize what changed in this repo over the last week' -- cases needing 5-10+ manual cross-system calls otherwise.\n" +
-    "RESUME: failed/partial run -> response includes resume_run_id -> pass back to continue from last completed step instead of restarting.",
-    {
-      task:          z.string().optional().describe("The investigation task/question, described with enough context (repo names, time ranges, etc.) for Gemini to act without needing to ask you anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused). Optional ONLY when resume_run_id is given and its checkpoint is still live; required otherwise -- omitting it on a fresh run (no resume_run_id, or an expired one) returns an error rather than silently proceeding with no task."),
-      max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 20, hard cap 30 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
-      log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
-      resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
-      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
-    },
-    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false }) => {
-      // task is only genuinely optional when resuming a live checkpoint --
-      // runInvestigation ignores task entirely in that branch (it rebuilds
-      // `contents` straight from the saved checkpoint). On a fresh run (no
-      // resume_run_id, or one whose checkpoint already expired), there is no
-      // saved task to fall back on, so fail loudly here rather than letting
-      // runInvestigation start a conversation with an undefined task.
-      if (!task && !resume_run_id) {
-        return {
-          content: [{ type: "text", text: "Missing required argument: task must be provided unless resuming a live checkpoint via resume_run_id." }],
-          isError: true,
-        };
-      }
-
-      // max_steps has no floor in its Zod type (z.number().optional() accepts
-      // 0, negatives, and non-integers), but runInvestigation's loop is a
-      // `for (step = startStep; step <= cappedSteps; ...)` that simply never
-      // executes when cappedSteps < startStep -- silently "succeeding" with
-      // zero Gemini calls made and a confusing "reached the step cap of 0"
-      // answer instead of surfacing that the input itself was invalid.
-      if (max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
-        return {
-          content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 30 regardless of a larger value.` }],
-          isError: true,
-        };
-      }
-
-      let result;
-      try {
-        result = await runInvestigation({ task, max_steps, resume_run_id });
-      } catch (err) {
-        return { content: [{ type: "text", text: `Investigation failed: ${err?.message ?? String(err)}` }], isError: true };
-      }
-
-      // On a resumed run, `task` may be undefined here (a fresh run always has
-      // it, per the guard above) -- runInvestigation returns the effective
-      // task text it actually used (the caller-supplied one, or the one
-      // restored from the checkpoint) so logging/titling never has to guess.
-      const effectiveTask = task || result.task || "(resumed run)";
-
-      let notionNote = "";
-      if (log_to_notion) {
-        try {
-          const logged = await doCreatePage({
-            parent_id:   GEMINI_NOTION_ROOT_PAGE_ID,
-            parent_type: "page",
-            title:       `${result.failed ? "investigate (partial): " : "investigate: "}${effectiveTask.slice(0, 80)}`,
-            content:     `Task: ${effectiveTask}\n\nrunId: ${result.runId}${result.failed ? " (resumable)" : ""}\n\nSteps taken: ${result.steps}\n\nTool calls:\n${result.transcript.join("\n") || "(none)"}\n\nAnswer:\n${result.answer}`,
-            one_off:     true,
-          });
-          notionNote = `\n\n(Logged to Notion: ${logged.url})`;
-        } catch (err) {
-          notionNote = `\n\n(\u26a0\ufe0f Notion logging failed: ${err.message})`;
-        }
-      }
-
-      // On a failed/partial run, the tool calls already completed are real
-      // work (and already checkpointed to Redis -- see runInvestigation's
-      // comment) that shouldn't be thrown away. Print them here instead of
-      // just a step count, so the caller can see what was actually found
-      // before the failure without needing a resume_run_id round-trip or
-      // log_to_notion just to inspect them.
       const transcriptBlock = result.transcript?.length && (result.failed || show_transcript)
         ? `\n\n${result.failed ? "Tool calls completed before the failure" : "Tool call transcript"}:\n${result.transcript.join("\n")}`
         : "";

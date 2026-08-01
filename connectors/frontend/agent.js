@@ -3,7 +3,7 @@
 // loop (issue #61, Notion "madmcp-delegate-designer-v2-plan" design doc,
 // step 2: "Agent loop wiring").
 //
-// Adapts connectors/gemini/delegate.js's runInvestigation loop -- multi-step
+// Adapts connectors/gemini/agent_delegate.js's runInvestigation loop -- multi-step
 // Gemini function-calling, not a single one-shot completion -- but restricted
 // to exactly three tools (read_file / write_file / validate, all from
 // connectors/frontend/agent_tools.js, built in step 1) instead of
@@ -42,7 +42,7 @@ import {
   FRONTEND_MAX_VALIDATE_CALLS,
 } from "../../config.js";
 
-// Same reasoning as connectors/gemini/delegate.js's isTransientGeminiError:
+// Same reasoning as connectors/gemini/agent_delegate.js's isTransientGeminiError:
 // only 429 (rate limit) and 503 (overloaded) are worth resuming past --
 // everything else (bad request, auth, missing key) will reproduce
 // identically on a resume.
@@ -169,13 +169,13 @@ function buildFunctions({ owner, repo, branch, validateCounts, writtenFiles }) {
 
 // Runs the write-capable design agent loop. Returns
 // { answer, steps, transcript, runId, writtenFiles, task, failed? } --
-// same overall shape as connectors/gemini/delegate.js's runInvestigation,
+// same overall shape as connectors/gemini/agent_delegate.js's runInvestigation,
 // so a future MCP-facing tool (step 5) can follow the same
 // resume_run_id/failed-response conventions delegate_agent already uses.
 //
 // On a fresh call, owner/repo/branch/task are required; on a resume
 // (resume_run_id set), they're restored from the checkpoint and any passed
-// values are ignored, matching connectors/gemini/delegate.js's own resume
+// values are ignored, matching connectors/gemini/agent_delegate.js's own resume
 // contract (see its comments for why `task` specifically must never be
 // trusted over the checkpoint's own record of it on a live resume).
 export async function runDesignAgent({ owner, repo, branch, task, max_steps = FRONTEND_DEFAULT_STEPS, resume_run_id }) {
@@ -191,12 +191,12 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   let effectiveRepo = repo;
   let effectiveBranch = branch;
   let effectiveTask = task;
-  // Stuck-loop detection (mirrors connectors/gemini/delegate.js's fix #4):
+  // Stuck-loop detection (mirrors connectors/gemini/agent_delegate.js's fix #4):
   // repeatCounts tracks how many times each exact (function name + JSON-
   // stringified args) signature has been called THIS RUN, persisted across
   // resumes so a resumed run doesn't forget what it already tried.
   // resultCache holds the actual result text per signature -- deliberately
-  // NOT persisted in the checkpoint (same reasoning as delegate.js: keeps
+  // NOT persisted in the checkpoint (same reasoning as agent_delegate.js: keeps
   // checkpoint writes small; a resumed run re-executing one exact-repeat
   // call and re-caching it is a correctness no-op). consecutiveAllRepeatSteps
   // counts how many steps IN A ROW consisted ENTIRELY of repeat calls -- a
@@ -226,9 +226,9 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     // A resume was requested but its checkpoint didn't load (expired past
     // the 1-hour TTL, Redis unavailable, or an invalid/typo'd runId). Same
     // "fail loudly and distinctly" reasoning as connectors/gemini/
-    // delegate.js -- silently falling through to a fresh run here would
+    // agent_delegate.js -- silently falling through to a fresh run here would
     // require owner/repo/branch/task to have been re-supplied anyway (this
-    // loop, unlike delegate.js, has no task-optional fallback path), so
+    // loop, unlike agent_delegate.js, has no task-optional fallback path), so
     // there's no ambiguous case to accommodate -- always an error.
     throw new Error(
       isRedisConfigured()
@@ -291,7 +291,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   for (let step = startStep; step <= cappedSteps; step++) {
     // Withhold tools on the final step so the model is structurally forced
     // to answer in plain text instead of attempting one more function call
-    // that never gets to run -- same fix connectors/gemini/delegate.js
+    // that never gets to run -- same fix connectors/gemini/agent_delegate.js
     // applies for the identical reason (a text-only reminder alone wasn't
     // reliable enough there either).
     const isFinalStep = step === cappedSteps;
@@ -299,7 +299,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     // ENTIRELY repeat calls means the model is stuck re-trying the same
     // thing rather than making progress -- force a plain-text answer now
     // instead of letting it burn the rest of the step budget the same way.
-    // Mirrors connectors/gemini/delegate.js's fix #4; unlike that file, a
+    // Mirrors connectors/gemini/agent_delegate.js's fix #4; unlike that file, a
     // stuck loop here can't be quietly served from cache indefinitely
     // because write_file is never cache-served (see below) -- it would
     // otherwise keep spending real GitHub API calls, not just wasted model
@@ -391,17 +391,17 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
 
     let responseParts;
     try {
-      // Parallelized for the same reason as connectors/gemini/delegate.js:
+      // Parallelized for the same reason as connectors/gemini/agent_delegate.js:
       // every call batched into one model turn was decided without seeing
       // any of the others' results, so awaiting them concurrently changes
       // only wall-clock time, not what information was available to what
-      // call. Unlike delegate.js's read-only tool set, write_file has a
+      // call. Unlike agent_delegate.js's read-only tool set, write_file has a
       // real side effect (a commit) -- but two write_file calls in the same
       // batched turn would already be targeting different paths in any
       // sane model plan (the model has no way to make a second write
       // depend on the first write's result within the same turn either
       // way), so this doesn't introduce a new ordering hazard beyond what
-      // delegate.js already accepts for its own batched calls.
+      // agent_delegate.js already accepts for its own batched calls.
       // Only read_file and validate are safe to serve from cache on an exact repeat -- both are pure reads with no side effect, so serving a cached result changes nothing about what actually happened. write_file is NEVER cache-served: it has a real side effect (a commit), and silently skipping that on a "repeat" call would let the model believe a write happened when it didn't -- exactly the kind of silent-mismatch bug this whole file's other fixes exist to prevent. An identical write_file call is instead just executed again for real (its repeat count still contributes to stuck-loop detection below, so repeatedly retrying the same failing write still gets caught and stopped -- it just isn't executed from cache while that's happening).
       const CACHEABLE_TOOLS = new Set(["read_file", "validate"]);
 

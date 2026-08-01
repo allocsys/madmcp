@@ -30,7 +30,7 @@ async function callGenerateContentOnce(body, model) {
     // undefined), so without this they'd fall through callGenerateContent's
     // 429/503-only retry check as a hard, non-cascading failure even though
     // they're exactly as transient as a 503 in practice. `transient: true`
-    // lets the cascade (and delegate.js's isTransientGeminiError) treat them
+    // lets the cascade (and agent_delegate.js's isTransientGeminiError) treat them
     // the same way, without pretending they're a real HTTP status code.
     const isAbort = err.name === "AbortError";
     const wrapped = new Error(isAbort ? `Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms (model: ${model})` : `Gemini request failed (network error, model: ${model}): ${err.message}`);
@@ -140,10 +140,10 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 }
 
 // Multi-turn call WITH function-calling support -- used by
-// connectors/gemini/delegate.js's GitHub/Notion/Cloudflare investigation loop.
+// connectors/gemini/agent_delegate.js's GitHub/Notion/Cloudflare investigation loop.
 // Unlike geminiGenerate,
 // this takes/returns the raw `contents` conversation array and the raw
-// candidate, since the caller (delegate.js) needs to inspect whether the
+// candidate, since the caller (agent_delegate.js) needs to inspect whether the
 // response is a functionCall (keep looping) or plain text (done), which a
 // single flattened string can't represent.
 //
@@ -154,17 +154,19 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 // example, but current Gemini 3 models (see the generateContent docs) expect
 // function results back as role: "user" wrapping a functionResponse part,
 // with functionResponse.id echoing the originating functionCall.id. See
-// delegate.js for how a turn is actually built -- don't "fix" it back to
+// agent_delegate.js for how a turn is actually built -- don't "fix" it back to
 // role: "function" without re-checking current docs against the model in use.
 export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolConfig, maxOutputTokens } = {}) {
   const body = { contents };
   if (tools) body.tools = tools;
-  // toolConfig is currently only ever passed as
-  // { includeServerSideToolInvocations: true } by research.js, required to
-  // combine the native googleSearch tool with a custom function declaration
-  // in the same call (see research.js's file header for the exact contract
-  // -- confirmed against Google's generateContent tool-combination docs,
-  // 2026-07-27). delegate.js never passes this: it has no built-in tools.
+  // toolConfig is a historical param from when research_delegate.js (then
+  // still under connectors/gemini/) ran a multi-step Gemini loop passing
+  // { includeServerSideToolInvocations: true } to combine the native
+  // googleSearch tool with a custom function declaration in the same call.
+  // That loop was retired 2026-07-27 in favor of a direct Exa /answer call
+  // (see research_delegate.js's header) -- nothing in this codebase passes
+  // toolConfig anymore, but the param is left in place in case a future
+  // caller needs it. agent_delegate.js never passes this: it has no built-in tools.
   if (toolConfig) body.toolConfig = toolConfig;
   if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
 

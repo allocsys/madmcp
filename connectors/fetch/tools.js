@@ -8,8 +8,8 @@
 // need is just an answer to a specific question about a page (not the exact
 // text/code itself), delegate_research's precision mode (url+question) is
 // far cheaper: it fetches server-side and hands only Gemini's compact
-// answer back, never the raw page. See gemini/tools.js's file header for
-// the full token-cost comparison.
+// answer back, never the raw page. See exa/research_tools.js's file header
+// for the full token-cost comparison.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";

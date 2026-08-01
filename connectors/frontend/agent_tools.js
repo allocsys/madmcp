@@ -3,7 +3,7 @@
 // delegate_designer v2 (issue #61, Notion "madmcp-delegate-designer-v2-plan"
 // design doc). Step 1 of the implementation sequence: "Tools layer" only --
 // these are plain async functions, NOT yet wired up as the agent's
-// tool-calling loop (that's step 2, adapting connectors/gemini/delegate.js's
+// tool-calling loop (that's step 2, adapting connectors/gemini/agent_delegate.js's
 // runInvestigation pattern). Kept separate from tools.js (the current v1
 // generate->validate->fix loop) so v1 keeps working unmodified while v2 is
 // built alongside it; tools.js gets retired in step 5 (rollout).

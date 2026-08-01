@@ -5,10 +5,10 @@
 // what the MCP-calling model (e.g. Claude) sees when deciding which tool to
 // use, and are the only place the "prefer delegate_agent" routing hints
 // live. They are read by a DIFFERENT model, for a DIFFERENT purpose, than
-// the FUNCTIONS declarations Gemini sees in connectors/gemini/delegate.js
+// the FUNCTIONS declarations Gemini sees in connectors/gemini/agent_delegate.js
 // during its own internal tool-calling loop -- editing one has no effect on
-// the other. Do not assume changes here propagate to delegate.js, and never
-// port this "use delegate_agent instead" phrasing onto delegate.js's own
+// the other. Do not assume changes here propagate to agent_delegate.js, and never
+// port this "use delegate_agent instead" phrasing onto agent_delegate.js's own
 // function declarations (see the warning at the top of that file for why).
 //
 // NOTE ON "clone via bash_tool" TEXT BELOW (added 2026-07-28, see Notion

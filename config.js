@@ -129,7 +129,7 @@ export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "ge
 
 // Defensive ceiling on a single generateContent call -- no official guidance
 // from Google on max latency, but without SOME timeout a hung/dropped
-// connection leaves delegate.js's per-step checkpointing unable to kick in
+// connection leaves agent_delegate.js's per-step checkpointing unable to kick in
 // at all (the call just never returns). Override via env var if this proves
 // too tight for slower multi-tool-call turns, or too loose relative to the
 // hosting platform's own request-duration limit.
@@ -214,7 +214,7 @@ export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSI
 // write_file/validate-based replacement for the generate->validate->fix
 // loop above. Deliberately TIGHTER than delegate_agent's 20 default / 30
 // hard cap (see the GEMINI connector's HARD_MAX_STEPS in connectors/gemini/
-// delegate.js): this agent's tool set (read/write/validate on frontend
+// agent_delegate.js): this agent's tool set (read/write/validate on frontend
 // files within one branch) is far narrower than delegate_agent's open-ended
 // cross-system investigation surface, so it doesn't need investigation-scale
 // step counts to do useful work. Resolved 2026-08-01 per the Notion design

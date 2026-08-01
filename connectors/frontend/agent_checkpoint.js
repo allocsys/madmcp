@@ -3,7 +3,7 @@
 // delegate_designer's agent loop (connectors/frontend/agent.js,
 // issue #61 step 2).
 //
-// SIMPLER THAN connectors/gemini/checkpoint.js'S LIST+META SPLIT, ON
+// SIMPLER THAN connectors/gemini/agent_checkpoint.js'S LIST+META SPLIT, ON
 // PURPOSE: that split exists because delegate_agent's open-ended
 // investigation surface (GitHub/Cloudflare/Notion/Context7/Mem0, many of
 // which return multi-KB text blobs per call) can grow a `contents` array
@@ -12,8 +12,8 @@
 // on one branch, bounded by FRONTEND_HARD_MAX_STEPS (20) -- its `contents`
 // array is small enough that a whole-blob-per-save approach is still the
 // right call here too. Reuse that shape rather than importing gemini/
-// checkpoint.js's list-vs-meta split, which would be unused complexity for
-// this loop's actual size.
+// agent_checkpoint.js's list-vs-meta split, which would be unused complexity
+// for this loop's actual size.
 //
 // SAME FAIL-OPEN CONTRACT AS EVERY OTHER CHECKPOINT MODULE IN THIS REPO: if
 // Redis isn't configured or a call fails, every function here no-ops /

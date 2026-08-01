@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/checkpoint.js — Redis-backed checkpointing for
+// connectors/gemini/agent_checkpoint.js — Redis-backed checkpointing for
 // delegate_agent's multi-step loop, so a run that dies partway through
 // (Gemini 503/429, network blip, function timeout) doesn't lose every tool
 // call it already made.
@@ -40,7 +40,7 @@ function metaKey(runId) {
 //     saveCheckpoint call for this runId (may be an empty array -- e.g. a
 //     geminiChat failure that happens before any new turn was pushed --
 //     in which case the list simply isn't touched this call, only meta is).
-//     The caller (delegate.js) is responsible for tracking which slice of
+//     The caller (agent_delegate.js) is responsible for tracking which slice of
 //     its in-memory `contents` array is new; this function has no way to
 //     know that on its own since it never sees the full array.
 //   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
@@ -76,7 +76,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
 // A genuine exception here (network blip, malformed JSON, etc.) is logged
 // as a warning before returning null -- distinct from the ordinary "key
 // doesn't exist" case (empty list / null meta), which is expected and
-// silent. Both cases still return null to the caller (delegate.js can't do
+// silent. Both cases still return null to the caller (agent_delegate.js can't do
 // anything different with either -- see its header), so this doesn't
 // change behavior, only observability: without it, a Redis outage and an
 // expired checkpoint look identical in the logs.
