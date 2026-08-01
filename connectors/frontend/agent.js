@@ -404,11 +404,23 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
       // depend on the first write's result within the same turn either
       // way), so this doesn't introduce a new ordering hazard beyond what
       // delegate.js already accepts for its own batched calls.
+      // Only read_file and validate are safe to serve from cache on an exact repeat -- both are pure reads with no side effect, so serving a cached result changes nothing about what actually happened. write_file is NEVER cache-served: it has a real side effect (a commit), and silently skipping that on a "repeat" call would let the model believe a write happened when it didn't -- exactly the kind of silent-mismatch bug this whole file's other fixes exist to prevent. An identical write_file call is instead just executed again for real (its repeat count still contributes to stuck-loop detection below, so repeatedly retrying the same failing write still gets caught and stopped -- it just isn't executed from cache while that's happening).
+      const CACHEABLE_TOOLS = new Set(["read_file", "validate"]);
+
       const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
+        const signature = `${name}:${JSON.stringify(args || {})}`;
+        const priorCount = repeatCounts.get(signature) || 0;
+        const isRepeat = priorCount > 0;
+        repeatCounts.set(signature, priorCount + 1);
+
         const fn = FUNCTIONS.find((f) => f.name === name);
         let resultText;
-        if (!fn) {
+        let servedFromCache = false;
+        if (isRepeat && CACHEABLE_TOOLS.has(name) && resultCache.has(signature)) {
+          resultText = resultCache.get(signature);
+          servedFromCache = true;
+        } else if (!fn) {
           resultText = `Error: unknown function "${name}".`;
         } else {
           try {
@@ -420,11 +432,19 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         if (typeof resultText !== "string") {
           resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in its execute().`;
         }
-        return { name, args, id, resultText };
+        if (!servedFromCache && CACHEABLE_TOOLS.has(name)) {
+          resultCache.set(signature, resultText);
+        }
+        return { name, args, id, resultText, isRepeat, servedFromCache };
       }));
 
+      // Stuck-loop tracking: this step counts as "all repeat" only if EVERY call in it was already seen before -- a step that mixes a repeat with a genuinely new call is normal exploration (e.g. re-reading one file while reading a second file for the first time), not a stuck loop.
+      const allRepeatsThisStep = results.length > 0 && results.every((r) => r.isRepeat);
+      consecutiveAllRepeatSteps = allRepeatsThisStep ? consecutiveAllRepeatSteps + 1 : 0;
+
       responseParts = results.map((r) => {
-        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})}) -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
+        const cacheNote = r.servedFromCache ? " [served from cache -- identical call already made this run]" : "";
+        transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})})${cacheNote} -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
         return { functionResponse: { name: r.name, id: r.id, response: { result: r.resultText } } };
       });
     } catch (err) {
