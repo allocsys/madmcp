@@ -180,7 +180,7 @@ async function getRepoEntries(owner, repo, ref) {
   return entries;
 }
 
-async function fallbackCodeSearch({ owner, repo, query, per_page, ref }) {
+export async function fallbackCodeSearch({ owner, repo, query, per_page, ref }) {
   const searchTerm = stripQualifiers(query);
   if (!searchTerm) return null; // qualifier-only query -- nothing to grep for
 
