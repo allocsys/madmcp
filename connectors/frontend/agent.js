@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/agent.js — delegate_designer v2's tool-calling agent
+// connectors/frontend/agent.js — delegate_designer's tool-calling agent
 // loop (issue #61, Notion "madmcp-delegate-designer-v2-plan" design doc,
 // step 2: "Agent loop wiring").
 //
@@ -18,16 +18,15 @@
 // repo/branch than the one this run was started against. Extension fencing
 // (FRONTEND_ALLOWED_EXTENSIONS) is enforced one level down, inside
 // agent_tools.js's readFile/writeFile themselves -- not repeated here.
-// Default-branch refusal is checked once up front, same as v1
-// (connectors/frontend/tools.js).
+// Default-branch refusal is checked once up front (connectors/frontend/
+// tools.js).
 //
 // NOT YET WIRED TO AN MCP TOOL: this file exports runDesignAgent as a plain
 // function, unit-testable independently (mirrors step 1's "build the tools
 // layer, unit test each independently of the agent loop" -- this step does
 // the analogous thing one level up: build the loop, unit test it
-// independently of any server.tool(...) registration). MCP registration +
-// feature-flagged rollout alongside v1 is step 5 in the design doc, not
-// this step.
+// independently of any server.tool(...) registration). MCP registration
+// is step 5 in the design doc, not this step.
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
@@ -38,9 +37,9 @@ import { isRedisConfigured } from "../gemini/cooldown.js";
 import { githubRequest } from "../github/client.js";
 import {
   FRONTEND_ALLOWED_EXTENSIONS,
-  FRONTEND_V2_DEFAULT_STEPS,
-  FRONTEND_V2_HARD_MAX_STEPS,
-  FRONTEND_V2_MAX_VALIDATE_CALLS,
+  FRONTEND_DEFAULT_STEPS,
+  FRONTEND_HARD_MAX_STEPS,
+  FRONTEND_MAX_VALIDATE_CALLS,
 } from "../../config.js";
 
 // Same reasoning as connectors/gemini/delegate.js's isTransientGeminiError:
@@ -151,8 +150,8 @@ function buildFunctions({ owner, repo, branch, validateCounts, writtenFiles }) {
       },
       execute: async ({ path, content }) => {
         const count = validateCounts.get(path) || 0;
-        if (count >= FRONTEND_V2_MAX_VALIDATE_CALLS) {
-          return `Error: validate() has already been called ${count} time(s) for "${path}", which is this run's per-file cap (${FRONTEND_V2_MAX_VALIDATE_CALLS}). Proceed without further validation of this file, or write it and reconsider your approach if it's still not right.`;
+        if (count >= FRONTEND_MAX_VALIDATE_CALLS) {
+          return `Error: validate() has already been called ${count} time(s) for "${path}", which is this run's per-file cap (${FRONTEND_MAX_VALIDATE_CALLS}). Proceed without further validation of this file, or write it and reconsider your approach if it's still not right.`;
         }
         validateCounts.set(path, count + 1);
         const result = await validateFile(path, content);
@@ -172,16 +171,15 @@ function buildFunctions({ owner, repo, branch, validateCounts, writtenFiles }) {
 // { answer, steps, transcript, runId, writtenFiles, task, failed? } --
 // same overall shape as connectors/gemini/delegate.js's runInvestigation,
 // so a future MCP-facing tool (step 5) can follow the same
-// resume_run_id/failed-response conventions v1 and delegate_agent already
-// use.
+// resume_run_id/failed-response conventions delegate_agent already uses.
 //
 // On a fresh call, owner/repo/branch/task are required; on a resume
 // (resume_run_id set), they're restored from the checkpoint and any passed
 // values are ignored, matching connectors/gemini/delegate.js's own resume
 // contract (see its comments for why `task` specifically must never be
 // trusted over the checkpoint's own record of it on a live resume).
-export async function runDesignAgent({ owner, repo, branch, task, max_steps = FRONTEND_V2_DEFAULT_STEPS, resume_run_id }) {
-  const cappedSteps = Math.min(max_steps, FRONTEND_V2_HARD_MAX_STEPS);
+export async function runDesignAgent({ owner, repo, branch, task, max_steps = FRONTEND_DEFAULT_STEPS, resume_run_id }) {
+  const cappedSteps = Math.min(max_steps, FRONTEND_HARD_MAX_STEPS);
 
   let runId = resume_run_id;
   let contents;
@@ -348,7 +346,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         ? `the agent appeared stuck repeating the same call(s) for ${consecutiveAllRepeatSteps} consecutive steps, so tools were withheld to force a plain-text answer instead of continuing to loop`
         : `the model attempted a function call on the final step, where no tools are available`;
       return {
-        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: ${reason}, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: ${reason}, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
         steps: step - 1,
         transcript,
         runId,
@@ -499,7 +497,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   // keep-checkpoint-alive-and-mark-failed resume contract as every other
   // stopped-without-an-answer path in this file.
   return {
-    answer: `(Run stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
+    answer: `(Run stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
     steps: cappedSteps,
     transcript,
     runId,
