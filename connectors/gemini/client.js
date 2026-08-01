@@ -30,7 +30,7 @@ async function callGenerateContentOnce(body, model) {
     // undefined), so without this they'd fall through callGenerateContent's
     // 429/503-only retry check as a hard, non-cascading failure even though
     // they're exactly as transient as a 503 in practice. `transient: true`
-    // lets the cascade (and delegate.js's isTransientGeminiError) treat them
+    // lets the cascade (and agent_delegate.js's isTransientGeminiError) treat them
     // the same way, without pretending they're a real HTTP status code.
     const isAbort = err.name === "AbortError";
     const wrapped = new Error(isAbort ? `Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms (model: ${model})` : `Gemini request failed (network error, model: ${model}): ${err.message}`);
