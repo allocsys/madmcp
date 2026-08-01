@@ -303,15 +303,52 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     const parts = candidate.content?.parts || [];
     const functionCalls = parts.filter((p) => p.functionCall);
 
+    // Guard against the final step: tools were withheld above specifically
+    // so the model can't act here, but Gemini does not always reject an
+    // attempted function call API-side (the MALFORMED_FUNCTION_CALL path
+    // below covers when it does -- sometimes it just returns a function
+    // call anyway despite no tools being declared). Discard it unexecuted
+    // rather than running it, or the "final step never writes" guarantee
+    // this withholding exists for doesn't actually hold.
+    if (isFinalStep && functionCalls.length) {
+      await saveState(step - 1);
+      return {
+        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: the model attempted a function call on the final step, where no tools are available, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
+        steps: step - 1,
+        transcript,
+        runId,
+        task: effectiveTask,
+        writtenFiles,
+        failed: true,
+      };
+    }
+
     if (!functionCalls.length) {
       const answer = parts.map((p) => p.text || "").join("").trim();
-      await deleteCheckpoint(runId);
       if (!answer) {
+        // No text and no function calls -- the model didn't actually
+        // finish. Keep the checkpoint alive (don't delete it) and mark
+        // this failed so the caller gets a real, usable resume_run_id --
+        // matching the resume contract used everywhere else in this loop
+        // (Gemini call errors, mid-step processing errors). Previously
+        // this path deleted the checkpoint and omitted `failed`, which is
+        // why a run stopping here never actually surfaced a usable
+        // resume_run_id despite the message implying resumability.
+        await saveState(step - 1);
         const starvationNote = isFinalStep && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
           ? ` This was the final allowed step, which never includes tools -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This usually means the task needed more steps than max_steps (${cappedSteps}) allowed. Retry with a higher max_steps.`
           : "";
-        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask, writtenFiles };
+        return {
+          answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote} ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.`,
+          steps: step - 1,
+          transcript,
+          runId,
+          task: effectiveTask,
+          writtenFiles,
+          failed: true,
+        };
       }
+      await deleteCheckpoint(runId);
       return { answer, steps: step, transcript, runId, task: effectiveTask, writtenFiles };
     }
 
