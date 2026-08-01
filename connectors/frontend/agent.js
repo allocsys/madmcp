@@ -42,7 +42,7 @@ import {
   FRONTEND_MAX_VALIDATE_CALLS,
 } from "../../config.js";
 
-// Same reasoning as connectors/gemini/delegate.js's isTransientGeminiError:
+// Same reasoning as connectors/gemini/agent_delegate.js's isTransientGeminiError:
 // only 429 (rate limit) and 503 (overloaded) are worth resuming past --
 // everything else (bad request, auth, missing key) will reproduce
 // identically on a resume.
@@ -169,13 +169,13 @@ function buildFunctions({ owner, repo, branch, validateCounts, writtenFiles }) {
 
 // Runs the write-capable design agent loop. Returns
 // { answer, steps, transcript, runId, writtenFiles, task, failed? } --
-// same overall shape as connectors/gemini/delegate.js's runInvestigation,
+// same overall shape as connectors/gemini/agent_delegate.js's runInvestigation,
 // so a future MCP-facing tool (step 5) can follow the same
 // resume_run_id/failed-response conventions delegate_agent already uses.
 //
 // On a fresh call, owner/repo/branch/task are required; on a resume
 // (resume_run_id set), they're restored from the checkpoint and any passed
-// values are ignored, matching connectors/gemini/delegate.js's own resume
+// values are ignored, matching connectors/gemini/agent_delegate.js's own resume
 // contract (see its comments for why `task` specifically must never be
 // trusted over the checkpoint's own record of it on a live resume).
 export async function runDesignAgent({ owner, repo, branch, task, max_steps = FRONTEND_DEFAULT_STEPS, resume_run_id }) {
@@ -191,7 +191,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   let effectiveRepo = repo;
   let effectiveBranch = branch;
   let effectiveTask = task;
-  // Stuck-loop detection (mirrors connectors/gemini/delegate.js's fix #4):
+  // Stuck-loop detection (mirrors connectors/gemini/agent_delegate.js's fix #4):
   // repeatCounts tracks how many times each exact (function name + JSON-
   // stringified args) signature has been called THIS RUN, persisted across
   // resumes so a resumed run doesn't forget what it already tried.
@@ -291,7 +291,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   for (let step = startStep; step <= cappedSteps; step++) {
     // Withhold tools on the final step so the model is structurally forced
     // to answer in plain text instead of attempting one more function call
-    // that never gets to run -- same fix connectors/gemini/delegate.js
+    // that never gets to run -- same fix connectors/gemini/agent_delegate.js
     // applies for the identical reason (a text-only reminder alone wasn't
     // reliable enough there either).
     const isFinalStep = step === cappedSteps;
@@ -299,7 +299,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     // ENTIRELY repeat calls means the model is stuck re-trying the same
     // thing rather than making progress -- force a plain-text answer now
     // instead of letting it burn the rest of the step budget the same way.
-    // Mirrors connectors/gemini/delegate.js's fix #4; unlike that file, a
+    // Mirrors connectors/gemini/agent_delegate.js's fix #4; unlike that file, a
     // stuck loop here can't be quietly served from cache indefinitely
     // because write_file is never cache-served (see below) -- it would
     // otherwise keep spending real GitHub API calls, not just wasted model
@@ -391,7 +391,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
 
     let responseParts;
     try {
-      // Parallelized for the same reason as connectors/gemini/delegate.js:
+      // Parallelized for the same reason as connectors/gemini/agent_delegate.js:
       // every call batched into one model turn was decided without seeing
       // any of the others' results, so awaiting them concurrently changes
       // only wall-clock time, not what information was available to what
