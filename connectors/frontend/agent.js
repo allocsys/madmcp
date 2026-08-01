@@ -438,6 +438,15 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         return { name, args, id, resultText, isRepeat, servedFromCache };
       }));
 
+      // Invalidate any cached read_file result for a path this step just wrote to successfully. Without this, a read_file call AFTER a write_file to the same path -- an entirely reasonable thing for the model to do, e.g. to confirm what actually landed -- would be treated as an "exact repeat" of an earlier read_file call on that path (the cache key is just the path, not the content) and served stale PRE-write content instead of what is actually on the branch now. Also clears repeatCounts for that signature, not just the cache entry: otherwise the next read would still be flagged isRepeat (misclassifying a genuinely-necessary re-read as a stuck-loop repeat) even though it is forced to execute for real. A failed write_file (its result starts with "Error:") changed nothing on the branch, so it does NOT invalidate anything.
+      for (const r of results) {
+        if (r.name === "write_file" && !r.resultText.startsWith("Error:") && r.args?.path) {
+          const readSignature = `read_file:${JSON.stringify({ path: r.args.path })}`;
+          resultCache.delete(readSignature);
+          repeatCounts.delete(readSignature);
+        }
+      }
+
       // Stuck-loop tracking: this step counts as "all repeat" only if EVERY call in it was already seen before -- a step that mixes a repeat with a genuinely new call is normal exploration (e.g. re-reading one file while reading a second file for the first time), not a stuck loop.
       const allRepeatsThisStep = results.length > 0 && results.every((r) => r.isRepeat);
       consecutiveAllRepeatSteps = allRepeatsThisStep ? consecutiveAllRepeatSteps + 1 : 0;
