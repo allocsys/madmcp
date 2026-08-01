@@ -79,7 +79,7 @@ export function getRedis() {
 
 // Synchronous, side-effect-free (beyond the one-time lazy init above) check
 // for whether cross-call Redis memory is actually available right now --
-// used by delegate.js to tell a caller UPFRONT that checkpointing/resume
+// used by agent_delegate.js to tell a caller UPFRONT that checkpointing/resume
 // won't work this run (env var missing, or client construction failed),
 // rather than letting them discover it only when a resume_run_id later
 // comes back with no live checkpoint. Does not distinguish "not configured"
