@@ -17,7 +17,7 @@
 //
 // geminiChat, the three tool functions, the checkpoint module, and
 // isRedisConfigured are all mocked -- this is a loop-logic test, not a live
-// Gemini/GitHub/Redis test (same boundary as delegate.js has no dedicated
+// Gemini/GitHub/Redis test (same boundary as agent_delegate.js has no dedicated
 // test of its own; this fills the equivalent gap for the write-capable v2
 // loop specifically because of the #59 history behind it).
 // ---------------------------------------------------------------------------
