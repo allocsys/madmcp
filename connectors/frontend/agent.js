@@ -196,7 +196,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
   // stringified args) signature has been called THIS RUN, persisted across
   // resumes so a resumed run doesn't forget what it already tried.
   // resultCache holds the actual result text per signature -- deliberately
-  // NOT persisted in the checkpoint (same reasoning as delegate.js: keeps
+  // NOT persisted in the checkpoint (same reasoning as agent_delegate.js: keeps
   // checkpoint writes small; a resumed run re-executing one exact-repeat
   // call and re-caching it is a correctness no-op). consecutiveAllRepeatSteps
   // counts how many steps IN A ROW consisted ENTIRELY of repeat calls -- a
@@ -226,9 +226,9 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     // A resume was requested but its checkpoint didn't load (expired past
     // the 1-hour TTL, Redis unavailable, or an invalid/typo'd runId). Same
     // "fail loudly and distinctly" reasoning as connectors/gemini/
-    // delegate.js -- silently falling through to a fresh run here would
+    // agent_delegate.js -- silently falling through to a fresh run here would
     // require owner/repo/branch/task to have been re-supplied anyway (this
-    // loop, unlike delegate.js, has no task-optional fallback path), so
+    // loop, unlike agent_delegate.js, has no task-optional fallback path), so
     // there's no ambiguous case to accommodate -- always an error.
     throw new Error(
       isRedisConfigured()
@@ -395,13 +395,13 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
       // every call batched into one model turn was decided without seeing
       // any of the others' results, so awaiting them concurrently changes
       // only wall-clock time, not what information was available to what
-      // call. Unlike delegate.js's read-only tool set, write_file has a
+      // call. Unlike agent_delegate.js's read-only tool set, write_file has a
       // real side effect (a commit) -- but two write_file calls in the same
       // batched turn would already be targeting different paths in any
       // sane model plan (the model has no way to make a second write
       // depend on the first write's result within the same turn either
       // way), so this doesn't introduce a new ordering hazard beyond what
-      // delegate.js already accepts for its own batched calls.
+      // agent_delegate.js already accepts for its own batched calls.
       // Only read_file and validate are safe to serve from cache on an exact repeat -- both are pure reads with no side effect, so serving a cached result changes nothing about what actually happened. write_file is NEVER cache-served: it has a real side effect (a commit), and silently skipping that on a "repeat" call would let the model believe a write happened when it didn't -- exactly the kind of silent-mismatch bug this whole file's other fixes exist to prevent. An identical write_file call is instead just executed again for real (its repeat count still contributes to stuck-loop detection below, so repeatedly retrying the same failing write still gets caught and stopped -- it just isn't executed from cache while that's happening).
       const CACHEABLE_TOOLS = new Set(["read_file", "validate"]);
 
