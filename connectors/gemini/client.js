@@ -159,12 +159,14 @@ export async function geminiGenerate(prompt, { model = GEMINI_MODEL, maxOutputTo
 export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolConfig, maxOutputTokens } = {}) {
   const body = { contents };
   if (tools) body.tools = tools;
-  // toolConfig is currently only ever passed as
-  // { includeServerSideToolInvocations: true } by research.js, required to
-  // combine the native googleSearch tool with a custom function declaration
-  // in the same call (see research.js's file header for the exact contract
-  // -- confirmed against Google's generateContent tool-combination docs,
-  // 2026-07-27). delegate.js never passes this: it has no built-in tools.
+  // toolConfig is a historical param from when research_delegate.js (then
+  // still under connectors/gemini/) ran a multi-step Gemini loop passing
+  // { includeServerSideToolInvocations: true } to combine the native
+  // googleSearch tool with a custom function declaration in the same call.
+  // That loop was retired 2026-07-27 in favor of a direct Exa /answer call
+  // (see research_delegate.js's header) -- nothing in this codebase passes
+  // toolConfig anymore, but the param is left in place in case a future
+  // caller needs it. agent_delegate.js never passes this: it has no built-in tools.
   if (toolConfig) body.toolConfig = toolConfig;
   if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
 
