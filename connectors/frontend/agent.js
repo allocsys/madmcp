@@ -370,8 +370,10 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
         // why a run stopping here never actually surfaced a usable
         // resume_run_id despite the message implying resumability.
         await saveState(step - 1);
-        const starvationNote = isFinalStep && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
-          ? ` This was the final allowed step, which never includes tools -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This usually means the task needed more steps than max_steps (${cappedSteps}) allowed. Retry with a higher max_steps.`
+        const starvationNote = withholdTools && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+          ? (stuckLoopForce
+              ? ` Tools were withheld this step because the agent appeared stuck repeating the same call(s) for ${consecutiveAllRepeatSteps} consecutive steps, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available.`
+              : ` This was the final allowed step, which never includes tools -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This usually means the task needed more steps than max_steps (${cappedSteps}) allowed. Retry with a higher max_steps.`)
           : "";
         return {
           answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote} ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.`,
