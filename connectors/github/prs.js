@@ -3,7 +3,7 @@
 //
 // NOTE ON TOOL DESCRIPTIONS BELOW: rewritten into tagged DOES:/RULE:/NOTE:
 // format for faster LLM parsing (same convention as github/files.js and
-// frontend/tools.js). Rationale/mechanism detail not needed at
+// frontend/designer_tools.js). Rationale/mechanism detail not needed at
 // call-selection time (how "ready" is implemented, what the commit
 // verification badge means) lives in code comments here instead of in the
 // description strings the calling model reads.
