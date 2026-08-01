@@ -251,6 +251,30 @@ describe("runDesignAgent -- stuck-loop detection (2026-08-01 fix)", () => {
     expect(result.failed).toBeFalsy();
   });
 
+  it("does not serve stale pre-write content when read_file is called again on a path this run just wrote to", async () => {
+    // Step 1: read a.html, getting the original content.
+    readFile.mockResolvedValueOnce({ path: "a.html", content: "<div>original</div>", sha: "sha-A" });
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("read_file", { path: "a.html" }, "call-1"));
+    // Step 2: write new content to a.html.
+    writeFile.mockResolvedValueOnce({ path: "a.html", content: "<div>updated</div>", sha: "sha-B", commitSha: "commit1" });
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("write_file", { path: "a.html", content: "<div>updated</div>", base_sha: "sha-A" }, "call-2"));
+    // Step 3: read a.html AGAIN, same args as step 1 -- must NOT be served
+    // the step-1 cached ("original") result; must re-execute and see the
+    // post-write content.
+    readFile.mockResolvedValueOnce({ path: "a.html", content: "<div>updated</div>", sha: "sha-B" });
+    geminiChat.mockResolvedValueOnce(functionCallCandidate("read_file", { path: "a.html" }, "call-3"));
+    geminiChat.mockResolvedValueOnce(textCandidate("Confirmed the update landed."));
+
+    const result = await runDesignAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "x", max_steps: 4 });
+
+    // Both read_file calls actually executed -- the second was NOT served
+    // from cache despite having identical args to the first.
+    expect(readFile).toHaveBeenCalledTimes(2);
+    expect(result.transcript.some((line) => line.includes("[step 3]") && line.includes("read_file") && line.includes("updated") && !line.includes("served from cache"))).toBe(true);
+    expect(result.transcript.some((line) => line.includes("[step 3]") && line.includes("served from cache"))).toBe(false);
+    expect(result.failed).toBeFalsy();
+  });
+
   it("does not count a step mixing a repeat with a genuinely new call as a stuck-loop step", async () => {
     readFile.mockResolvedValueOnce({ path: "a.html", content: "<div>a</div>", sha: "sha-A" });
     readFile.mockResolvedValueOnce({ path: "b.html", content: "<div>b</div>", sha: "sha-B" });
