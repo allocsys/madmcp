@@ -45,7 +45,7 @@
 import { z } from "zod";
 import { runDesignAgent } from "./agent.js";
 import {
-  DEFAULT_OWNER, FRONTEND_ALLOWED_EXTENSIONS, FRONTEND_V2_DEFAULT_STEPS,
+  DEFAULT_OWNER, FRONTEND_ALLOWED_EXTENSIONS, FRONTEND_DEFAULT_STEPS,
 } from "../../config.js";
 
 export function register(server) {
@@ -53,7 +53,7 @@ export function register(server) {
     "delegate_designer",
     "TRIGGERS: \"build a page\", \"restyle X\", \"make responsive\", \"clean up this CSS\", \"turn mockup into markup\" -- ANY HTML/CSS/SCSS/JSX/TSX/Vue creation or edit, new file or existing.\n" +
     "RULE: ALWAYS prefer this over hand-writing/editing HTML/CSS/JSX yourself, even if you could do it directly -- delegates to a model-driven agent that reads files on demand, edits or creates them, validates syntax, and iterates.\n" +
-    "IS: WRITE TOOL, bounded agentic loop (default " + FRONTEND_V2_DEFAULT_STEPS + " steps) with three tools of its own (read_file/write_file/validate) -- writes to repo in the same call. Returns the agent's own final text summary, not the generated code.\n" +
+    "IS: WRITE TOOL, bounded agentic loop (default " + FRONTEND_DEFAULT_STEPS + " steps) with three tools of its own (read_file/write_file/validate) -- writes to repo in the same call. Returns the agent's own final text summary, not the generated code.\n" +
     "PREREQUISITE: branch != repo's default branch. No branch yet -> call create_branch first.\n" +
     "SCOPE: reads and writes both fenced to " + FRONTEND_ALLOWED_EXTENSIONS.join(", ") + " only, enforced at the tool layer inside the agent's own read_file/write_file (not just prompt instructions). Refuses default-branch writes. No delete.\n" +
     "RESUME: failed/partial run -> response includes resume_run_id -> pass back to continue from last completed step instead of restarting.",
@@ -62,7 +62,7 @@ export function register(server) {
       repo:            z.string().optional().describe("Repository name. Not needed when resuming (resume_run_id carries it)."),
       branch:          z.string().optional().describe("Branch to work on. MUST NOT be the repo's default branch. Not needed when resuming."),
       task:            z.string().optional().describe("What to build or change, described with enough detail for the agent to act without asking anything back -- it can't. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused). Optional ONLY when resume_run_id is given and its checkpoint is still live; required otherwise."),
-      max_steps:       z.number().optional().describe(`Max agent steps before being forced to answer (default ${FRONTEND_V2_DEFAULT_STEPS}, hard cap 20 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done.`),
+      max_steps:       z.number().optional().describe(`Max agent steps before being forced to answer (default ${FRONTEND_DEFAULT_STEPS}, hard cap 20 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done.`),
       resume_run_id:   z.string().optional().describe("A runId returned from a previous failed/partial delegate_designer call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). On a failed/partial run the transcript is always shown regardless of this flag."),
     },
