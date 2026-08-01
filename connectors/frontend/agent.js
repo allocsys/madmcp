@@ -334,17 +334,21 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     const parts = candidate.content?.parts || [];
     const functionCalls = parts.filter((p) => p.functionCall);
 
-    // Guard against the final step: tools were withheld above specifically
-    // so the model can't act here, but Gemini does not always reject an
-    // attempted function call API-side (the MALFORMED_FUNCTION_CALL path
-    // below covers when it does -- sometimes it just returns a function
-    // call anyway despite no tools being declared). Discard it unexecuted
-    // rather than running it, or the "final step never writes" guarantee
-    // this withholding exists for doesn't actually hold.
-    if (isFinalStep && functionCalls.length) {
+    // Guard against a step where tools were withheld (final step OR stuck-
+    // loop force): the model can't legitimately act here, but Gemini does
+    // not always reject an attempted function call API-side (the
+    // MALFORMED_FUNCTION_CALL path below covers when it does -- sometimes
+    // it just returns a function call anyway despite no tools being
+    // declared). Discard it unexecuted rather than running it, or the
+    // "no tools means nothing acts" guarantee this withholding exists for
+    // doesn't actually hold.
+    if (withholdTools && functionCalls.length) {
       await saveState(step - 1);
+      const reason = stuckLoopForce
+        ? `the agent appeared stuck repeating the same call(s) for ${consecutiveAllRepeatSteps} consecutive steps, so tools were withheld to force a plain-text answer instead of continuing to loop`
+        : `the model attempted a function call on the final step, where no tools are available`;
       return {
-        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: the model attempted a function call on the final step, where no tools are available, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
+        answer: `(Run stopped after reaching the step cap of ${cappedSteps}: ${reason}, so it was discarded rather than executed -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
         steps: step - 1,
         transcript,
         runId,
