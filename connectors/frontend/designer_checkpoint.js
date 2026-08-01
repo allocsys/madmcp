@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/agent_checkpoint.js — Redis-backed checkpointing for
-// delegate_designer's agent loop (connectors/frontend/agent.js,
+// connectors/frontend/designer_checkpoint.js — Redis-backed checkpointing for
+// delegate_designer's agent loop (connectors/frontend/designer_delegate.js,
 // issue #61 step 2).
 //
 // SIMPLER THAN connectors/gemini/agent_checkpoint.js'S LIST+META SPLIT, ON
