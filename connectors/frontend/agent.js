@@ -418,13 +418,21 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
     await saveState(step);
   }
 
-  await deleteCheckpoint(runId);
+  // Defensive fallback only -- with the isFinalStep guard above, the loop
+  // should always return from inside its final iteration (either a real
+  // answer, a discarded final-step function call, or a starved no-answer
+  // response), so falling out of the for loop here should no longer be
+  // reachable in normal operation. Kept as a safety net in case future
+  // changes reintroduce a path that falls through, using the same
+  // keep-checkpoint-alive-and-mark-failed resume contract as every other
+  // stopped-without-an-answer path in this file.
   return {
-    answer: `(Run stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}.)`,
+    answer: `(Run stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${FRONTEND_V2_HARD_MAX_STEPS}. ${transcript.length} tool call(s) already completed this run are saved. Call again with resume_run_id: "${runId}" to continue instead of starting over. Checkpoint expires in 1 hour.)`,
     steps: cappedSteps,
     transcript,
     runId,
     task: effectiveTask,
     writtenFiles,
+    failed: true,
   };
 }
