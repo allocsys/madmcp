@@ -803,7 +803,7 @@ const FUNCTION_DECLARATIONS = [{
 // connectors/exa/research_delegate.js, behind the separate delegate_research
 // tool. Keeping the two apart is a security boundary, not just a UX split:
 // this loop reads private GitHub/Notion/Cloudflare/Context7/Mem0 data, and
-// research.js's Exa call reads untrusted public web content -- a single loop
+// research_delegate.js's Exa call reads untrusted public web content -- a single loop
 // with both would let a malicious page or search result Gemini encounters
 // mid-investigation try to talk the model into leaking whatever it just
 // read from those private systems (e.g. via a crafted outbound fetch to an
