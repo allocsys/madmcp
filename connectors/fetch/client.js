@@ -135,7 +135,7 @@ export function pinnedLookup(address) {
 // (undici derives those from the URL, not from this lookup override) — so
 // the connection goes exactly where assertSafeUrl() validated it would.
 export function pinnedDispatcher(address) {
-  return new Agent({ connect: { lookup: pinnedLookup(address) } });
+  return new Agent({ connect: { lookup: pinnedLookup(address) }, allowH2: false });
 }
 
 export async function fetchUrl(url, { method = "GET", headers = {}, body } = {}) {
