@@ -6,7 +6,7 @@ import { z } from "zod";
 import { NOTION_INDEX_DATABASE_ID } from "../../config.js";
 import {
   notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
-  notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, notionBlockPlainText, parseMarkers,
+  notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, entityMarkerBlock, notionBlockPlainText, parseMarkers,
   buildChangelogEntryText, isChangelogEntryText,
   buildRelationBlocks, parseRelationBlocks,
   buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
@@ -14,6 +14,24 @@ import {
 import { findLinkCandidates, extractTags } from "./linking.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
+
+// ---------------------------------------------------------------------------
+// Slug-like-title guard (2026-08-07 bug fix -- workspace audit found 6
+// confirmed empty orphan pages: madmcp-cloudflare-workers-migration-plan,
+// joblead-liliana-model-n8n, jobreq-liliana-model-n8n-detail,
+// candidate-release-plz-release-plz-2130, laborx-scenium-94796,
+// madmcp-generate-lockfile-workflow-recreation-2026-07-26). Root cause: the
+// caller typed the STRING THEY MEANT AS entity_id into `title` instead,
+// leaving entity_id unset (one_off either omitted or set true either way --
+// the existing "entity_id or one_off" guard doesn't catch this shape at
+// all, since one_off:true alone already satisfies it). Every confirmed
+// orphan's title was lowercase, hyphen-separated, no spaces -- i.e. it was
+// literally an entity_id, just in the wrong field. This regex mirrors that
+// shape: 2+ lowercase/digit/hyphen segments, hyphen-joined, nothing else.
+// Deliberately requires 2+ hyphens (not 1) so ordinary short hyphenated
+// titles a human might actually type ("follow-up", "day-1") don't trip it --
+// every real orphan had 3+ segments.
+const SLUG_LIKE_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+){2,}$/;
 
 // ---------------------------------------------------------------------------
 // Dedup/upsert lookup (2026-07-17, gap #1; database rewrite 2026-07-24 --
@@ -127,6 +145,12 @@ export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
 export async function doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create_page's entity_id and one_off param descriptions.`);
+  }
+  // See SLUG_LIKE_TITLE comment above -- this fires regardless of one_off,
+  // since the observed bug happened with one_off both set and unset. A
+  // title this shaped is almost never a real human-readable title.
+  if (!entity_id && SLUG_LIKE_TITLE.test(title)) {
+    throw new Error(`Refusing to create a page titled "${title}" -- this looks like an entity_id (lowercase, hyphen-separated, no spaces), not a human-readable title, and entity_id is unset. This is almost always a mistake: pass this exact string as entity_id instead, and give "title" an actual readable name (e.g. title: "Cloudflare Workers migration plan", entity_id: "${title}"). If "${title}" is genuinely, deliberately meant to be the literal page title, pass entity_id explicitly (it can be any string, including this same one) to confirm that's intentional -- entity_id is still required or one_off must be true per the check above.`);
   }
   if (entity_id) {
     const existing = await findPageByEntityId(entity_id);
@@ -323,7 +347,7 @@ async function appendChangelogEntry(page_id, summary) {
 // unsupported block type) -- the single-item tool catches this to preserve
 // its existing isError response shape; the batch tool lets Promise.allSettled
 // catch it per item, same pattern as mem/tools.js.
-export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations, properties }) {
+export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties }) {
   const results = [];
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
@@ -380,6 +404,38 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
       await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: [statusMarkerBlock(status)] } });
       results.push(`Status marker added: "${status}" (page had none before).`);
     }
+  }
+  // entity_id (bug fix 2026-08-07, see doCreatePage/findPageByEntityId --
+  // this is the missing counterpart to that: a supported way to CORRECT an
+  // entity_id after creation that keeps the marker block and the Entity
+  // Index database in sync, instead of a caller hand-editing the marker via
+  // `replacements` and silently leaving the index stale/pointing nowhere.
+  // Same marker-block-in-place pattern as `status` above.
+  if (entity_id !== undefined) {
+    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
+    const markers = parseMarkers(blocksData.results || []);
+    const previousEntityId = markers.entity_id;
+    if (markers.entityBlockId) {
+      await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: { paragraph: entityMarkerBlock(entity_id).paragraph } });
+    } else {
+      await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: [entityMarkerBlock(entity_id)] } });
+    }
+    // Re-fetch the page for its (stable) url -- appendIndexEntry needs it
+    // and none of the branches above are guaranteed to have fetched it.
+    const page = await notionRequest(`/pages/${page_id}`);
+    const indexError = await appendIndexEntry({ entity_id, page_id, url: page.url, tags: [] });
+    // NOTE: this does not delete/update the OLD entity_id's index row (if
+    // any) -- best-effort, same tradeoff appendIndexEntry's own callers
+    // already accept elsewhere in this file. The old row still resolves
+    // lookups made against the old (now-wrong) entity_id to this page,
+    // which is stale but not actively harmful; the bug this fixes is
+    // specifically that lookups against the CORRECTED entity_id were
+    // failing, and those now succeed immediately since appendIndexEntry
+    // writes synchronously before this call returns.
+    results.push(
+      `Entity ID updated to "${entity_id}"${previousEntityId ? ` (was "${previousEntityId}")` : " (page had none before)"}.` +
+      (indexError ? ` \u26a0\ufe0f index write failed: ${indexError} -- relation lookups against "${entity_id}" may still report dangling until this is retried.` : "")
+    );
   }
   // relations REPLACES the existing set whole (not merged), same contract as
   // mem0_update's relations param. Requires reading current blocks to find
@@ -755,15 +811,16 @@ export function register(server) {
         replace: z.string().describe("New plain text for that block"),
       })).optional().describe("List of find-and-replace operations for targeted in-place block edits, instead of appending new content. Each `find` must match exactly one of the page's top-level blocks (first 100) by plain text -- fails loudly (no changes made) on zero or multiple matches, same uniqueness rule as mem0_update's replacements and the github edit_file tool's `replacements` mode. Only text-style blocks can be edited this way (paragraph/heading/list-item/to-do); code blocks, subpages, etc. are not supported and will report an error instead of being silently skipped."),
       status:         z.enum(STATUS_VALUES).optional().describe("Set this page's lifecycle status (open/resolved/superseded). Updates the existing '🏷️ status: ...' marker block in place if one exists, or appends a new marker block if the page has none yet."),
+      entity_id:      z.string().optional().describe("Correct or set this page's entity_id marker. Use this (not `replacements` on the marker text) whenever an entity_id was wrong or missing -- this updates the visible '🔑 entity_id: ...' marker block in place AND upserts the Entity Index database entry that notion_create_page's dedup check and notion_get_page's relation resolution both read from. Editing the marker text directly via `replacements` only changes what's visible on the page; it does NOT update the index, so other pages' relations pointing at the corrected entity_id will keep resolving as 'dangling' until this param is used instead."),
       relations:      z.array(z.object({
         to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
         relation:     z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' -- free text"),
       })).optional().describe("New outgoing relations for this page -- REPLACES the existing relation set whole (not merged). Omit to leave relations unchanged. Pass an empty array to clear all relations."),
       properties:     z.record(z.any()).optional().describe("Database property VALUES to set/update on this page (only meaningful if the page is a row in a database). Keys are property names exactly as they appear in the database schema; values must be in Notion's property-value format, e.g. { \"Status\": { \"select\": { \"name\": \"resolved\" } } }. Merged with any title change into a single PATCH. Call notion_get_database first to see available property names and types."),
     },
-    async ({ page_id, title, append_content, archived, replacements, status, relations, properties }) => {
+    async ({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties }) => {
       try {
-        const results = await doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations, properties });
+        const results = await doUpdatePage({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties });
         return { content: [{ type: "text", text: results.join("\n") || "No changes made." }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
@@ -832,6 +889,7 @@ export function register(server) {
           replace: z.string().describe("New plain text for that block"),
         })).optional().describe("Targeted find/replace edits for this page -- see notion_update_page for matching rules."),
         status:         z.enum(STATUS_VALUES).optional().describe("Set this page's lifecycle status -- see notion_update_page."),
+        entity_id:      z.string().optional().describe("Correct or set this page's entity_id marker, reindexing it in the Entity Index database -- see notion_update_page."),
         relations:      z.array(z.object({
           to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
           relation:     z.string().describe("The relation type -- see notion_update_page"),
