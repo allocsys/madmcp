@@ -347,7 +347,7 @@ async function appendChangelogEntry(page_id, summary) {
 // unsupported block type) -- the single-item tool catches this to preserve
 // its existing isError response shape; the batch tool lets Promise.allSettled
 // catch it per item, same pattern as mem/tools.js.
-export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations, properties }) {
+export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties }) {
   const results = [];
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
