@@ -35,6 +35,10 @@ None of these providers support auto-injecting the key back into our env — you
 ### Context7 — `CONTEXT7_API_KEY` (optional)
 Works unauthenticated at low rate limits — only provision this if you're hitting limits.
 
+### Jules — `JULES_API_KEY`
+[![Create Jules API Key](https://img.shields.io/badge/Create-Jules_API_Key-4285F4?style=for-the-badge&logo=googlegemini)](https://jules.google.com/settings#api)
+> Unlike Context7, there's no unauthenticated tier — required for any `jules_*` tool to work. Max 3 keys per account. Alpha API per Google's own docs, so endpoint shapes may change without notice.
+
 ### Upstash Redis / Vercel KV — `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) (optional)
 [![Create Upstash Redis](https://img.shields.io/badge/Create-Upstash_Redis-00E9A3?style=for-the-badge)](https://console.upstash.com/redis)
 > Optional — persists Gemini's per-model rate-limit cooldowns and `delegate_agent` resume checkpoints across calls. Fails open (no cross-call memory, but nothing breaks) if unset. On Vercel, easier to add via **Storage → Create Database → Upstash for Redis** (Marketplace integration) instead of the link above — either path works, just note which var names your integration hands you (the two naming pairs above are interchangeable, `connectors/gemini/cooldown.js` accepts either).
