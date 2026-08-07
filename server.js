@@ -22,7 +22,6 @@ import * as agent      from "./connectors/gemini/agent_tools.js";
 import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
-import * as progressTest from "./connectors/test/progress_tools.js";
 
 // Build the MCP server once at startup and reuse it across all requests.
 const mcpServer = new McpServer({
@@ -41,7 +40,6 @@ agent.register(mcpServer);
 research.register(mcpServer);
 frontend.register(mcpServer);
 sync.register(mcpServer);
-progressTest.register(mcpServer); // diagnostic only — safe to remove, see connectors/test/progress_tools.js
 
 // Adding a new connector:
 //   import * as myThing from "./connectors/myThing/tools.js";
