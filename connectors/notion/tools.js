@@ -16,6 +16,24 @@ import { findLinkCandidates, extractTags } from "./linking.js";
 const STATUS_VALUES = ["open", "resolved", "superseded"];
 
 // ---------------------------------------------------------------------------
+// Slug-like-title guard (2026-08-07 bug fix -- workspace audit found 6
+// confirmed empty orphan pages: madmcp-cloudflare-workers-migration-plan,
+// joblead-liliana-model-n8n, jobreq-liliana-model-n8n-detail,
+// candidate-release-plz-release-plz-2130, laborx-scenium-94796,
+// madmcp-generate-lockfile-workflow-recreation-2026-07-26). Root cause: the
+// caller typed the STRING THEY MEANT AS entity_id into `title` instead,
+// leaving entity_id unset (one_off either omitted or set true either way --
+// the existing "entity_id or one_off" guard doesn't catch this shape at
+// all, since one_off:true alone already satisfies it). Every confirmed
+// orphan's title was lowercase, hyphen-separated, no spaces -- i.e. it was
+// literally an entity_id, just in the wrong field. This regex mirrors that
+// shape: 2+ lowercase/digit/hyphen segments, hyphen-joined, nothing else.
+// Deliberately requires 2+ hyphens (not 1) so ordinary short hyphenated
+// titles a human might actually type ("follow-up", "day-1") don't trip it --
+// every real orphan had 3+ segments.
+const SLUG_LIKE_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+){2,}$/;
+
+// ---------------------------------------------------------------------------
 // Dedup/upsert lookup (2026-07-17, gap #1; database rewrite 2026-07-24 --
 // see mem0 entity_id: madmcp-notion-connector-gaps-roadmap).
 //
@@ -127,6 +145,12 @@ export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
 export async function doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create_page's entity_id and one_off param descriptions.`);
+  }
+  // See SLUG_LIKE_TITLE comment above -- this fires regardless of one_off,
+  // since the observed bug happened with one_off both set and unset. A
+  // title this shaped is almost never a real human-readable title.
+  if (!entity_id && SLUG_LIKE_TITLE.test(title)) {
+    throw new Error(`Refusing to create a page titled "${title}" -- this looks like an entity_id (lowercase, hyphen-separated, no spaces), not a human-readable title, and entity_id is unset. This is almost always a mistake: pass this exact string as entity_id instead, and give "title" an actual readable name (e.g. title: "Cloudflare Workers migration plan", entity_id: "${title}"). If "${title}" is genuinely, deliberately meant to be the literal page title, pass entity_id explicitly (it can be any string, including this same one) to confirm that's intentional -- entity_id is still required or one_off must be true per the check above.`);
   }
   if (entity_id) {
     const existing = await findPageByEntityId(entity_id);
