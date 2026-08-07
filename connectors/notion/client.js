@@ -159,6 +159,22 @@ export function statusMarkerBlock(status) {
   };
 }
 
+// Same pattern as statusMarkerBlock -- lets a caller PATCH the entity_id
+// marker block in place (notion_update_page's new entity_id param, bug fix
+// 2026-08-07: see notion_create_page's findPageByEntityId comment). Needed
+// so that correcting an entity_id post-creation goes through the SAME
+// marker-block text this file's own parseMarkers reads, instead of a caller
+// hand-building the marker text via generic `replacements` (which edits the
+// visible block but has no way to also touch the dedup index -- that
+// disconnect was the root cause of relation targets resolving as "dangling"
+// even after the visible marker was corrected).
+export function entityMarkerBlock(entity_id) {
+  return {
+    object: "block", type: "paragraph",
+    paragraph: { rich_text: [{ type: "text", text: { content: `${ENTITY_MARKER_PREFIX} ${entity_id}` } }] },
+  };
+}
+
 // Generic plain-text extractor for any block type -- used by both marker
 // parsing below and the replacements find/replace matching in
 // notion_update_page, so all three features see block text consistently.
