@@ -811,15 +811,16 @@ export function register(server) {
         replace: z.string().describe("New plain text for that block"),
       })).optional().describe("List of find-and-replace operations for targeted in-place block edits, instead of appending new content. Each `find` must match exactly one of the page's top-level blocks (first 100) by plain text -- fails loudly (no changes made) on zero or multiple matches, same uniqueness rule as mem0_update's replacements and the github edit_file tool's `replacements` mode. Only text-style blocks can be edited this way (paragraph/heading/list-item/to-do); code blocks, subpages, etc. are not supported and will report an error instead of being silently skipped."),
       status:         z.enum(STATUS_VALUES).optional().describe("Set this page's lifecycle status (open/resolved/superseded). Updates the existing '🏷️ status: ...' marker block in place if one exists, or appends a new marker block if the page has none yet."),
+      entity_id:      z.string().optional().describe("Correct or set this page's entity_id marker. Use this (not `replacements` on the marker text) whenever an entity_id was wrong or missing -- this updates the visible '🔑 entity_id: ...' marker block in place AND upserts the Entity Index database entry that notion_create_page's dedup check and notion_get_page's relation resolution both read from. Editing the marker text directly via `replacements` only changes what's visible on the page; it does NOT update the index, so other pages' relations pointing at the corrected entity_id will keep resolving as 'dangling' until this param is used instead."),
       relations:      z.array(z.object({
         to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
         relation:     z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' -- free text"),
       })).optional().describe("New outgoing relations for this page -- REPLACES the existing relation set whole (not merged). Omit to leave relations unchanged. Pass an empty array to clear all relations."),
       properties:     z.record(z.any()).optional().describe("Database property VALUES to set/update on this page (only meaningful if the page is a row in a database). Keys are property names exactly as they appear in the database schema; values must be in Notion's property-value format, e.g. { \"Status\": { \"select\": { \"name\": \"resolved\" } } }. Merged with any title change into a single PATCH. Call notion_get_database first to see available property names and types."),
     },
-    async ({ page_id, title, append_content, archived, replacements, status, relations, properties }) => {
+    async ({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties }) => {
       try {
-        const results = await doUpdatePage({ page_id, title, append_content, archived, replacements, status, relations, properties });
+        const results = await doUpdatePage({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties });
         return { content: [{ type: "text", text: results.join("\n") || "No changes made." }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
