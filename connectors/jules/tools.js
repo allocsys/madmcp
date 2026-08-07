@@ -60,11 +60,17 @@ export function register(server) {
       require_plan_approval: z.boolean().optional().describe("If true, the session pauses in AWAITING_PLAN_APPROVAL until a plan is explicitly approved. Default false (plans auto-approve) — set true only for a supervised, non-fire-and-forget run."),
     },
     async ({ source, prompt, title, starting_branch, automation_mode, require_plan_approval }) => {
+      // Jules's API rejects sessions.create with a 400 if sourceContext.githubRepoContext
+      // is omitted entirely -- despite the docs' own type reference listing it as
+      // optional, every real request sample (quickstart, sources, sessions pages)
+      // always includes it. Always send it; when no starting_branch is given, send
+      // an empty object so Jules falls back to the repo's own default branch rather
+      // than us needing to look that branch up ourselves via jules_list_sources.
       const body = {
         prompt,
         sourceContext: {
           source,
-          githubRepoContext: starting_branch ? { startingBranch: starting_branch } : undefined,
+          githubRepoContext: starting_branch ? { startingBranch: starting_branch } : {},
         },
         automationMode: automation_mode || "AUTO_CREATE_PR",
       };
