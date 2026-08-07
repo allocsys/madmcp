@@ -78,6 +78,7 @@ Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-
 [![Notion Integration](https://img.shields.io/badge/Notion-Integration-000000?style=flat-square&logo=notion)](https://www.notion.so/my-integrations)
 [![Mem0 Key](https://img.shields.io/badge/Mem0-API_Key-6E56CF?style=flat-square)](https://app.mem0.ai/dashboard/api-keys)
 [![Gemini Key](https://img.shields.io/badge/Gemini-API_Key-4285F4?style=flat-square&logo=googlegemini)](https://aistudio.google.com/apikey)
+[![Jules Key](https://img.shields.io/badge/Jules-API_Key-4285F4?style=flat-square&logo=googlegemini)](https://jules.google.com/settings#api)
 [![Exa Key](https://img.shields.io/badge/Exa-API_Key-000000?style=flat-square)](https://dashboard.exa.ai/api-keys)
 [![OpenRouter Key](https://img.shields.io/badge/OpenRouter-API_Key-6467F2?style=flat-square)](https://openrouter.ai/keys)
 [![Upstash Redis](https://img.shields.io/badge/Upstash-Redis-00E9A3?style=flat-square)](https://console.upstash.com/redis)
@@ -137,6 +138,7 @@ blocking the rest.
 | Notion | notion.so/my-integrations → create an integration, then share the relevant pages/databases with it |
 | Mem0 | app.mem0.ai → API keys |
 | Cloudflare | dash.cloudflare.com → My Profile → API Tokens, plus your Account ID from the dashboard sidebar |
+| Jules | jules.google.com/settings#api → API key (max 3 per account, no unauthenticated tier) |
 
 **3. Set two security env vars — don't skip these.**
 - `MCP_SHARED_KEY` — any long random string. Unset = `/mcp` is open to
@@ -343,8 +345,9 @@ npm test
 ```
 
 Runs the unit tests (vitest) covering the IP-allowlist/auth helpers
-(`connectors/security.js`) and the GitHub client's retry/backoff logic
-(`connectors/github/client.js`). CI (`.github/workflows/ci.yml`) runs these
+(`connectors/security.js`), the GitHub client's retry/backoff logic
+(`connectors/github/client.js`), and the Jules client/tools
+(`connectors/jules/`). CI (`.github/workflows/ci.yml`) runs these
 same tests on every push and PR, plus a syntax check and a boot/`GET /health`
 smoke test, as a merge gate — it does not deploy; Render and Vercel already
 auto-deploy on push via their own GitHub integrations.
