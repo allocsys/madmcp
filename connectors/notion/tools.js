@@ -416,7 +416,7 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     const markers = parseMarkers(blocksData.results || []);
     const previousEntityId = markers.entity_id;
     if (markers.entityBlockId) {
-      await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: entityMarkerBlock(entity_id).paragraph ? { paragraph: entityMarkerBlock(entity_id).paragraph } : {} });
+      await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: { paragraph: entityMarkerBlock(entity_id).paragraph } });
     } else {
       await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: [entityMarkerBlock(entity_id)] } });
     }
