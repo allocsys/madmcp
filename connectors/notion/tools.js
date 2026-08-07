@@ -405,6 +405,38 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
       results.push(`Status marker added: "${status}" (page had none before).`);
     }
   }
+  // entity_id (bug fix 2026-08-07, see doCreatePage/findPageByEntityId --
+  // this is the missing counterpart to that: a supported way to CORRECT an
+  // entity_id after creation that keeps the marker block and the Entity
+  // Index database in sync, instead of a caller hand-editing the marker via
+  // `replacements` and silently leaving the index stale/pointing nowhere.
+  // Same marker-block-in-place pattern as `status` above.
+  if (entity_id !== undefined) {
+    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
+    const markers = parseMarkers(blocksData.results || []);
+    const previousEntityId = markers.entity_id;
+    if (markers.entityBlockId) {
+      await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: entityMarkerBlock(entity_id).paragraph ? { paragraph: entityMarkerBlock(entity_id).paragraph } : {} });
+    } else {
+      await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: [entityMarkerBlock(entity_id)] } });
+    }
+    // Re-fetch the page for its (stable) url -- appendIndexEntry needs it
+    // and none of the branches above are guaranteed to have fetched it.
+    const page = await notionRequest(`/pages/${page_id}`);
+    const indexError = await appendIndexEntry({ entity_id, page_id, url: page.url, tags: [] });
+    // NOTE: this does not delete/update the OLD entity_id's index row (if
+    // any) -- best-effort, same tradeoff appendIndexEntry's own callers
+    // already accept elsewhere in this file. The old row still resolves
+    // lookups made against the old (now-wrong) entity_id to this page,
+    // which is stale but not actively harmful; the bug this fixes is
+    // specifically that lookups against the CORRECTED entity_id were
+    // failing, and those now succeed immediately since appendIndexEntry
+    // writes synchronously before this call returns.
+    results.push(
+      `Entity ID updated to "${entity_id}"${previousEntityId ? ` (was "${previousEntityId}")` : " (page had none before)"}.` +
+      (indexError ? ` \u26a0\ufe0f index write failed: ${indexError} -- relation lookups against "${entity_id}" may still report dangling until this is retried.` : "")
+    );
+  }
   // relations REPLACES the existing set whole (not merged), same contract as
   // mem0_update's relations param. Requires reading current blocks to find
   // the existing relation blocks to remove -- reuses blocksData if a
