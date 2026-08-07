@@ -1,0 +1,528 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for app/connectors/cloudflare/observability.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../../prettify.css" />
+    <link rel="stylesheet" href="../../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../../index.html">All files</a> / <a href="index.html">app/connectors/cloudflare</a> observability.js</h1>
+        <div class='clearfix'>
+
+            <div class='fl pad1y space-right2'>
+                <span class="strong">14.28% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>4/28</span>
+            </div>
+
+
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>0/26</span>
+            </div>
+
+
+            <div class='fl pad1y space-right2'>
+                <span class="strong">11.11% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>1/9</span>
+            </div>
+
+
+            <div class='fl pad1y space-right2'>
+                <span class="strong">17.39% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>4/23</span>
+            </div>
+
+
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line low'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// ---------------------------------------------------------------------------
+// connectors/cloudflare/observability.js — Workers Logs / Traces / Events
+// Wraps the Workers Observability "telemetry" API. This single dataset holds
+// invocation logs, custom logs, traces, and the raw event stream — the same
+// data backing the Observability dashboard's Overview/Invocations/Events tabs
+// and the Query Builder.
+//
+// Docs: https://developers.cloudflare.com/workers/observability/query-builder/
+// API:  POST /accounts/{account_id}/workers/observability/telemetry/{query,keys,values}
+//
+// NOT included: real-time `wrangler tail` streaming — that's a websocket
+// session, not a request/response REST call, so it doesn't fit this tool
+// model. Logpush (export to R2/S3/etc.) is also out of scope here since it's
+// a push-configuration resource rather than a query.
+// ---------------------------------------------------------------------------
+&nbsp;
+import { z } from "zod";
+import { cfAccountRequest } from "./client.js";
+&nbsp;
+function <span class="fstat-no" title="function not covered" >textResult(</span>data) {
+<span class="cstat-no" title="statement not covered" >  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };</span>
+}
+&nbsp;
+// Cloudflare's telemetry query/values endpoints require timeframe bounds as
+// epoch millis (numbers), not ISO strings — accept either from callers and
+// normalize here.
+export function <span class="fstat-no" title="function not covered" >toEpochMillis(</span>ts) {
+<span class="cstat-no" title="statement not covered" >  if (typeof ts === "number") <span class="cstat-no" title="statement not covered" >return ts;</span></span>
+<span class="cstat-no" title="statement not covered" >  if (/^\d+$/.test(ts)) <span class="cstat-no" title="statement not covered" >return Number(ts);</span></span>
+  const parsed = <span class="cstat-no" title="statement not covered" >Date.parse(ts);</span>
+<span class="cstat-no" title="statement not covered" >  if (Number.isNaN(parsed)) <span class="cstat-no" title="statement not covered" >throw new Error(`Invalid timeframe value: ${ts}`);</span></span>
+<span class="cstat-no" title="statement not covered" >  return parsed;</span>
+}
+&nbsp;
+// The telemetry query API's `parameters.filters` entries are a discriminated
+// union of either a "group" node ({kind:"group", filterCombination, filters})
+// or a leaf filter node. A leaf node requires `operation` (not `operator`)
+// and a `type` describing the value's type — both were previously missing,
+// which caused every query with any filter (including the script_name
+// convenience filter) to fail Cloudflare's schema validation with a 400.
+function <span class="fstat-no" title="function not covered" >inferValueType(</span>value) {
+<span class="cstat-no" title="statement not covered" >  if (typeof value === "boolean") <span class="cstat-no" title="statement not covered" >return "boolean";</span></span>
+<span class="cstat-no" title="statement not covered" >  if (typeof value === "number") <span class="cstat-no" title="statement not covered" >return "number";</span></span>
+<span class="cstat-no" title="statement not covered" >  return "string";</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >normalizeFilter(</span>f) {
+  // Accept both the tool's public `operator` param name and, defensively,
+  // an already-correct `operation` field if a caller supplies one directly.
+  const operation = <span class="cstat-no" title="statement not covered" >f.operation || f.operator;</span>
+  const type = <span class="cstat-no" title="statement not covered" >f.type || inferValueType(f.value);</span>
+<span class="cstat-no" title="statement not covered" >  return { key: f.key, operation, type, value: f.value };</span>
+}
+&nbsp;
+const filterSchema = z.object({
+  key: z.string().describe("Field to filter on, e.g. '$workers.event.response.status' or '$metadata.service'. Use cf_workers_observability_keys to discover valid keys."),
+  operator: z.string().describe("Comparison operator, e.g. 'eq', 'neq', 'gt', 'lt', 'includes'"),
+  value: z.union([z.string(), z.number(), z.boolean()]).describe("Value to compare against"),
+}).passthrough();
+&nbsp;
+// Shared query function — used directly by cf_workers_observability_query
+// and reused by cf_workers_observability_compare so both tools stay in sync
+// on filter-normalization and timeframe handling.
+export async function <span class="fstat-no" title="function not covered" >queryTelemetry(</span>{
+  timeframe_from,
+  timeframe_to,
+  script_name,
+  view = <span class="branch-0 cbranch-no" title="branch not covered" >"events",</span>
+  dataset = <span class="branch-0 cbranch-no" title="branch not covered" >"cloudflare-workers",</span>
+  filters = <span class="branch-0 cbranch-no" title="branch not covered" >[],</span>
+  limit,
+  query_id,
+}) {
+  const rawFilters = <span class="cstat-no" title="statement not covered" >script_name</span>
+    ? [{ key: "$metadata.service", operator: "eq", value: script_name }, ...filters]
+    : filters;
+&nbsp;
+  const allFilters = <span class="cstat-no" title="statement not covered" >rawFilters.map(normalizeFilter);</span>
+&nbsp;
+  const body = <span class="cstat-no" title="statement not covered" >{</span>
+    queryId: query_id || `madmcp-${Date.now()}`,
+    view,
+    datasets: [dataset],
+    timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },
+    parameters: { filters: allFilters },
+    ...(limit ? { limit } : {}),
+  };
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  return cfAccountRequest("/workers/observability/telemetry/query", { method: "POST", body });</span>
+}
+&nbsp;
+export function register(server) {
+  server.tool(
+    "cf_workers_observability_keys",
+    "DOES: List all keys available in Workers Observability telemetry (logs/traces/events) -- what fields you can filter/group by.\n" +
+    "RULE: call this before cf_workers_observability_query if you don't already know the field names to filter on.",
+    {
+      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
+      timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis"),
+      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
+    },
+<span class="fstat-no" title="function not covered" >    async </span>({ dataset = <span class="branch-0 cbranch-no" title="branch not covered" >"cloudflare-workers",</span> timeframe_from, timeframe_to }) =&gt;
+<span class="cstat-no" title="statement not covered" >      textResult(await cfAccountRequest("/workers/observability/telemetry/keys", {</span>
+        method: "POST",
+        body: { dataset, timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) } },
+      }))
+  );
+&nbsp;
+  server.tool(
+    "cf_workers_observability_values",
+    "DOES: List unique values seen for a given telemetry key in range (e.g. all distinct $workers.event.response.status values) -- for building filters.",
+    {
+      key: z.string().describe("The telemetry key to list values for, e.g. '$workers.event.response.status'"),
+      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
+      timeframe_from: z.string().describe("Start of time range, ISO 8601 or epoch millis"),
+      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
+      type: z.enum(["string", "boolean", "number"]).optional().describe("The value type of the key being listed (required by the Cloudflare API). Default: 'string'."),
+    },
+<span class="fstat-no" title="function not covered" >    async </span>({ key, dataset = <span class="branch-0 cbranch-no" title="branch not covered" >"cloudflare-workers",</span> timeframe_from, timeframe_to, type = <span class="branch-0 cbranch-no" title="branch not covered" >"string" </span>}) =&gt;
+<span class="cstat-no" title="statement not covered" >      textResult(await cfAccountRequest("/workers/observability/telemetry/values", {</span>
+        method: "POST",
+        body: {
+          datasets: [dataset],
+          key,
+          type,
+          timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },
+        },
+      }))
+  );
+&nbsp;
+  server.tool(
+    "cf_workers_observability_query",
+    "DOES: Query Workers logs/traces/events (invocation logs, console.log output, exceptions, request/response metadata, trace spans) -- same data as the Observability dashboard's Overview/Invocations/Events tabs.\n" +
+    "RULE: comparing two scripts over the same timeframe -&gt; use cf_workers_observability_compare instead (normalizes rates, not raw counts).\n" +
+    "RULE: don't know filterable field names -&gt; cf_workers_observability_keys first.",
+    {
+      timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis"),
+      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
+      script_name: z.string().optional().describe("Convenience filter: scope results to one Worker script. Adds a filter on '$metadata.service' — if that key doesn't match your account's schema, use the 'filters' param directly instead (check cf_workers_observability_keys)."),
+      view: z.string().optional().describe("Result grouping mode, e.g. 'events' (raw event stream) or 'invocations' (grouped by invocation). Default: 'events'."),
+      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
+      filters: z.array(filterSchema).optional().describe("Additional structured filters, e.g. [{key: '$workers.event.response.status', operator: 'gt', value: 500}]"),
+      limit: z.number().optional().describe("Max number of results (default: server default, typically 100)"),
+      query_id: z.string().optional().describe("Optional query identifier for the request (any string); Cloudflare uses this to tag/save the query"),
+    },
+<span class="fstat-no" title="function not covered" >    async </span>(args) =&gt; <span class="cstat-no" title="statement not covered" >textResult(await queryTelemetry(args))</span>
+  );
+}
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-08-07T17:58:05.095Z
+            </div>
+        <script src="../../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../../sorter.js"></script>
+        <script src="../../../block-navigation.js"></script>
+    </body>
+</html>
