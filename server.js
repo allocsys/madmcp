@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY } from "./config.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
@@ -22,6 +22,7 @@ import * as agent      from "./connectors/gemini/agent_tools.js";
 import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
+import * as jules      from "./connectors/jules/tools.js";
 
 // Build the MCP server once at startup and reuse it across all requests.
 const mcpServer = new McpServer({
@@ -40,6 +41,7 @@ agent.register(mcpServer);
 research.register(mcpServer);
 frontend.register(mcpServer);
 sync.register(mcpServer);
+jules.register(mcpServer);
 
 // Adding a new connector:
 //   import * as myThing from "./connectors/myThing/tools.js";
@@ -130,6 +132,7 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       context7: true, // works unauthenticated at lower rate limits, so always "configured"
       gemini: Boolean(GEMINI_API_KEY),
       frontend: Boolean(GEMINI_API_KEY), // delegate_designer's agent loop runs on the Gemini connector -- no separate frontend provider config anymore
+      jules:  Boolean(JULES_API_KEY),
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });
@@ -167,6 +170,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
     if (!CLOUDFLARE_API_TOKEN || !CLOUDFLARE_ACCOUNT_ID) console.warn("WARNING: CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID not set. Cloudflare tools will fail.");
     if (!CONTEXT7_API_KEY) console.warn("NOTE: CONTEXT7_API_KEY is not set. Context7 tools will work but at lower, unauthenticated rate limits.");
     if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEY is not set. delegate_agent will fail entirely, and delegate_research's precision mode (url+question) will fail (wide mode is Exa-backed and unaffected).");
+    if (!JULES_API_KEY) console.warn("WARNING: JULES_API_KEY is not set. jules_* tools will fail.");
     if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp, /mcp/:key, and / endpoints are OPEN to anyone who has the URL.");
     if (!GITHUB_APP_ID || !GITHUB_APP_INSTALLATION_ID || !GITHUB_APP_PRIVATE_KEY) console.warn("NOTE: GITHUB_APP_ID/GITHUB_APP_INSTALLATION_ID/GITHUB_APP_PRIVATE_KEY not fully set. get_repo_clone_token (private-repo sandbox clone) will fail until the GitHub App is configured.");
     console.log(`IP allowlist: ${IP_ALLOWLIST_ENABLED ? `ENABLED (${ALLOWED_IP_RANGES.join(", ")})` : "DISABLED"}`);

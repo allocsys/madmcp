@@ -261,6 +261,13 @@ export const GITHUB_APP_PRIVATE_KEY     = process.env.GITHUB_APP_PRIVATE_KEY;
 // getting cut off mid-transfer.
 export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS) || 30;
 
+// Jules (Google's async coding agent) REST API. Alpha API -- no
+// unauthenticated tier, unlike Context7 above; JULES_API_KEY is required
+// for any jules_* tool to work. Get a key from the Jules web app's Settings
+// page (https://jules.google.com/settings#api), max 3 keys per account.
+export const JULES_API_KEY = process.env.JULES_API_KEY;
+export const JULES_API     = "https://jules.googleapis.com/v1alpha";
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 // IP allowlist for /mcp, /mcp/:key, and /. Restricts inbound requests to

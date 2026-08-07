@@ -2,12 +2,12 @@
 
 # 🔌 madmcp
 
-**An MCP server built around Gemini-powered delegation — hand Claude an open-ended, multi-step investigation instead of chaining 5-10 manual tool calls — plus direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, and the web. Reflexive by construction: a connected agent has write access to this very repo, so it can read its own source, diagnose a gap, and patch it through the same connection.**
+**An MCP server built around Gemini-powered delegation — hand Claude an open-ended, multi-step investigation instead of chaining 5-10 manual tool calls — plus direct tool access to GitHub, Cloudflare, Notion, Mem0, Context7, Jules, and the web. Reflexive by construction: a connected agent has write access to this very repo, so it can read its own source, diagnose a gap, and patch it through the same connection.**
 
 [![CI](https://github.com/allocsys/madmcp/actions/workflows/ci.yml/badge.svg)](https://github.com/allocsys/madmcp/actions/workflows/ci.yml)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-E8A33D?style=flat-square)](https://modelcontextprotocol.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-6FBF8B?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![Connectors](https://img.shields.io/badge/connectors-GitHub%20%C2%B7%20Cloudflare%20%C2%B7%20Notion%20%C2%B7%20Mem0%20%C2%B7%20Context7%20%C2%B7%20Gemini%20%C2%B7%20Fetch-7CA6D6?style=flat-square)](#connectors--tools)
+[![Connectors](https://img.shields.io/badge/connectors-GitHub%20%C2%B7%20Cloudflare%20%C2%B7%20Notion%20%C2%B7%20Mem0%20%C2%B7%20Context7%20%C2%B7%20Gemini%20%C2%B7%20Jules%20%C2%B7%20Fetch-7CA6D6?style=flat-square)](#connectors--tools)
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commons%20Clause-blue?style=flat-square)](./LICENSE)
 
 <a href="https://allocsys.github.io/madmcp/demo.html">
@@ -260,6 +260,9 @@ limits; `CONTEXT7_API_KEY` is optional.
 Notion page per Mem0 memory, archives pages for superseded or hard-deleted memories, and leaves any
 manual edits on those pages untouched.
 
+### Jules
+`jules_list_sources`, `jules_create_session`, `jules_list_sessions`, `jules_get_session`, `jules_get_activities` — hand off a coding task to Google's Jules agent, fire-and-forget: it works in its own sandboxed VM against a connected GitHub repo and (by default, via `automation_mode: AUTO_CREATE_PR`) opens a PR when done, with plans auto-approved. Distinct from `delegate_agent`/`delegate_designer` in this repo: those are synchronous read-only (or frontend-fenced) loops returning one answer per call; a Jules session is asynchronous and can write arbitrary code across a whole repo over several minutes, independent of this server's request lifecycle — create it, then poll `jules_get_session`/`jules_get_activities` later. Alpha API (Google's own designation), no unauthenticated tier.
+
 ### Fetch
 `web_fetch` — fetch a public URL and return text/JSON/stripped HTML
 
@@ -275,6 +278,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `MEM0_API_KEY` | Mem0 tools (`MEM0_USER_ID` optional, defaults to `default`) |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
+| `JULES_API_KEY` | Jules tools (`jules_*`) — required, no unauthenticated tier |
 | `GEMINI_API_KEY` | Gemini tools (`delegate_agent`, `delegate_research`) — required, throws if unset |
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
