@@ -100,7 +100,7 @@ async function appendIndexEntry({ entity_id, page_id, url, tags }) {
           EntityId: { rich_text: [{ text: { content: entity_id } }] },
           PageId:   { rich_text: [{ text: { content: page_id } }] },
           Url:      { url: url || null },
-          Tags:     { rich_text: [{ text: { content: (tags || []).join(",") } }] },
+          Tags:     { multi_select: (tags || []).map((name) => ({ name })) },
         },
       },
     });
