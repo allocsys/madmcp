@@ -80,6 +80,14 @@ describe("connectors/github/codespaces.js", () => {
 
       expect(result.content[0].text).toBe("No codespaces found.");
     });
+
+    it("surfaces an insufficient-scope 403 clearly rather than swallowing it", async () => {
+      githubRequest.mockRejectedValueOnce(
+        new Error("GitHub API error (403): Resource not accessible by personal access token")
+      );
+
+      await expect(server.tools.list_codespaces({})).rejects.toThrow(/403/);
+    });
   });
 
   describe("get_codespace", () => {
@@ -147,6 +155,13 @@ describe("connectors/github/codespaces.js", () => {
 
       expect(githubRequest).toHaveBeenCalledWith("/repos/someoneelse/theirrepo/codespaces/machines");
     });
+
+    it("propagates the error when the repo doesn't exist", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
+
+      await expect(server.tools.list_codespace_machines({ repo: "does-not-exist" }))
+        .rejects.toThrow(/404/);
+    });
   });
 
   describe("create_codespace", () => {
@@ -202,6 +217,13 @@ describe("connectors/github/codespaces.js", () => {
         body: {},
       });
     });
+
+    it("propagates the error when the requested machine type is invalid", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (422): Unprocessable Entity"));
+
+      await expect(server.tools.create_codespace({ repo: "madmcp", machine: "not-a-real-machine" }))
+        .rejects.toThrow(/422/);
+    });
   });
 
   describe("start_codespace", () => {
@@ -213,6 +235,13 @@ describe("connectors/github/codespaces.js", () => {
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123/start", { method: "POST" });
       expect(result.content[0].text).toMatch(/curly-fiesta-abc123 — state: Starting/);
     });
+
+    it("propagates the error when the codespace doesn't exist", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
+
+      await expect(server.tools.start_codespace({ codespace_name: "does-not-exist" }))
+        .rejects.toThrow(/404/);
+    });
   });
 
   describe("stop_codespace", () => {
@@ -223,6 +252,13 @@ describe("connectors/github/codespaces.js", () => {
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123/stop", { method: "POST" });
       expect(result.content[0].text).toMatch(/curly-fiesta-abc123 — state: Shutdown/);
+    });
+
+    it("propagates the error when the codespace doesn't exist", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
+
+      await expect(server.tools.stop_codespace({ codespace_name: "does-not-exist" }))
+        .rejects.toThrow(/404/);
     });
   });
 
