@@ -99,7 +99,7 @@ export function register(server) {
 
   server.tool(
     "create_codespace",
-    "Create a new GitHub Codespace for a repository. Creation is async on GitHub's side — the returned state may still be 'Provisioning' or similar for a bit after this returns.",
+    "Create a new GitHub Codespace for a repository. Async: state is 'Provisioning' on return, ~30-90s until 'Available'. Poll get_codespace to confirm.",
     {
       owner:            z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:             z.string().describe("Repository name"),
@@ -146,7 +146,7 @@ export function register(server) {
 
   server.tool(
     "stop_codespace",
-    "Stop a running GitHub Codespace.",
+    "Stop a running GitHub Codespace. Async: state is 'ShuttingDown' on return, ~30-60s until 'Shutdown'. Poll get_codespace to confirm.",
     {
       codespace_name: z.string().describe("The codespace's name"),
     },
