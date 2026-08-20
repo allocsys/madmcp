@@ -17,6 +17,7 @@ import { register as registerReviewControl } from "./review_control.js";
 import { register as registerDiff      } from "./diff.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
+import { register as registerCodespaces } from "./codespaces.js";
 
 export function register(server) {
   registerFiles(server);
@@ -32,4 +33,5 @@ export function register(server) {
   registerDiff(server);
   registerRepoMgmt(server);
   registerCloneToken(server);
+  registerCodespaces(server);
 }
