@@ -76,7 +76,7 @@ export function register(server) {
     },
     async ({ owner = DEFAULT_OWNER, repo, ref }) => {
       let path = `/repos/${owner}/${repo}/codespaces/machines`;
-      if (ref) path += `?location=&ref=${encodeURIComponent(ref)}`;
+      if (ref) path += `?ref=${encodeURIComponent(ref)}`;
 
       const data = await githubRequest(path);
       if (!data.machines || data.machines.length === 0) {
