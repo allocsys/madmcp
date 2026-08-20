@@ -64,6 +64,37 @@ export function register(server) {
     }
   );
 
+  // ── List codespace machines ──────────────────────────────────────────────
+
+  server.tool(
+    "list_codespace_machines",
+    "List the valid machine types available for creating a Codespace on a given repository (and optionally a specific ref). Use this to pick a value for create_codespace's `machine` param.",
+    {
+      owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:  z.string().describe("Repository name"),
+      ref:   z.string().optional().describe("Branch, tag, or commit SHA to check machine availability for (default: repo default branch)"),
+    },
+    async ({ owner = DEFAULT_OWNER, repo, ref }) => {
+      let path = `/repos/${owner}/${repo}/codespaces/machines`;
+      if (ref) path += `?location=&ref=${encodeURIComponent(ref)}`;
+
+      const data = await githubRequest(path);
+      if (!data.machines || data.machines.length === 0) {
+        return { content: [{ type: "text", text: `No available machine types for ${owner}/${repo}${ref ? `@${ref}` : ""}.` }] };
+      }
+
+      const lines = data.machines.map((m) =>
+        `- ${m.name}: ${m.display_name} (${m.cpus} vCPU, ${Math.round(m.memory_in_bytes / 1024 / 1024 / 1024)}GB RAM, ${Math.round(m.storage_in_bytes / 1024 / 1024 / 1024)}GB storage)${m.prebuild_availability ? ` [prebuild: ${m.prebuild_availability}]` : ""}`
+      );
+      return {
+        content: [{
+          type: "text",
+          text: `Available machine types for ${owner}/${repo}${ref ? `@${ref}` : ""}:\n${lines.join("\n")}`,
+        }],
+      };
+    }
+  );
+
   // ── Create codespace ─────────────────────────────────────────────────────
 
   server.tool(
