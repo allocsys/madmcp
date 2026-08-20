@@ -49,10 +49,9 @@ Add to the same file:
 - `delete_codespace` — `DELETE /user/codespaces/{codespace_name}`.
   Irreversible — word the tool description like `delete_repo`'s ("use
   with caution") and return a 🗑️-prefixed confirmation string.
-
-Optional stretch (only if useful later, skip for v1):
 - `list_codespace_machines` — `GET /repos/{owner}/{repo}/codespaces/machines`
-  (lets a caller pick a valid `machine` value before create).
+  (lets a caller pick a valid `machine` value before create). Part of v1,
+  not deferred — add it in the same commit as the other lifecycle tools.
 
 ## Step 3 — Register the module
 
