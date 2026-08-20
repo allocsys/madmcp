@@ -230,6 +230,8 @@ CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_ch
 
 Review control: `request_reviewers`, `remove_requested_reviewers`, `get_pr_mergeability`, `add_review_comment`, `get_branch_protection`, `list_notifications`
 
+Codespaces: `list_codespaces`, `get_codespace`, `list_codespace_machines`, `create_codespace`, `start_codespace`, `stop_codespace`, `delete_codespace` (requires the `codespace` PAT scope on `GITHUB_TOKEN` — see [API_KEYS.md](./docs/API_KEYS.md))
+
 ### Cloudflare
 D1: `cf_d1_database` (list/get), `cf_d1_database_create`, `cf_d1_database_delete`, `cf_d1_database_query`
 
