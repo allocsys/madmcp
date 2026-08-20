@@ -487,7 +487,7 @@ export function register(server) {
 
   server.tool(
     "notion_search",
-    "RULE for the calling model: use this only for a single, targeted lookup. If you'll need to search and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_gemini instead of looping notion_search and notion_get_page manually. Tool description: searches pages and databases in your Notion workspace.",
+    "DOES: searches pages and databases in your Notion workspace.\nRULE for the calling model: use this only for a single, targeted lookup. If you'll need to search and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_search and notion_get_page manually.",
     {
       query:       z.string().describe("Search query string"),
       filter_type: z.enum(["page", "database"]).optional().describe("Filter results to only pages or only databases (default: both)"),
@@ -532,7 +532,7 @@ export function register(server) {
 
   server.tool(
     "notion_get_page",
-    "RULE for the calling model: only call this directly for a single, specifically-named page whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_gemini instead of looping notion_get_page across pages. Tool description: gets a Notion page's properties and content blocks.",
+    "DOES: gets a Notion page's properties and content blocks.\nRULE for the calling model: only call this directly for a single, specifically-named page whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_agent instead of looping notion_get_page across pages.",
     {
       page_id: z.string().describe("Notion page ID (UUID format, e.g. from notion_search)"),
       cursor:  z.string().optional().describe("Pagination cursor from a previous call's response (see the more-blocks note) -- fetches the next page of up to 100 blocks instead of starting over. Omit for the first call."),
