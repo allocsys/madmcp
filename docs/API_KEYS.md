@@ -8,6 +8,7 @@ None of these providers support auto-injecting the key back into our env — you
 
 ### GitHub — `GITHUB_TOKEN`
 [![Create GitHub Token](https://img.shields.io/badge/Create-GitHub_Token-181717?style=for-the-badge&logo=github)](https://github.com/settings/tokens/new)
+> If you want the Codespaces tools (`list_codespaces`, `create_codespace`, etc.) to work, this PAT also needs the **`codespace`** scope checked — it's not implied by the repo scopes you'd otherwise pick. A 403/insufficient-scope response from those tools means the token needs to be reissued with it added.
 
 ### Cloudflare — `CLOUDFLARE_API_TOKEN`
 [![Create Cloudflare Token](https://img.shields.io/badge/Create-Cloudflare_Token-F38020?style=for-the-badge&logo=cloudflare)](https://dash.cloudflare.com/profile/api-tokens)
