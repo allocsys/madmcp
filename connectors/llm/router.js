@@ -21,14 +21,25 @@
 import { geminiChat } from "../gemini/client.js";
 import { glmChat } from "../glm/client.js";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../glm/adapter.js";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
 
-export async function providerChat(contents, { provider = "gemini", tools, model } = {}) {
+export async function providerChat(contents, { provider = "gemini", tools, model, maxOutputTokens } = {}) {
   if (provider === "glm") {
     const messages = toOpenAIMessages(contents);
     const openAITools = tools ? toOpenAITools(tools) : undefined;
-    const choice = await glmChat(messages, { model, tools: openAITools });
+    // A caller-supplied maxOutputTokens is honored exactly (same "explicit
+    // choice wins" contract as `model` in client.js's cascade) -- the
+    // GLM_DEFAULT_MAX_OUTPUT_TOKENS fallback only kicks in when nothing was
+    // specified at all, which is the case that was silently sending no
+    // max_tokens whatsoever and defaulting to the target model's full max
+    // context (see config.js's comment on GLM_DEFAULT_MAX_OUTPUT_TOKENS for
+    // why that was a real problem, not a hypothetical one).
+    const choice = await glmChat(messages, { model, tools: openAITools, maxOutputTokens: maxOutputTokens ?? GLM_DEFAULT_MAX_OUTPUT_TOKENS });
     return fromOpenAIChoice(choice);
   }
-  // default / "gemini"
-  return geminiChat(contents, { tools, model });
+  // default / "gemini" -- maxOutputTokens passed through as-is, no forced
+  // default (see config.js's comment: this problem was only observed on
+  // the GLM path, so Gemini's existing unbounded-by-default behavior is
+  // left untouched rather than changed to fix an unrelated provider).
+  return geminiChat(contents, { tools, model, maxOutputTokens });
 }
