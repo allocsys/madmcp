@@ -903,7 +903,7 @@ const SYSTEM_PREAMBLE =
 // (see checkpoint.js) -- if it's unavailable, resumption just isn't
 // possible, same as before this existed; a failure still returns whatever
 // transcript was gathered in-memory this call.
-export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider, model }) {
+export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider, model, maxOutputTokens }) {
   const cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
   // The provider actually in effect for this run -- the caller-supplied one
   // on a fresh run, or the one restored from a resumed checkpoint (see
@@ -924,6 +924,8 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // so no special-casing is needed beyond mirroring effectiveProvider's
   // pattern.
   let effectiveModel = model;
+  // Same pattern again for the per-turn output-token cap.
+  let effectiveMaxOutputTokens = maxOutputTokens;
 
   let runId = resume_run_id;
   let contents;
@@ -975,6 +977,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // providerChat/router.js treats as "gemini") rather than erroring.
     effectiveProvider = checkpoint.provider || provider;
     effectiveModel = checkpoint.model || model;
+    effectiveMaxOutputTokens = checkpoint.maxOutputTokens || maxOutputTokens;
     // Maps aren't JSON-serializable, so saveCheckpoint stores repeatCounts
     // as a plain object and this reconstructs the Map on load. Checkpoints
     // saved before fix #4 existed won't have this field -- fall back to an
@@ -1069,7 +1072,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     const withholdTools = isFinalStep || stuckLoopForce;
     let candidate;
     try {
-      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel });
+      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens });
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
@@ -1088,6 +1091,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
+        maxOutputTokens: effectiveMaxOutputTokens,
       });
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
@@ -1280,6 +1284,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
+        maxOutputTokens: effectiveMaxOutputTokens,
       });
       const errMessage = err?.message ?? String(err);
       return {
@@ -1339,6 +1344,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       consecutiveAllRepeatSteps,
       provider: effectiveProvider,
       model: effectiveModel,
+      maxOutputTokens: effectiveMaxOutputTokens,
     });
     contentsCheckpointedUpTo = contents.length;
   }
