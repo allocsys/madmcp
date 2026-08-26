@@ -66,6 +66,48 @@ function isTransientGeminiError(err) {
   return err?.status === 429 || err?.status === 503 || err?.transient === true;
 }
 
+// Validates a model-supplied args object against a FUNCTIONS[] entry's own
+// declared JSON schema (parameters.properties/required) before execute()
+// ever runs. Added after live testing showed a model (GLM, but nothing
+// about this is provider-specific -- both providers share this exact
+// execute() path) passing a `repo` parameter to github_search_code, a tool
+// whose schema has no such property (repo-scoping for that tool is meant
+// to go inside the `query` string, per its own description) -- the extra
+// property was silently ignored rather than rejected, so the call ran
+// unscoped and returned irrelevant results with no signal for the model to
+// self-correct, and it repeated the same mistake on every retry.
+// Deliberately shallow (top-level property names only, not full JSON
+// Schema validation of types/nested shapes) -- this is meant to catch the
+// "model invented or omitted a parameter" class of mistake cheaply, not to
+// replace real schema validation.
+function validateFunctionArgs(fn, args) {
+  const properties = fn.parameters?.properties || {};
+  const required   = fn.parameters?.required || [];
+  const allowedKeys   = Object.keys(properties);
+  const providedKeys  = Object.keys(args || {});
+
+  const missing = required.filter((k) => args?.[k] === undefined || args?.[k] === null || args?.[k] === "");
+  const unknown = providedKeys.filter((k) => !allowedKeys.includes(k));
+
+  if (!missing.length && !unknown.length) return null;
+
+  const lines = [`Error: invalid arguments for ${fn.name} -- this call was NOT executed.`];
+  if (missing.length) {
+    lines.push(`Missing required parameter(s): ${missing.join(", ")}.`);
+  }
+  if (unknown.length) {
+    lines.push(
+      `Unknown parameter(s) not accepted by this tool: ${unknown.join(", ")}. ` +
+      `Valid parameters for ${fn.name} are: ${allowedKeys.join(", ") || "(none)"}. ` +
+      `Re-read this tool's own description for how to express what you intended -- ` +
+      `some tools (e.g. github_search_code) expect scoping like "repo:owner/name" embedded ` +
+      `directly inside a query string rather than as a separate parameter, and parameter shapes ` +
+      `are NOT consistent across every tool in this list.`
+    );
+  }
+  return lines.join(" ");
+}
+
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
 // summaries, not a full unified-diff implementation. Capped so a huge file
 // pair can't blow up the O(n*m) table.
@@ -1215,10 +1257,19 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           if (!fn) {
             resultText = `Error: unknown function "${name}".`;
           } else {
-            try {
-              resultText = await fn.execute(args || {});
-            } catch (err) {
-              resultText = `Error: ${err?.message ?? String(err)}`;
+            const validationError = validateFunctionArgs(fn, args || {});
+            if (validationError) {
+              // Caught before execute() ever runs -- no network/API call spent
+              // on a request that was already known to be malformed, and the
+              // model gets a specific, actionable correction fed back as this
+              // call's result instead of a silently-wrong or empty answer.
+              resultText = validationError;
+            } else {
+              try {
+                resultText = await fn.execute(args || {});
+              } catch (err) {
+                resultText = `Error: ${err?.message ?? String(err)}`;
+              }
             }
           }
           // Defensive: every FUNCTIONS[].execute() is expected to return a
