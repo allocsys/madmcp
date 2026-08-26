@@ -46,7 +46,7 @@ function metaKey(runId) {
 //   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
 //     small stuff, always written in full (cheap regardless of run length).
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -59,7 +59,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
       // list-creation time.
       ops.push(client.expire(contentsKey(runId), CHECKPOINT_TTL_SECONDS));
     }
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps });
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
