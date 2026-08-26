@@ -169,6 +169,23 @@ export const GLM_REQUEST_TIMEOUT_MS = Number(process.env.GLM_REQUEST_TIMEOUT_MS)
 export const DEFAULT_LLM_PROVIDER = process.env.DEFAULT_LLM_PROVIDER || "gemini";
 ```
 
+> **Verification note (added after a second review pass):** `README.md`,
+> `docs/API_KEYS.md`, and `docs/env.html` ALREADY reference a *singular*
+> `OPENROUTER_API_KEY` env var (working link to openrouter.ai/keys, and a
+> live input field in `env.html`) -- leftover scaffolding from an earlier,
+> never-wired-up pass. Nothing in `config.js` currently reads it. This plan
+> introduces the *plural* `OPENROUTER_API_KEYS` (comma-separated, mirroring
+> `EXA_API_KEYS`) -- a different variable name, not just a format change. If
+> shipped as-is, an operator who follows the EXISTING docs and sets
+> `OPENROUTER_API_KEY` will have it silently ignored (no error -- the new
+> code just sees `OPENROUTER_API_KEYS` as unset and GLM tools fail with a
+> "no keys configured"-style message that won't obviously point back to the
+> stale docs as the cause). **Action item, part of this plan's scope, not a
+> follow-up:** update `README.md`, `docs/API_KEYS.md`, and `docs/env.html`
+> to `OPENROUTER_API_KEYS` (plural) as part of step 1, not after -- see the
+> new "Documentation" step below. Do not ship the code change and leave the
+> docs on the old singular name even temporarily.
+
 ### 2. `connectors/glm/client.js`
 
 New file, structurally parallel to `connectors/gemini/client.js`:
@@ -233,6 +250,21 @@ turn. This is the highest-risk part of the whole plan (subtle role/shape
 mismatches here would silently corrupt checkpointed conversations), so it
 gets the most test weight.
 
+**Known, accepted asymmetry (found on review, not something to fix):**
+`agent_delegate.js` special-cases `candidate.finishReason ===
+"MALFORMED_FUNCTION_CALL"` to produce a specific, actionable error message
+when the final/stuck-loop step withholds tools but the model tries to call
+one anyway. That's a Gemini-specific rejection code. An OpenAI-compatible
+API with no `tools` in the request body has no way to attempt a tool call
+at all -- it just returns plain text (or an empty/odd `finish_reason` like
+`"length"`) -- so `fromOpenAIChoice` will never produce that finishReason
+value, and that specific diagnostic branch simply won't fire for GLM runs.
+This isn't a bug to patch in the adapter; it means GLM's failure messages
+on that specific edge case will be generic ("Gemini stopped without a
+final answer -- finishReason: stop") rather than pointing at the real
+cause the way Gemini's do. Worth knowing going in, not worth building a
+fake equivalent error code for.
+
 ### 4. `connectors/llm/router.js`
 
 **Corrected from the original draft**: the earlier version of this plan
@@ -287,7 +319,14 @@ directly (not summarized) to get the actual current signatures right:
   - Add an optional `namespace` param to both functions (default
     `"gemini"`, so every existing Gemini call site — none of which pass it
     today — keeps behaving identically), used to build the key as
-    `` `${namespace}:cooldown:${model}` ``.
+    `` `${namespace}:cooldown:${model}` ``. **Note the two functions land on
+    different argument positions for this new param**, since
+    `isModelCoolingDown` has no existing second argument to preserve the
+    position of and `setModelCooldown` does (`seconds`):
+    `isModelCoolingDown(model, namespace)` and
+    `setModelCooldown(model, seconds, namespace)`. Not a problem, just worth
+    calling out explicitly in the diff/PR description so a reviewer doesn't
+    assume the two signatures are symmetric when they're deliberately not.
   - GLM additionally needs a **second dimension cooldown doesn't have
     today**: per-(model, key-index) tracking, since a 429 on one
     OpenRouter key/model pair shouldn't cool down a different key's quota
@@ -381,7 +420,33 @@ detection, step-budget nudges, checkpoint resume). This means:
   by construction. This is net-new test coverage this project didn't have
   before, not a modification of an existing suite.
 
-### 9. Rollout
+### 9. Documentation
+
+**New step, added on review** -- not mentioned in the original draft, and
+not optional/deferrable given the naming collision found in step 1:
+
+- `README.md`, `docs/API_KEYS.md`, `docs/env.html`: update the existing
+  singular `OPENROUTER_API_KEY` references to the plural
+  `OPENROUTER_API_KEYS` this plan actually introduces, and add a one-line
+  note (matching the `EXA_API_KEYS` entry's style in `docs/API_KEYS.md`)
+  that it's a comma-separated list supporting multiple keys/accounts.
+- `docs/API_KEYS.md` / `docs/env.html`: add entries for `GLM_MODEL`,
+  `GLM_FALLBACK_MODELS`, `GLM_REQUEST_TIMEOUT_MS`, and
+  `DEFAULT_LLM_PROVIDER`, matching the existing Gemini section's style
+  (these aren't provider credentials needing a "create key" link, but the
+  other doc-only config vars like `GITHUB_MIN_REQUEST_INTERVAL_MS` aren't
+  in these docs either -- so only `OPENROUTER_API_KEYS` strictly needs an
+  entry to match convention; the rest is optional polish).
+- `agent_tools.js`'s new `provider` zod `.describe(...)` text (step 7) is
+  the actual caller-facing documentation for the switch itself and is
+  already covered there -- no separate doc file needed for that part.
+
+This step should land in the SAME PR as step 1's config change, not as a
+follow-up -- see the verification note under step 1 for why shipping the
+code change while the docs still say `OPENROUTER_API_KEY` (singular) would
+actively mislead an operator setting this up from the docs.
+
+### 10. Rollout
 
 1. Ship behind `provider` arg, default `"gemini"` — zero behavior change
    for existing callers/automations until they opt in.
