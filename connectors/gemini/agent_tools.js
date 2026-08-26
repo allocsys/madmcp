@@ -18,7 +18,7 @@
 import { z } from "zod";
 import { runInvestigation } from "./agent_delegate.js";
 import { doCreatePage } from "../notion/tools.js";
-import { GEMINI_NOTION_ROOT_PAGE_ID } from "../../config.js";
+import { GEMINI_NOTION_ROOT_PAGE_ID, DEFAULT_LLM_PROVIDER } from "../../config.js";
 
 export function register(server) {
 
@@ -35,8 +35,14 @@ export function register(server) {
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
+      provider: z.enum(["gemini", "glm"]).optional()
+        .describe(`Which model backs this investigation (default: "${DEFAULT_LLM_PROVIDER}"). ` +
+          `"gemini" uses Google's Gemini API (GEMINI_API_KEY). "glm" uses Z.ai's GLM model via ` +
+          `OpenRouter (OPENROUTER_API_KEYS) -- use this if Gemini's output has been unreliable ` +
+          `for a given task; the two are interchangeable in capability, not just cost/speed. Ignored on a ` +
+          `resume (the provider that started the run is always reused, to avoid corrupting a checkpointed conversation).`),
     },
-    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false }) => {
+    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider }) => {
       // task is only genuinely optional when resuming a live checkpoint --
       // runInvestigation ignores task entirely in that branch (it rebuilds
       // `contents` straight from the saved checkpoint). On a fresh run (no
@@ -65,7 +71,7 @@ export function register(server) {
 
       let result;
       try {
-        result = await runInvestigation({ task, max_steps, resume_run_id });
+        result = await runInvestigation({ task, max_steps, resume_run_id, provider });
       } catch (err) {
         return { content: [{ type: "text", text: `Investigation failed: ${err?.message ?? String(err)}` }], isError: true };
       }

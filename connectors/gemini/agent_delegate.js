@@ -39,7 +39,7 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { geminiChat } from "./client.js";
+import { providerChat } from "../llm/router.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./agent_checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
@@ -903,8 +903,20 @@ const SYSTEM_PREAMBLE =
 // (see checkpoint.js) -- if it's unavailable, resumption just isn't
 // possible, same as before this existed; a failure still returns whatever
 // transcript was gathered in-memory this call.
-export async function runInvestigation({ task, max_steps = 20, resume_run_id }) {
+export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider }) {
   const cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
+  // The provider actually in effect for this run -- the caller-supplied one
+  // on a fresh run, or the one restored from a resumed checkpoint (see
+  // `checkpoint.provider || provider` below). A checkpointed `contents`
+  // array is shaped for whichever provider originally produced it (Gemini's
+  // shape either way, per connectors/glm/adapter.js -- but GLM-originated
+  // turns may carry provider-specific quirks the adapter round-trips
+  // faithfully rather than normalizing away), so resuming on a DIFFERENT
+  // provider than the one that started the run is not just a preference
+  // mismatch -- it risks silently corrupting the conversation. Threaded
+  // through every providerChat/saveCheckpoint call below exactly like
+  // effectiveTask is.
+  let effectiveProvider = provider;
 
   let runId = resume_run_id;
   let contents;
@@ -948,6 +960,13 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
     // to Redis in a prior call -- nothing new to push until this run adds
     // more turns, so the cursor starts at the end of what was loaded.
     contentsCheckpointedUpTo = contents.length;
+    // Same reasoning as `checkpoint.task || task` below -- once a run is
+    // past step 1, the checkpoint's own record of which provider started it
+    // is authoritative, not whatever the caller passes on a resume call.
+    // Checkpoints saved before the provider field existed won't have it;
+    // fall back to whatever the caller passed (may be undefined, which
+    // providerChat/router.js treats as "gemini") rather than erroring.
+    effectiveProvider = checkpoint.provider || provider;
     // Maps aren't JSON-serializable, so saveCheckpoint stores repeatCounts
     // as a plain object and this reconstructs the Map on load. Checkpoints
     // saved before fix #4 existed won't have this field -- fall back to an
@@ -1042,7 +1061,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
     const withholdTools = isFinalStep || stuckLoopForce;
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: withholdTools ? undefined : FUNCTION_DECLARATIONS });
+      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS });
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
@@ -1059,6 +1078,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
+        provider: effectiveProvider,
       });
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
@@ -1249,6 +1269,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
+        provider: effectiveProvider,
       });
       const errMessage = err?.message ?? String(err);
       return {
@@ -1306,6 +1327,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id }) 
       task: effectiveTask,
       repeatCounts: Object.fromEntries(repeatCounts),
       consecutiveAllRepeatSteps,
+      provider: effectiveProvider,
     });
     contentsCheckpointedUpTo = contents.length;
   }

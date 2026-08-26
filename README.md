@@ -176,12 +176,20 @@ any in the first place.
 
 `delegate_agent` — hand an open-ended, multi-step, read-only investigation
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
-the last week") to Gemini instead of making 5-10 separate manual tool calls.
-Gemini runs its own loop server-side across GitHub, Cloudflare, and Notion
-(bounded by `max_steps`, default 6, hard cap 20) and returns one synthesized
-answer. Falls through an ordered model cascade (`GEMINI_MODEL` →
-`GEMINI_FALLBACK_MODELS`) on rate limits, with Redis-backed per-model cooldown
-so already-limited models are skipped rather than retried.
+the last week") to Gemini (default) or GLM instead of making 5-10 separate
+manual tool calls. The model runs its own loop server-side across GitHub,
+Cloudflare, and Notion (bounded by `max_steps`, default 6, hard cap 20) and
+returns one synthesized answer. Falls through an ordered model cascade
+(`GEMINI_MODEL` → `GEMINI_FALLBACK_MODELS`, or for GLM `GLM_MODEL` →
+`GLM_FALLBACK_MODELS` across every key in `OPENROUTER_API_KEYS`) on rate
+limits, with Redis-backed per-model cooldown so already-limited models are
+skipped rather than retried. An explicit `provider: "gemini" | "glm"` arg
+picks which one backs a given call (default: `DEFAULT_LLM_PROVIDER`, itself
+defaulting to `"gemini"`) — the two are interchangeable in capability, not
+just cost/speed; try `"glm"` if Gemini's output has been unreliable for a
+given task. Ignored on a resume (the provider that started the run is
+always reused, so a checkpointed conversation can't be corrupted by
+resuming it on a different provider's wire format).
 
 `delegate_research` — web research, in one of two mutually-exclusive modes
 selected by which args are passed:
@@ -287,6 +295,11 @@ All tokens are optional independently — a connector's tools fail at call time
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
+| `OPENROUTER_API_KEYS` | Comma-separated OpenRouter API key(s) — required for `delegate_agent`'s `provider: "glm"` mode, unused otherwise |
+| `GLM_MODEL` | Primary GLM model (via OpenRouter) for `provider: "glm"` delegation (default `z-ai/glm-4.6`) |
+| `GLM_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s, cascaded per `OPENROUTER_API_KEYS` key (default `z-ai/glm-4.5-air:free`) |
+| `GLM_REQUEST_TIMEOUT_MS` | Defensive ceiling on a single GLM/OpenRouter call (default `55000`) |
+| `DEFAULT_LLM_PROVIDER` | Which provider `delegate_agent` uses when a call omits `provider` (default `gemini`) |
 | `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) | Optional — persists per-model rate-limit cooldowns and `delegate_agent` resume checkpoints across invocations; fails open if neither pair is set. Either naming works — the raw Upstash Marketplace integration names them `UPSTASH_REDIS_REST_*`, Vercel's own "KV" product (also Upstash-backed) names them `KV_REST_API_*`. |
 | `DEFAULT_OWNER` | Default GitHub owner when omitted from a call (defaults to `allocsys`) |
 | `GITHUB_MIN_REQUEST_INTERVAL_MS` | Minimum spacing between outgoing GitHub REST requests, to avoid secondary rate limits (default `300`) |

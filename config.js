@@ -192,6 +192,49 @@ export const EXA_API = "https://api.exa.ai/answer";
 export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS) || 55000;
 
 // ---------------------------------------------------------------------------
+// OpenRouter (GLM) -- second `delegate_agent` provider option alongside
+// Gemini, see plan.md "Add GLM (via OpenRouter) as a switchable alternative
+// to Gemini". Selected per-call via the `provider` arg on delegate_agent,
+// defaulting to DEFAULT_LLM_PROVIDER below so nothing breaks for existing
+// callers who don't pass it.
+//
+// OPENROUTER_API_KEYS is PLURAL and comma-separated, same multi-key
+// rotation pattern as EXA_API_KEYS above (rate-limit headroom + account
+// isolation) -- deliberately NOT the same name as the singular
+// OPENROUTER_API_KEY already referenced in README.md/docs/API_KEYS.md/
+// docs/env.html from an earlier, never-wired-up pass. Those docs are being
+// updated to the plural name in the same change that introduces this (see
+// plan.md step 9) specifically so operators don't set the old singular name
+// and have it silently ignored.
+export const OPENROUTER_API_KEYS = (process.env.OPENROUTER_API_KEYS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+export const OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions";
+
+// Default + fallback cascade for GLM, same shape/reasoning as GEMINI_MODEL /
+// GEMINI_FALLBACK_MODELS above. z-ai/glm-4.6 is NOT currently a free
+// OpenRouter endpoint; z-ai/glm-4.5-air:free is the confirmed `:free` one
+// (verified against https://openrouter.ai/models at the time this was
+// written) -- kept as a comma-separated cascade specifically so the
+// slugs/free-tier status can be corrected via env var without a code change
+// if OpenRouter's free lineup rotates.
+export const GLM_MODEL = process.env.GLM_MODEL || "z-ai/glm-4.6";
+export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "z-ai/glm-4.5-air:free")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
+export const GLM_REQUEST_TIMEOUT_MS = Number(process.env.GLM_REQUEST_TIMEOUT_MS) || 55000;
+
+// Which provider delegate_agent uses when the caller doesn't pass `provider`.
+// Stays "gemini" until GLM is validated head-to-head on real review tasks
+// (see plan.md "Rollout") -- this is an explicit opt-in switch, not
+// automatic best-model routing.
+export const DEFAULT_LLM_PROVIDER = process.env.DEFAULT_LLM_PROVIDER || "gemini";
+
+// ---------------------------------------------------------------------------
 // Frontend/design delegate (connectors/frontend/) -- delegate_designer's
 // write-capable agent loop (agent.js), backed by the existing Gemini
 // connector (geminiChat/GEMINI_API_KEY/GEMINI_MODEL above) -- no separate
