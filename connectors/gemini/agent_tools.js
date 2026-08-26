@@ -18,7 +18,7 @@
 import { z } from "zod";
 import { runInvestigation } from "./agent_delegate.js";
 import { doCreatePage } from "../notion/tools.js";
-import { GEMINI_NOTION_ROOT_PAGE_ID, DEFAULT_LLM_PROVIDER } from "../../config.js";
+import { GEMINI_NOTION_ROOT_PAGE_ID, DEFAULT_LLM_PROVIDER, GLM_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
 
 export function register(server) {
 
@@ -45,8 +45,13 @@ export function register(server) {
           `USE: override the specific model within the chosen provider, e.g. model: "z-ai/glm-4.5-air:free" with provider: "glm" to force OpenRouter's free-tier model instead of the default paid GLM_MODEL (useful when the account is low on OpenRouter credits). ` +
           `WARNING -- CASCADE DISABLED: passing a model that differs from the provider's own default model skips that provider's fallback-model list entirely (GLM_FALLBACK_MODELS / GEMINI_FALLBACK_MODELS are NOT tried) -- only the requested model is used, so a 429/503 on it fails the call instead of cascading to another model. API-key rotation (OPENROUTER_API_KEYS) is unaffected either way and still applies. ` +
           `RESUME RULE: same as provider -- if resume_run_id resolves to a checkpoint that recorded a model, that recorded model is always used and this argument is ignored. If the checkpoint has no recorded model (an older run, or a run that didn't specify one), this argument is used as a fallback instead of erroring.`),
+      maxOutputTokens: z.number().optional()
+        .describe(`DEFAULT: for provider "gemini", none set (Gemini's own API default applies, no cap sent). For provider "glm", ${GLM_DEFAULT_MAX_OUTPUT_TOKENS} (GLM_DEFAULT_MAX_OUTPUT_TOKENS from config) if this argument is omitted. ` +
+          `USE: caps the per-turn (not whole-conversation) output token budget for each model call in the investigation loop. Raise this if answers are getting cut off mid-response; lower it if OpenRouter credits are tight. ` +
+          `WHY GLM NEEDS A DEFAULT: with no max_tokens at all, OpenRouter defaults a request to the target model's FULL max context (e.g. 65536 for z-ai/glm-4.6) -- on a credit-limited account this fails EVERY GLM call with a 402 "requires more credits, or fewer max_tokens" error regardless of which model is selected, so provider "glm" always sends a value even when this argument is omitted. ` +
+          `RESUME RULE: same as provider/model -- if resume_run_id resolves to a checkpoint that recorded a value, that recorded value is always used and this argument is ignored. If the checkpoint has no recorded value (an older run), this argument (or the provider default above) is used as a fallback instead of erroring.`),
     },
-    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider, model }) => {
+    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider, model, maxOutputTokens }) => {
       // task is only genuinely optional when resuming a live checkpoint --
       // runInvestigation ignores task entirely in that branch (it rebuilds
       // `contents` straight from the saved checkpoint). On a fresh run (no
@@ -73,9 +78,20 @@ export function register(server) {
         };
       }
 
+      // Same reasoning as max_steps's guard above: z.number().optional() has
+      // no floor of its own, and a non-positive value here would produce a
+      // confusing provider-level error (or, worse, a silently truncated-to-
+      // nothing response) instead of a clear rejection at the boundary.
+      if (maxOutputTokens !== undefined && (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1)) {
+        return {
+          content: [{ type: "text", text: `Invalid maxOutputTokens: ${maxOutputTokens}. Must be a positive integer (at least 1).` }],
+          isError: true,
+        };
+      }
+
       let result;
       try {
-        result = await runInvestigation({ task, max_steps, resume_run_id, provider, model });
+        result = await runInvestigation({ task, max_steps, resume_run_id, provider, model, maxOutputTokens });
       } catch (err) {
         return { content: [{ type: "text", text: `Investigation failed: ${err?.message ?? String(err)}` }], isError: true };
       }
