@@ -133,7 +133,7 @@ export function fromOpenAIChoice(choice) {
   }
   if (message.tool_calls?.length) {
     for (const toolCall of message.tool_calls) {
-      let args = {};
+      let args;
       try {
         args = toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {};
       } catch {
