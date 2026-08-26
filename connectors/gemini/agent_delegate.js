@@ -1087,6 +1087,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
+        model: effectiveModel,
       });
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
@@ -1278,6 +1279,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
+        model: effectiveModel,
       });
       const errMessage = err?.message ?? String(err);
       return {
@@ -1336,6 +1338,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       repeatCounts: Object.fromEntries(repeatCounts),
       consecutiveAllRepeatSteps,
       provider: effectiveProvider,
+      model: effectiveModel,
     });
     contentsCheckpointedUpTo = contents.length;
   }
