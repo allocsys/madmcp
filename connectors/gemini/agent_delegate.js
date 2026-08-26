@@ -903,7 +903,7 @@ const SYSTEM_PREAMBLE =
 // (see checkpoint.js) -- if it's unavailable, resumption just isn't
 // possible, same as before this existed; a failure still returns whatever
 // transcript was gathered in-memory this call.
-export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider }) {
+export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider, model }) {
   const cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
   // The provider actually in effect for this run -- the caller-supplied one
   // on a fresh run, or the one restored from a resumed checkpoint (see
@@ -917,6 +917,13 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // through every providerChat/saveCheckpoint call below exactly like
   // effectiveTask is.
   let effectiveProvider = provider;
+  // Same reasoning as effectiveProvider directly above: a caller-supplied
+  // model on a fresh run, or the one restored from a resumed checkpoint so
+  // a resume can't silently switch models mid-conversation. Undefined is a
+  // valid value throughout (providerChat/glmChat fall back to GLM_MODEL),
+  // so no special-casing is needed beyond mirroring effectiveProvider's
+  // pattern.
+  let effectiveModel = model;
 
   let runId = resume_run_id;
   let contents;
@@ -967,6 +974,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // fall back to whatever the caller passed (may be undefined, which
     // providerChat/router.js treats as "gemini") rather than erroring.
     effectiveProvider = checkpoint.provider || provider;
+    effectiveModel = checkpoint.model || model;
     // Maps aren't JSON-serializable, so saveCheckpoint stores repeatCounts
     // as a plain object and this reconstructs the Map on load. Checkpoints
     // saved before fix #4 existed won't have this field -- fall back to an
@@ -1061,7 +1069,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     const withholdTools = isFinalStep || stuckLoopForce;
     let candidate;
     try {
-      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS });
+      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel });
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
