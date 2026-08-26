@@ -500,3 +500,17 @@ find-and-replace on phase 1's diff:
 - OpenRouter's own rate limits for free models (observed ~20 RPM / 200 RPD
   per key in public docs, subject to change) inform how many
   `OPENROUTER_API_KEYS` are actually worth provisioning.
+
+## Deployment verification note (2026-08-27)
+
+The `maxOutputTokens` threading fix (config.js's `GLM_DEFAULT_MAX_OUTPUT_TOKENS`,
+router.js's glm-branch default, agent_tools.js's new zod arg) is merged and
+green on `main` as of commit `6d3c4d6` (CI run #918). However, a live
+`delegate_agent` call against the deployed server on 2026-08-27 still shows
+the OLD behavior: the tool's advertised schema has no `maxOutputTokens`
+parameter, and a `provider: "glm"` call still requests the full 65536-token
+context (the exact bug this fix targets) instead of defaulting to 8192.
+This means the deployment serving requests has not picked up `main` as of
+this commit -- needs a deploy-pipeline check (Vercel dashboard or
+equivalent), not another code change. This edit to plan.md is itself
+partly to confirm/trigger a fresh deploy from `main`.
