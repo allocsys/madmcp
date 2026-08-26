@@ -31,7 +31,16 @@
 
 import { Redis } from "@upstash/redis";
 
-const COOLDOWN_KEY_PREFIX = "gemini:cooldown:";
+// Default namespace, preserved for every existing (Gemini) call site that
+// doesn't pass one. GLM cooldown tracking (connectors/glm/client.js) passes
+// its own namespace (e.g. "glm:<keyIndex>", folding the OpenRouter key
+// index in rather than adding a third parameter) so a 429 on one
+// model/key pair doesn't cool down a different key's quota for that same
+// model.
+const DEFAULT_NAMESPACE = "gemini";
+function cooldownKey(model, namespace = DEFAULT_NAMESPACE) {
+  return `${namespace}:cooldown:${model}`;
+}
 // Used only when a 429's message doesn't contain a parseable "retry in Ns"
 // hint -- Google's actual responses observed so far always include one, so
 // this is a conservative fallback, not the common case.
@@ -100,11 +109,11 @@ export function parseRetryDelaySeconds(message) {
 
 // True if `model` is currently recorded as rate-limited. Fails open (returns
 // false) if Redis isn't configured or unreachable -- never throws.
-export async function isModelCoolingDown(model) {
+export async function isModelCoolingDown(model, namespace) {
   const client = getRedis();
   if (!client) return false;
   try {
-    const value = await client.get(COOLDOWN_KEY_PREFIX + model);
+    const value = await client.get(cooldownKey(model, namespace));
     return value != null;
   } catch {
     return false;
@@ -114,12 +123,12 @@ export async function isModelCoolingDown(model) {
 // Records `model` as rate-limited for `seconds` (or DEFAULT_COOLDOWN_SECONDS
 // if omitted/invalid), auto-expiring via Redis TTL. Fails open (silent no-op)
 // if Redis isn't configured or unreachable -- never throws.
-export async function setModelCooldown(model, seconds) {
+export async function setModelCooldown(model, seconds, namespace) {
   const client = getRedis();
   if (!client) return;
   const ttl = Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_COOLDOWN_SECONDS;
   try {
-    await client.set(COOLDOWN_KEY_PREFIX + model, "1", { ex: ttl });
+    await client.set(cooldownKey(model, namespace), "1", { ex: ttl });
   } catch {
     // best-effort -- see file header
   }
