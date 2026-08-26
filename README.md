@@ -295,6 +295,11 @@ All tokens are optional independently — a connector's tools fail at call time
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
+| `OPENROUTER_API_KEYS` | Comma-separated OpenRouter API key(s) — required for `delegate_agent`'s `provider: "glm"` mode, unused otherwise |
+| `GLM_MODEL` | Primary GLM model (via OpenRouter) for `provider: "glm"` delegation (default `z-ai/glm-4.6`) |
+| `GLM_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s, cascaded per `OPENROUTER_API_KEYS` key (default `z-ai/glm-4.5-air:free`) |
+| `GLM_REQUEST_TIMEOUT_MS` | Defensive ceiling on a single GLM/OpenRouter call (default `55000`) |
+| `DEFAULT_LLM_PROVIDER` | Which provider `delegate_agent` uses when a call omits `provider` (default `gemini`) |
 | `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) | Optional — persists per-model rate-limit cooldowns and `delegate_agent` resume checkpoints across invocations; fails open if neither pair is set. Either naming works — the raw Upstash Marketplace integration names them `UPSTASH_REDIS_REST_*`, Vercel's own "KV" product (also Upstash-backed) names them `KV_REST_API_*`. |
 | `DEFAULT_OWNER` | Default GitHub owner when omitted from a call (defaults to `allocsys`) |
 | `GITHUB_MIN_REQUEST_INTERVAL_MS` | Minimum spacing between outgoing GitHub REST requests, to avoid secondary rate limits (default `300`) |
