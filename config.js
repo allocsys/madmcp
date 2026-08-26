@@ -228,6 +228,23 @@ export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "z-ai/glm
 // Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
 export const GLM_REQUEST_TIMEOUT_MS = Number(process.env.GLM_REQUEST_TIMEOUT_MS) || 55000;
 
+// Default cap on GLM's max_tokens when a caller (delegate_agent's `model`/
+// maxOutputTokens args, see agent_tools.js) doesn't specify one explicitly.
+// Root cause this exists for (found 2026-08-26 in live testing): with no
+// max_tokens set at all, OpenRouter defaults a chat completion request to
+// the target model's full max context -- 65536 for z-ai/glm-4.6 -- which
+// this account's OpenRouter credit balance cannot cover regardless of which
+// GLM model is selected, surfacing as a 402 "requires more credits, or
+// fewer max_tokens" on every call. Applied in router.js's glm branch (not
+// here in config, and not in glm/client.js -- see router.js's comment for
+// why that's the right layer), so a caller who DOES pass an explicit
+// maxOutputTokens is never overridden by this default. 8192 is a
+// conservative starting point for an investigation loop's per-turn text
+// output (not the whole conversation, just one turn) -- raise via env var
+// if a task's answers are getting cut off, or lower it if credits remain
+// tight even at this level.
+export const GLM_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GLM_DEFAULT_MAX_OUTPUT_TOKENS) || 8192;
+
 // Which provider delegate_agent uses when the caller doesn't pass `provider`.
 // Stays "gemini" until GLM is validated head-to-head on real review tasks
 // (see plan.md "Rollout") -- this is an explicit opt-in switch, not
