@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
 
 // Mock both provider clients and the adapter so this test is purely about
 // router.js's dispatch logic, not either provider's own wire format.
@@ -62,9 +63,14 @@ describe("connectors/llm/router.js — providerChat", () => {
 
     expect(mockToOpenAIMessages).toHaveBeenCalledWith(contents);
     expect(mockToOpenAITools).toHaveBeenCalledWith(tools);
+    // No maxOutputTokens was passed to providerChat here, so the glm branch
+    // must fall back to GLM_DEFAULT_MAX_OUTPUT_TOKENS -- unlike model/tools,
+    // this is NOT passed straight through as undefined (see config.js's
+    // comment on why an unset max_tokens breaks every GLM call on a
+    // credit-limited account).
     expect(mockGlmChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
-      { model: "z-ai/glm-4.6", tools: [{ type: "function", function: { name: "adapted_tool" } }] }
+      { model: "z-ai/glm-4.6", tools: [{ type: "function", function: { name: "adapted_tool" } }], maxOutputTokens: GLM_DEFAULT_MAX_OUTPUT_TOKENS }
     );
     expect(mockFromOpenAIChoice).toHaveBeenCalledWith({ message: { content: "glm says hi" }, finish_reason: "stop" });
     // The import-boundary check: a provider:"glm" call must never reach
@@ -83,8 +89,38 @@ describe("connectors/llm/router.js — providerChat", () => {
     expect(mockToOpenAITools).not.toHaveBeenCalled();
     expect(mockGlmChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
-      { model: undefined, tools: undefined }
+      { model: undefined, tools: undefined, maxOutputTokens: GLM_DEFAULT_MAX_OUTPUT_TOKENS }
     );
+  });
+
+  it("honors an explicit maxOutputTokens on the glm path instead of the default", async () => {
+    mockGlmChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "glm", maxOutputTokens: 2048 });
+
+    // A caller-supplied value must win outright, not be merged with or
+    // overridden by GLM_DEFAULT_MAX_OUTPUT_TOKENS -- same "explicit choice
+    // wins" contract as model's cascade-disable behavior in glm/client.js.
+    expect(mockGlmChat).toHaveBeenCalledWith(
+      [{ role: "user", content: "adapted" }],
+      { model: undefined, tools: undefined, maxOutputTokens: 2048 }
+    );
+  });
+
+  it("passes maxOutputTokens straight through on the gemini path with no forced default", async () => {
+    mockGeminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [{ text: "hi" }] }, finishReason: "STOP" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "gemini", maxOutputTokens: 4096 });
+    expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools: undefined, model: undefined, maxOutputTokens: 4096 });
+
+    // And when omitted entirely, gemini gets `undefined` -- NOT any default
+    // (unlike glm's GLM_DEFAULT_MAX_OUTPUT_TOKENS fallback; see config.js's
+    // comment for why this asymmetry between providers is intentional).
+    mockGeminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [{ text: "hi" }] }, finishReason: "STOP" });
+    await providerChat(contents, { provider: "gemini" });
+    expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools: undefined, model: undefined, maxOutputTokens: undefined });
   });
 
   it("propagates a glmChat failure without swallowing it", async () => {
