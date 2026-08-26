@@ -176,12 +176,20 @@ any in the first place.
 
 `delegate_agent` — hand an open-ended, multi-step, read-only investigation
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
-the last week") to Gemini instead of making 5-10 separate manual tool calls.
-Gemini runs its own loop server-side across GitHub, Cloudflare, and Notion
-(bounded by `max_steps`, default 6, hard cap 20) and returns one synthesized
-answer. Falls through an ordered model cascade (`GEMINI_MODEL` →
-`GEMINI_FALLBACK_MODELS`) on rate limits, with Redis-backed per-model cooldown
-so already-limited models are skipped rather than retried.
+the last week") to Gemini (default) or GLM instead of making 5-10 separate
+manual tool calls. The model runs its own loop server-side across GitHub,
+Cloudflare, and Notion (bounded by `max_steps`, default 6, hard cap 20) and
+returns one synthesized answer. Falls through an ordered model cascade
+(`GEMINI_MODEL` → `GEMINI_FALLBACK_MODELS`, or for GLM `GLM_MODEL` →
+`GLM_FALLBACK_MODELS` across every key in `OPENROUTER_API_KEYS`) on rate
+limits, with Redis-backed per-model cooldown so already-limited models are
+skipped rather than retried. An explicit `provider: "gemini" | "glm"` arg
+picks which one backs a given call (default: `DEFAULT_LLM_PROVIDER`, itself
+defaulting to `"gemini"`) — the two are interchangeable in capability, not
+just cost/speed; try `"glm"` if Gemini's output has been unreliable for a
+given task. Ignored on a resume (the provider that started the run is
+always reused, so a checkpointed conversation can't be corrupted by
+resuming it on a different provider's wire format).
 
 `delegate_research` — web research, in one of two mutually-exclusive modes
 selected by which args are passed:
