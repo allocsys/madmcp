@@ -149,18 +149,65 @@ a `DEFAULT_LLM_PROVIDER` flip). Findings so far:
   multi-turn tool-calling; the `:free` slug in `GLM_FALLBACK_MODELS` was
   found retired by OpenRouter during testing and should be revisited.
 
-**Next steps:** OpenRouter credits need to actually be topped up (not just
-waited out) before GLM can complete the harder comparative task at all --
-check the account balance at https://openrouter.ai/settings/credits rather
-than retrying blind. Once GLM can complete a run, get a matched pair of
-answers to this same task. Separately, Gemini's validateFunctionArgs
-factual error is worth a follow-up run on a fresh task to see whether it
+**UPDATE (2026-08-27, later same day) -- OpenRouter account confirmed
+exhausted, user declining to top up. GLM is now a hard blocker, not a
+credit-timing issue:**
+
+User checked the account directly: balance is exhausted, and the decision
+is to NOT add funds. Since a paid top-up is off the table, `config.js` was
+changed (commit `f1fed45`) to default `GLM_MODEL` to the free
+`z-ai/glm-4.5-air:free` slug (previously the paid `z-ai/glm-4.6` was
+default, with `:free` only as a fallback-on-429 entry) and
+`GLM_FALLBACK_MODELS` was emptied out (no paid fallback left to cascade
+to).
+
+A live smoke test against this new config (`delegate_agent`,
+`provider: "glm"`) surfaced that **a zero-balance OpenRouter account is
+blocked from BOTH the paid and free GLM routes, in different ways**:
+
+1. First call (default 8192 `maxOutputTokens`, tool-using task): 402 --
+   "This request requires more credits, or fewer max_tokens. You
+   requested up to 8192 tokens, but can only afford 2712." So even the
+   *free* model's completion-token ceiling is gated by account balance,
+   not just the paid model's.
+2. Retried with `maxOutputTokens: 2000` (under the affordable ceiling
+   above): got further (2 tool calls succeeded), then failed on step 3
+   with 402 -- "Prompt tokens limit exceeded: 17054 > 9946." So the
+   *prompt*-side token budget is ALSO gated by balance, independent of
+   the completion-side cap in (1). A multi-turn investigation loop that
+   accumulates file contents in context will hit this regardless of how
+   low `maxOutputTokens` is set.
+3. Minimal single-step test (no tools, tiny prompt, `maxOutputTokens: 500`
+   -- ruling out both caps above): 404 -- "This model is unavailable for
+   free. The paid version is available now - use this slug instead:
+   z-ai/glm-4.5-air." So a zero/negative-balance account isn't just rate-
+   or token-limited on the free tier, it can be refused free-tier access
+   to the model outright.
+
+**Conclusion: this is not fixable by model selection, prompt size, or
+output cap tuning.** With this account's balance at zero, OpenRouter
+blocks GLM end-to-end -- paid slugs 402 immediately, and the nominally
+-free slug is inconsistently gated (sometimes token-limited, sometimes
+outright 404'd as "unavailable for free"). `provider: "glm"` should be
+treated as **non-functional until the account carries a positive
+balance** -- even a small one, since (1) and (2) above suggest the gating
+is balance-proportional, not a flat free-vs-paid switch. Do not spend more
+time tuning `GLM_MODEL`/`GLM_FALLBACK_MODELS`/`maxOutputTokens` to work
+around this without a balance change first.
+
+**Current default provider is effectively Gemini-only.** `provider: "glm"`
+remains wired and will start working again immediately once the account
+has credit (no code changes needed) -- but until then, don't route real
+work through it, and don't count GLM failures from this point on as new
+findings unless the error signature differs from the three above.
+
+Separately, still worth doing on the Gemini side regardless of the GLM
+situation: Gemini's `validateFunctionArgs` factual error (see the entry
+above) is worth a follow-up run on a fresh task to see whether it
 repeats -- if verifying a specific implementation detail against a file
-it already read is unreliable, that's a real quality concern regardless of
-how the provider comparison shakes out. Also still open: whether GLM's
-failure to act on repeated corrective feedback needs its own mitigation
-(e.g. counting invalid-arg repeats toward the existing stuck-loop counter)
-before it's considered validated for a `DEFAULT_LLM_PROVIDER` flip.
+it already read is unreliable, that's a real quality concern independent
+of any provider comparison, which is now on hold anyway since a head-to-
+head needs both providers working.
 
 ## Designer notes (future phase-2 port, not this plan's scope)
 
