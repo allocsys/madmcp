@@ -36,16 +36,15 @@ export function register(server) {
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
       provider: z.enum(["gemini", "glm"]).optional()
-        .describe(`Which model backs this investigation (default: "${DEFAULT_LLM_PROVIDER}"). ` +
-          `"gemini" uses Google's Gemini API (GEMINI_API_KEY). "glm" uses Z.ai's GLM model via ` +
-          `OpenRouter (OPENROUTER_API_KEYS) -- use this if Gemini's output has been unreliable ` +
-          `for a given task; the two are interchangeable in capability, not just cost/speed. Ignored on a ` +
-          `resume (the provider that started the run is always reused, to avoid corrupting a checkpointed conversation).`),
+        .describe(`DEFAULT: "${DEFAULT_LLM_PROVIDER}". ` +
+          `VALUES: "gemini" (Google Gemini API, needs GEMINI_API_KEY) | "glm" (Z.ai GLM via OpenRouter, needs OPENROUTER_API_KEYS). ` +
+          `CHOOSE: the two are interchangeable in capability, not just cost/speed -- switch to "glm" if Gemini's output has been unreliable for this task. ` +
+          `RESUME RULE: if resume_run_id resolves to a checkpoint that recorded a provider (any run started after this field existed), that recorded provider is always used and this argument is ignored -- switching providers mid-run risks corrupting the checkpointed conversation. If the checkpoint has no recorded provider (an older run), this argument is used as a fallback instead of erroring.`),
       model: z.string().optional()
-        .describe(`Override the specific model used within the chosen provider (default: GEMINI_MODEL or GLM_MODEL from config, depending on "provider"). ` +
-          `For provider "glm", e.g. "z-ai/glm-4.5-air:free" to force OpenRouter's free-tier model instead of the ` +
-          `default paid GLM_MODEL -- useful when the account is low on OpenRouter credits. Ignored on a resume ` +
-          `(the model that started the run is always reused, same reasoning as provider).`),
+        .describe(`DEFAULT: none set -- the chosen provider's own default model is used (GEMINI_MODEL or GLM_MODEL from config). ` +
+          `USE: override the specific model within the chosen provider, e.g. model: "z-ai/glm-4.5-air:free" with provider: "glm" to force OpenRouter's free-tier model instead of the default paid GLM_MODEL (useful when the account is low on OpenRouter credits). ` +
+          `WARNING -- CASCADE DISABLED: passing a model that differs from the provider's own default model skips that provider's fallback-model list entirely (GLM_FALLBACK_MODELS / GEMINI_FALLBACK_MODELS are NOT tried) -- only the requested model is used, so a 429/503 on it fails the call instead of cascading to another model. API-key rotation (OPENROUTER_API_KEYS) is unaffected either way and still applies. ` +
+          `RESUME RULE: same as provider -- if resume_run_id resolves to a checkpoint that recorded a model, that recorded model is always used and this argument is ignored. If the checkpoint has no recorded model (an older run, or a run that didn't specify one), this argument is used as a fallback instead of erroring.`),
     },
     async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider, model }) => {
       // task is only genuinely optional when resuming a live checkpoint --
