@@ -226,20 +226,32 @@ design. Treat "not balance-gated" as an assumption to confirm in the live
 smoke test below, not a given -- it's based on public docs, not tested
 against this account yet.
 
-**Model choice (confirm against current Groq catalog before hardcoding --
-their model list churns; already deprecated qwen3-32b, llama-4-scout-17b,
-and an earlier kimi-k2-instruct build as of mid-2026 per Groq's own
-deprecation page):**
-- `GROQ_MODEL` default: `qwen/qwen3.6-27b` -- Groq's own docs describe it
-  as flagship-level agentic coding with tool use and thinking/non-thinking
-  modes; also the top score on Groq's Artificial Analysis intelligence
-  ranking as of this writing. 131K context, free tier ~1,000 req/day.
-- `GROQ_FALLBACK_MODELS` default: `openai/gpt-oss-120b` -- Groq's
-  flagship open-weight reasoning/tool-use model, and the model Groq is
-  actively consolidating other retiring models toward, so it's the safer
-  long-lived fallback choice.
-- Verify both slugs live at https://console.groq.com/docs/models
-  immediately before implementation, not from this plan alone.
+**Model choice -- CORRECTED 2026-08-27 after checking
+https://console.groq.com/docs/models directly (original plan had the
+order backwards):** Groq explicitly classifies `qwen/qwen3.6-27b` as a
+**preview model** ("intended for evaluation purposes only... may be
+discontinued at short notice") despite it scoring highest on Groq's own
+intelligence ranking, while `openai/gpt-oss-120b` is a **production
+model** ("meet or exceed our high standards for speed, quality, and
+reliability"). For a persistent, unattended `delegate_agent` provider,
+stability of availability matters more than a benchmark edge -- so the
+primary/fallback order from the original plan is swapped:
+- `GROQ_MODEL` default: `openai/gpt-oss-120b` -- production-tier,
+  reasoning + tool-use capable, and the model Groq is actively
+  consolidating other retiring models toward (safer long-lived choice).
+- `GROQ_FALLBACK_MODELS` default: `qwen/qwen3.6-27b` -- kept as a
+  fallback specifically because it's strong on coding/agentic benchmarks,
+  but treat it as liable to disappear without much notice since it's
+  preview-only; don't be surprised if it needs replacing on short notice
+  independent of any other issue.
+- API base is `https://api.groq.com/openai/v1` (chat completions) --
+  `console.groq.com` is the docs/dashboard host only, not a usable
+  endpoint; don't confuse the two when writing `GROQ_API` in config.
+- Re-verify both slugs' current preview/production status at
+  https://console.groq.com/docs/models immediately before implementation
+  if any time has passed since this was written -- Groq's catalog churns
+  (already deprecated qwen3-32b, llama-4-scout-17b, and an earlier
+  kimi-k2-instruct build as of mid-2026 per Groq's own deprecation page).
 
 **Sequenced steps:**
 
