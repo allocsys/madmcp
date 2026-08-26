@@ -1,5 +1,17 @@
 # Plan: Add GLM (via OpenRouter) as a switchable alternative to Gemini
 
+> **Verification note (added after review):** the first draft of this plan
+> was based on a `delegate_agent` (Gemini) self-summary of the codebase.
+> Per instruction not to trust that summary at face value, every claim below
+> about `connectors/gemini/*` and `connectors/frontend/designer_delegate.js`
+> has since been checked against a direct read of the actual files (not a
+> re-delegated summary). Three inaccuracies were found and fixed in this
+> version — see the "Corrected from the original draft" callouts inline.
+> The overall architecture/seam described (adapt at the client boundary,
+> keep Gemini's `contents`/`candidate` shape as the lingua franca) was
+> confirmed correct; the errors were in implementation-level details
+> (exact exports, exact function signatures, what tests already exist).
+
 ## Why
 
 `delegate_agent` (and `delegate_designer`) are hard-wired to Gemini
@@ -24,7 +36,9 @@ changes.
 ## Non-goals
 
 - Not touching `delegate_designer` in phase 1 (frontend write-agent). Can
-  follow the same pattern later once the read-only path is proven.
+  follow the same pattern later once the read-only path is proven — and
+  note it is NOT a drop-in copy of phase 1's plumbing (see "Designer notes"
+  below, its checkpoint storage shape differs from `delegate_agent`'s).
 - Not silently auto-picking "whichever model is best" — this is an explicit
   opt-in `provider` argument, not automatic routing.
 - Not deprecating Gemini. Default stays Gemini until GLM is validated head
@@ -32,9 +46,14 @@ changes.
 
 ## Current Gemini architecture (baseline being mirrored)
 
+Directly verified by reading each file below in full (not summarized):
+
 - `config.js` — `GEMINI_API_KEY` (single key), `GEMINI_API`, `GEMINI_MODEL`
-  (default), `GEMINI_FALLBACK_MODELS` (comma-separated cascade),
-  `GEMINI_REQUEST_TIMEOUT_MS`.
+  (default `"gemini-flash-latest"`), `GEMINI_FALLBACK_MODELS`
+  (comma-separated cascade, default `"gemini-3.5-flash-lite,gemini-3.1-flash-lite"`),
+  `GEMINI_REQUEST_TIMEOUT_MS`. Also has `EXA_API_KEYS` (comma-separated,
+  multi-key rotation for the Exa connector) — this is the pattern GLM's key
+  rotation should mirror, since Gemini itself only ever had one key.
 - `connectors/gemini/client.js` — `callGenerateContentOnce` (raw HTTP call,
   one model) → `callGenerateContent` (cascades `GEMINI_MODEL` +
   `GEMINI_FALLBACK_MODELS` on 429/503/network-transient errors, checks
@@ -42,15 +61,26 @@ changes.
   records a cooldown on 429) → `geminiChat` (multi-turn, function-calling,
   returns the raw Gemini `candidate`) / `geminiGenerate` (single-turn text).
 - `connectors/gemini/cooldown.js` — Redis (Upstash/Vercel KV)-backed
-  per-model cooldown memory, fails open if Redis isn't configured.
+  per-model cooldown memory, fails open if Redis isn't configured. **Key
+  prefix is a hardcoded constant, not parameterized** (see step 5 below —
+  this was under-specified in the original draft).
 - `connectors/gemini/agent_checkpoint.js` — Redis-backed conversation
-  checkpointing (append-delta), 1hr TTL, used for `resume_run_id`.
+  checkpointing, **append-delta** (only new `contents` entries are RPUSHed
+  each step, not the whole array — this matters, see "Designer notes"
+  below for the file that does it differently), 1hr TTL, used for
+  `resume_run_id`.
 - `connectors/gemini/agent_delegate.js` — the actual read-only investigation
-  loop (`runInvestigation`): owns `FUNCTIONS` (the GitHub/Notion/Cloudflare/
-  Context7/Mem0 tool declarations + `execute` bodies), `SYSTEM_PREAMBLE`,
-  stuck-loop detection, step-budget nudges, and all checkpoint/resume logic.
-  Calls `geminiChat(contents, { tools })` each turn and inspects
-  `candidate.content.parts` for `functionCall` vs. plain text.
+  loop (`runInvestigation`, the **only export** from this file): owns
+  `FUNCTIONS` (the GitHub/Notion/Cloudflare/Context7/Mem0 tool declarations
+  + `execute` bodies), `FUNCTION_DECLARATIONS` (`FUNCTIONS` wrapped as
+  `[{ functionDeclarations: [...] }]` — Gemini's specific wrapper shape,
+  see step 4 below), `SYSTEM_PREAMBLE`, stuck-loop detection, step-budget
+  nudges, and all checkpoint/resume logic. Calls
+  `geminiChat(contents, { tools })` each turn and inspects
+  `candidate.content.parts` for `functionCall` vs. plain text. Neither
+  `FUNCTIONS` nor `FUNCTION_DECLARATIONS` nor `SYSTEM_PREAMBLE` is exported
+  — they're module-private, only used inside this file's own
+  `runInvestigation`.
 - `connectors/gemini/agent_tools.js` — registers the `delegate_agent` MCP
   tool (zod schema: `task`, `max_steps`, `log_to_notion`, `resume_run_id`,
   `show_transcript`), calls `runInvestigation(...)`.
@@ -63,7 +93,8 @@ conversation array `contents` (`{ role: "user"|"model", parts: [...] }`,
 with tool results sent back as `role: "user"` + `functionResponse` parts).
 Everything else (the loop, stuck-loop guard, step budgeting, checkpoint
 bookkeeping, transcript formatting, `FUNCTIONS`) is provider-agnostic
-already. That is the seam this plan cuts along.
+already. That is the seam this plan cuts along — confirmed by direct
+reading, not just the original delegated summary.
 
 ## Target architecture
 
@@ -80,9 +111,11 @@ connectors/llm/
 
 connectors/gemini/
   client.js         <- UNCHANGED (still Gemini's own native wire format)
-  cooldown.js        <- generalized to key by `${provider}:${model}` (see below)
-  agent_checkpoint.js <- generalized to a provider-agnostic checkpoint (adds
-                          a `provider` field to the saved blob)
+  cooldown.js        <- generalized to accept a provider/namespace param
+                          (see step 5 -- concrete signature change, not just
+                          "change the key")
+  agent_checkpoint.js <- adds a `provider` field to the saved meta blob
+                          (no key-prefix rename needed -- see step 5)
   agent_delegate.js  <- calls connectors/llm/router.js instead of importing
                           geminiChat directly; everything else unchanged
   agent_tools.js     <- adds `provider` zod arg, passes through
@@ -110,14 +143,14 @@ diff than introducing a third neutral format everywhere.
 
 ### 1. Config (`config.js`)
 
-Add, mirroring the `EXA_API_KEYS` multi-key pattern (not the single-key
-`GEMINI_API_KEY` pattern — we explicitly want multi-key cascade for GLM
-from day one) and the `GEMINI_FALLBACK_MODELS` cascade pattern:
+Add, mirroring the `EXA_API_KEYS` multi-key pattern and the
+`GEMINI_FALLBACK_MODELS` cascade pattern (both confirmed present in the
+current file):
 
 ```js
 // OpenRouter (GLM). Multi-key, same reasoning as EXA_API_KEYS: rate-limit
 // headroom + account isolation. Comma-separated, rotated in order on
-// 429/503/network error, same as EXA client.
+// 401/403/429/503/network error (see connectors/glm/client.js).
 export const OPENROUTER_API_KEYS = (process.env.OPENROUTER_API_KEYS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
 export const OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions";
@@ -125,7 +158,7 @@ export const OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions";
 // Default + fallback cascade for GLM, same shape as GEMINI_MODEL /
 // GEMINI_FALLBACK_MODELS. VERIFY current slugs/free-tier status at
 // https://openrouter.ai/models before relying on this default -- OpenRouter's
-// free lineup changes without notice (see plan.md).
+// free lineup changes without notice (see plan.md "Why").
 export const GLM_MODEL = process.env.GLM_MODEL || "z-ai/glm-4.6";
 export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "z-ai/glm-4.5-air:free")
   .split(",").map(s => s.trim()).filter(Boolean);
@@ -153,9 +186,8 @@ New file, structurally parallel to `connectors/gemini/client.js`:
     401/403 (bad/exhausted key) as well as 429.
   - Inner: for each key, cascade `GLM_MODEL` + `GLM_FALLBACK_MODELS` on
     429/503/network-transient, same logic as Gemini's `callGenerateContent`.
-  - Reuse `cooldown.js` (generalized, see step 4) keyed by
-    `glm:${model}:${keyIndex}` so a cooling-down (model, key) pair is
-    skipped the same way Gemini skips a cooling-down model.
+  - Cooldown check per (model, key-index) pair — see step 5, this requires
+    an actual signature change to `cooldown.js`, not just reuse as-is.
   - If every (key, model) pair in the matrix fails, throw the last error —
     same contract as Gemini's `callGenerateContent`.
 - `glmChat(messages, { model, tools })` — OpenRouter/OpenAI-compatible
@@ -170,14 +202,20 @@ New file, structurally parallel to `connectors/gemini/client.js`:
 
 The actual seam. Two pure functions:
 
-- `toOpenAIMessages(contents, functionDeclarations)` — Gemini `contents`
+- `toOpenAIMessages(contents)` — Gemini `contents`
   (`{role:"user"|"model", parts:[{text}|{functionCall}|{functionResponse}]}`)
   → OpenAI `messages` (`{role:"system"|"user"|"assistant"|"tool",
-  content, tool_calls?, tool_call_id?}`). Also converts `FUNCTIONS`'
-  Gemini-style `parameters` (already plain JSON Schema, no `$ref`/`oneOf`)
-  into OpenAI's `tools: [{type:"function", function:{name, description,
-  parameters}}]` — this part is closer to 1:1 since both use JSON Schema
-  for parameters; the real work is the message-role/tool-call mapping.
+  content, tool_calls?, tool_call_id?}`).
+- `toOpenAITools(functionDeclarations)` — **separate function, corrected
+  from the original draft**: `agent_delegate.js`'s `tools` argument is
+  `FUNCTION_DECLARATIONS`, which is `[{ functionDeclarations: FUNCTIONS.map(...) }]`
+  — a one-element array wrapping an object keyed `functionDeclarations`,
+  Gemini's specific wire shape. This must be unwrapped
+  (`functionDeclarations[0].functionDeclarations`) before mapping each
+  `{name, description, parameters}` entry into OpenAI's
+  `{type:"function", function:{name, description, parameters}}` shape —
+  treating the incoming `tools` value as already a flat array (as an
+  earlier draft of this plan implied) would silently produce zero tools.
 - `fromOpenAIChoice(choice)` → the same `candidate` shape
   `agent_delegate.js` already consumes: `{ content: { role: "model", parts:
   [...] }, finishReason }`, where OpenAI `tool_calls` become Gemini-style
@@ -197,16 +235,27 @@ gets the most test weight.
 
 ### 4. `connectors/llm/router.js`
 
+**Corrected from the original draft**: the earlier version of this plan
+had `router.js` importing a `FUNCTION_DECLARATIONS_RAW` export from
+`agent_delegate.js`. That export doesn't exist — `agent_delegate.js`
+exports only `runInvestigation`; `FUNCTION_DECLARATIONS` is module-private.
+No import is needed: `agent_delegate.js` already has `FUNCTION_DECLARATIONS`
+in scope where it currently calls `geminiChat(contents, { tools })`, and
+will pass that same value straight through to `providerChat(contents, {
+provider, tools })` instead. `router.js` only needs to know how to unwrap
+whatever `tools` it's handed (via `toOpenAITools`, step 3) when the
+provider is `glm`.
+
 ```js
 import { geminiChat } from "../gemini/client.js";
 import { glmChat } from "../glm/client.js";
-import { toOpenAIMessages, fromOpenAIChoice } from "../glm/adapter.js";
-import { FUNCTION_DECLARATIONS_RAW } from "../gemini/agent_delegate.js"; // see note below
+import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../glm/adapter.js";
 
 export async function providerChat(contents, { provider = "gemini", tools, model } = {}) {
   if (provider === "glm") {
-    const messages = toOpenAIMessages(contents, tools);
-    const choice = await glmChat(messages, { model, tools: !!tools });
+    const messages = toOpenAIMessages(contents);
+    const openAITools = tools ? toOpenAITools(tools) : undefined;
+    const choice = await glmChat(messages, { model, tools: openAITools });
     return fromOpenAIChoice(choice);
   }
   // default / "gemini"
@@ -226,22 +275,50 @@ leaks past `adapter.js`.
 
 ### 5. Generalize `cooldown.js` and `agent_checkpoint.js`
 
-- `cooldown.js`: change the Redis key from `gemini:cooldown:${model}` (or
-  equivalent) to `${provider}:cooldown:${model}`, add an optional
-  `keyIndex` component for GLM's multi-key case
-  (`glm:cooldown:${model}:${keyIndex}`) so different OpenRouter keys don't
-  share cooldown state. Gemini's existing calls pass `provider: "gemini"`
-  implicitly (default param) — no behavior change for Gemini, purely
-  additive.
-- `agent_checkpoint.js`: add `provider` to the saved/loaded checkpoint blob.
-  **Resume must reuse the original provider** — `runInvestigation` should
-  ignore a caller-passed `provider` on a live resume the same way it
-  already ignores a caller-passed `task` (ties back into `checkpoint.task
-  || task` — do the same for provider: `checkpoint.provider || provider`).
-  This matters because a checkpointed `contents` array is provider-shaped
-  the way Gemini expects (see step 3) — resuming a Gemini-started run on
-  GLM (or vice versa) without going through the adapter consistently would
-  silently corrupt the conversation.
+**Corrected from the original draft** — both files were read in full
+directly (not summarized) to get the actual current signatures right:
+
+- `cooldown.js` today: `COOLDOWN_KEY_PREFIX = "gemini:cooldown:"` is a
+  hardcoded module constant, and `isModelCoolingDown(model)` /
+  `setModelCooldown(model, seconds)` take **no provider or key-index
+  parameter at all** — Gemini only ever had one model axis to cascade on
+  and one API key, so there was never a reason for one. Reusing this file
+  as-is for GLM is not possible without a real signature change:
+  - Add an optional `namespace` param to both functions (default
+    `"gemini"`, so every existing Gemini call site — none of which pass it
+    today — keeps behaving identically), used to build the key as
+    `` `${namespace}:cooldown:${model}` ``.
+  - GLM additionally needs a **second dimension cooldown doesn't have
+    today**: per-(model, key-index) tracking, since a 429 on one
+    OpenRouter key/model pair shouldn't cool down a different key's quota
+    for that same model. Fold the key index into the namespace GLM passes,
+    e.g. `` `glm:${keyIndex}` ``, rather than adding a third parameter —
+    keeps the function signature to `(model, seconds, namespace)` instead
+    of growing indefinitely.
+  - Update `test/gemini-client.test.js`'s cooldown assertions (which
+    currently hardcode the literal `"gemini:cooldown:..."` key string) to
+    account for the new optional param — those tests should keep passing
+    unchanged since the default preserves the exact current key format,
+    but the mock call assertions are worth double-checking against the new
+    signature rather than assumed compatible.
+- `agent_checkpoint.js` today: `CHECKPOINT_KEY_PREFIX = "gemini:checkpoint:"`
+  is also hardcoded, but — unlike cooldown — **this one does not need to
+  change for correctness**. Every checkpoint is keyed by `runId`
+  (`randomUUID()`), which is already globally unique regardless of which
+  provider generated it; a hardcoded "gemini:" prefix on the Redis key
+  doesn't cause a GLM run's checkpoint to collide with anything. The
+  original draft implied a prefix rename was required — it isn't. The only
+  real change needed is adding `provider` to the saved/loaded meta blob
+  (trivial: `saveCheckpoint`'s meta object is already a plain destructured
+  set of fields serialized with `JSON.stringify` — add `provider` to both
+  the destructure and the call sites). **Resume must reuse the original
+  provider** — `runInvestigation` should ignore a caller-passed `provider`
+  on a live resume the same way it already ignores a caller-passed `task`
+  (`checkpoint.task || task` — do the same: `checkpoint.provider ||
+  provider`). This matters because a checkpointed `contents` array is
+  provider-shaped the way Gemini expects (see step 3) — resuming a
+  Gemini-started run on GLM (or vice versa) without going through the
+  adapter consistently would silently corrupt the conversation.
 
 ### 6. `agent_delegate.js` changes
 
@@ -278,6 +355,14 @@ validation guards stay exactly as-is).
 
 ### 8. Tests
 
+**Corrected from the original draft**: I originally wrote "extend existing
+`agent_delegate`-level tests (if any exist beyond the client-layer ones)".
+Directly searched the repo for this — confirmed **no such tests exist**:
+`test/gemini-client.test.js` covers `client.js` and `cooldown.js` only
+(mocked fetch + mocked `@upstash/redis`), and nothing in `test/` currently
+exercises `runInvestigation`/`agent_delegate.js`'s loop itself (stuck-loop
+detection, step-budget nudges, checkpoint resume). This means:
+
 - `test/glm-client.test.js` — mirror `test/gemini-client.test.js`'s
   structure: mock fetch, assert key rotation on 401/429, assert model
   cascade on 429/503 within one key, assert cooldown skip behavior, assert
@@ -287,10 +372,14 @@ validation guards stay exactly as-is).
   for both providers and that a `provider: "glm"` call never touches
   `GEMINI_API_KEY`/Gemini's client module (import-boundary check, catches
   an accidental cross-wire early).
-- Extend existing `agent_delegate`-level tests (if any exist beyond the
-  client-layer ones) to run the stuck-loop / step-budget / checkpoint-resume
-  cases against **both** providers via a parametrized test, since those
-  behaviors must be provider-invariant by construction.
+- `test/agent-delegate-loop.test.js` — **new file, not an extension of
+  anything existing**: parametrize the stuck-loop / step-budget /
+  checkpoint-resume cases (currently only exercised manually/informally
+  per the file's own code comments referencing specific dated test
+  sessions, e.g. "2026-07-26 stress test") against **both** providers via
+  a mocked `providerChat`, since those behaviors must be provider-invariant
+  by construction. This is net-new test coverage this project didn't have
+  before, not a modification of an existing suite.
 
 ### 9. Rollout
 
@@ -303,8 +392,32 @@ validation guards stay exactly as-is).
    a separate, deliberate decision after real comparative data, not part of
    this plan.
 4. Once validated, port the same `provider` switch to `delegate_designer`
-   (`connectors/frontend/designer_delegate.js` / `designer_tools.js`),
-   reusing `connectors/llm/router.js` unchanged.
+   — see "Designer notes" below for why this is not a trivial copy-paste.
+
+## Designer notes (for the future phase-2 port, not this plan's scope)
+
+Directly read `connectors/frontend/designer_delegate.js` to check the
+original summary's claims here too. It does import `geminiChat` straight
+from `../gemini/client.js` and `isRedisConfigured` from
+`../gemini/cooldown.js`, confirming it would need the same router swap.
+Two things worth flagging now so phase 2 isn't assumed to be
+find-and-replace on phase 1's diff:
+
+- **Different checkpoint storage shape.** `agent_checkpoint.js` (used by
+  `delegate_agent`) does append-delta writes (`saveCheckpoint(runId, {
+  newContents, ... })`, only new turns RPUSHed per step). `designer_checkpoint.js`
+  (used by `delegate_designer`) instead does a full-array overwrite each
+  step (`saveState` closes over the whole `contents` array and passes it
+  in full every call). Both would need `provider` added to their meta
+  blobs, but the router/adapter work in step 4 doesn't automatically
+  extend to the designer loop's checkpoint calls — that's a second,
+  separate integration point.
+- **Different cache-ability rules.** `designer_delegate.js`'s repeat-call
+  cache only serves `read_file`/`validate` from cache, never `write_file`
+  (a real side-effecting call) — `agent_delegate.js`'s read-only loop
+  caches everything. Not a blocker for the provider switch itself, just a
+  reminder that the two loops aren't identical enough to share one set of
+  loop-level tests; `delegate_designer` would need its own.
 
 ## Open questions to resolve before/during implementation
 
