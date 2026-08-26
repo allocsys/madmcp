@@ -41,8 +41,13 @@ export function register(server) {
           `OpenRouter (OPENROUTER_API_KEYS) -- use this if Gemini's output has been unreliable ` +
           `for a given task; the two are interchangeable in capability, not just cost/speed. Ignored on a ` +
           `resume (the provider that started the run is always reused, to avoid corrupting a checkpointed conversation).`),
+      model: z.string().optional()
+        .describe(`Override the specific model used within the chosen provider (default: GEMINI_MODEL or GLM_MODEL from config, depending on "provider"). ` +
+          `For provider "glm", e.g. "z-ai/glm-4.5-air:free" to force OpenRouter's free-tier model instead of the ` +
+          `default paid GLM_MODEL -- useful when the account is low on OpenRouter credits. Ignored on a resume ` +
+          `(the model that started the run is always reused, same reasoning as provider).`),
     },
-    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider }) => {
+    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider, model }) => {
       // task is only genuinely optional when resuming a live checkpoint --
       // runInvestigation ignores task entirely in that branch (it rebuilds
       // `contents` straight from the saved checkpoint). On a fresh run (no
@@ -71,7 +76,7 @@ export function register(server) {
 
       let result;
       try {
-        result = await runInvestigation({ task, max_steps, resume_run_id, provider });
+        result = await runInvestigation({ task, max_steps, resume_run_id, provider, model });
       } catch (err) {
         return { content: [{ type: "text", text: `Investigation failed: ${err?.message ?? String(err)}` }], isError: true };
       }
