@@ -213,14 +213,20 @@ export const OPENROUTER_API_KEYS = (process.env.OPENROUTER_API_KEYS || "")
 export const OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions";
 
 // Default + fallback cascade for GLM, same shape/reasoning as GEMINI_MODEL /
-// GEMINI_FALLBACK_MODELS above. z-ai/glm-4.6 is NOT currently a free
-// OpenRouter endpoint; z-ai/glm-4.5-air:free is the confirmed `:free` one
-// (verified against https://openrouter.ai/models at the time this was
-// written) -- kept as a comma-separated cascade specifically so the
-// slugs/free-tier status can be corrected via env var without a code change
-// if OpenRouter's free lineup rotates.
-export const GLM_MODEL = process.env.GLM_MODEL || "z-ai/glm-4.6";
-export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "z-ai/glm-4.5-air:free")
+// GEMINI_FALLBACK_MODELS above.
+// UPDATED 2026-08-27: account's OpenRouter credit balance is exhausted and
+// is deliberately NOT being topped up (explicit call, not a temp workaround),
+// so GLM_MODEL now defaults to z-ai/glm-4.5-air:free (the best/only
+// consistently-free GLM slug confirmed live on OpenRouter as of this date --
+// z-ai/glm-4.6/glm-4.5 are paid-only) rather than a paid model that will
+// just 402 immediately on every call. Previously GLM_MODEL defaulted to the
+// paid z-ai/glm-4.6 with :air:free as a fallback-on-429 entry; that ordering
+// only made sense when the account had paid headroom. Re-flip this (and
+// restore a paid fallback cascade) once/if credits are added back --
+// verify current free-tier slugs against https://openrouter.ai/models
+// before assuming this one is still free, since availability rotates.
+export const GLM_MODEL = process.env.GLM_MODEL || "z-ai/glm-4.5-air:free";
+export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
