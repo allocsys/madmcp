@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../connectors/glm/adapter.js";
+import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../connectors/openai_shape/adapter.js";
 
 // This is the highest-risk file in the whole GLM provider switch (plan.md
 // step 3): a subtle role/shape mismatch here would silently corrupt
@@ -11,7 +11,7 @@ import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../connectors
 // functionResponse part with plain text in the SAME turn -- see
 // agent_delegate.js's header).
 
-describe("glm/adapter.js — toOpenAIMessages", () => {
+describe("openai_shape/adapter.js — toOpenAIMessages", () => {
   it("converts a task-only first turn to a plain user message", () => {
     const contents = [{ role: "user", parts: [{ text: "Task: investigate the thing" }] }];
     const messages = toOpenAIMessages(contents);
@@ -91,7 +91,7 @@ describe("glm/adapter.js — toOpenAIMessages", () => {
   });
 });
 
-describe("glm/adapter.js — toOpenAITools", () => {
+describe("openai_shape/adapter.js — toOpenAITools", () => {
   const FUNCTION_DECLARATIONS = [{
     functionDeclarations: [
       { name: "github_read_file", description: "Read a file.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
@@ -123,7 +123,7 @@ describe("glm/adapter.js — toOpenAITools", () => {
   });
 });
 
-describe("glm/adapter.js — fromOpenAIChoice", () => {
+describe("openai_shape/adapter.js — fromOpenAIChoice", () => {
   it("converts plain assistant text into a Gemini-shaped candidate with a text part", () => {
     const choice = { message: { role: "assistant", content: "The answer is 42." }, finish_reason: "stop" };
     const candidate = fromOpenAIChoice(choice);
@@ -186,7 +186,7 @@ describe("glm/adapter.js — fromOpenAIChoice", () => {
   });
 });
 
-describe("glm/adapter.js — round trip: toOpenAIMessages -> (simulated model turn) -> fromOpenAIChoice", () => {
+describe("openai_shape/adapter.js — round trip: toOpenAIMessages -> (simulated model turn) -> fromOpenAIChoice", () => {
   it("produces a candidate structurally identical to what geminiChat would have returned for an equivalent turn", () => {
     // Simulates one full step of agent_delegate.js's loop: an existing
     // Gemini-shaped conversation is adapted to OpenAI messages, a synthetic
