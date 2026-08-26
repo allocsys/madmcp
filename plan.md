@@ -115,25 +115,52 @@ a `DEFAULT_LLM_PROVIDER` flip). Findings so far:
   wasted calls. GLM: more thorough (pulled actual commit diffs unprompted
   beyond what was asked), but noisier -- more steps, one code-quoting typo
   in one trial, and one run with an unrelated/noisy tool call.
-- **Head-to-head on a harder, open-ended task:** inconclusive so far --
-  Gemini fell into its own redundant-repeat pattern (re-reading/re-searching
-  the same thing across several steps) before hitting a real Gemini
-  free-tier quota exhaustion (429, recorded cooldown); GLM's run hit the
-  new arg-validation error on `github_search_code` correctly, but **did not
-  self-correct after 4 identical corrective error messages** -- a real,
-  distinct finding from the earlier silent-failure bug -- before the run
-  hit an OpenRouter in-flight-credit 402. Neither run reached a final
-  answer; needs a retry once quota/credits reset.
+- **Head-to-head on a harder, open-ended task -- first attempt:**
+  inconclusive. Gemini fell into its own redundant-repeat pattern
+  (re-reading/re-searching the same thing across several steps) before
+  hitting a real Gemini free-tier quota exhaustion (429, recorded
+  cooldown); GLM's run hit the new arg-validation error on
+  `github_search_code` correctly, but **did not self-correct after 4
+  identical corrective error messages** -- a real, distinct finding from
+  the earlier silent-failure bug -- before the run hit an OpenRouter
+  in-flight-credit 402. Neither run reached a final answer.
+- **Same task, retried after a wait:** Gemini's cooldown had cleared and
+  it completed (13 steps) -- but **gave a verifiably wrong answer** on
+  half the task. It correctly audited all 6 sampled tools' schema-vs-
+  execute() consistency (no mismatches, matches direct reading of the
+  file), but incorrectly claimed `validateFunctionArgs()` is "only
+  invoked inside specific execution/fallback code paths" and not applied
+  before every `execute()` call. That's false: there is exactly one
+  `execute()` call site in the whole loop, and validation runs
+  unconditionally before it. Gemini had the full file in context from its
+  very first tool call and still got this wrong -- it appears to have
+  trusted a later, narrower `github_search_code` result (which only
+  surfaced the function's definition line, not the call site) over the
+  complete file it had already read. A real accuracy failure, not an
+  infrastructure one -- worth weighing against Gemini's "tighter/more
+  disciplined" showing on the earlier, easier trials.
+  GLM's retry on the same resume hit the identical OpenRouter
+  in-flight-credit 402 again, with no improvement -- across two attempts
+  several minutes apart this now looks like genuine account credit
+  exhaustion rather than transient in-flight contention as the error
+  message suggests. GLM's run still never reached a final answer for this
+  task.
 - **Confirmed:** `z-ai/glm-4.5-air` (paid) works end-to-end for
   multi-turn tool-calling; the `:free` slug in `GLM_FALLBACK_MODELS` was
   found retired by OpenRouter during testing and should be revisited.
 
-**Next steps:** retry the harder comparative task once Gemini's cooldown
-clears and OpenRouter credits settle; decide whether GLM's failure to act
-on repeated corrective feedback needs its own mitigation (e.g. a stronger
-nudge, or counting invalid-arg repeats toward the existing stuck-loop
-counter) before it's considered validated for a `DEFAULT_LLM_PROVIDER`
-flip.
+**Next steps:** OpenRouter credits need to actually be topped up (not just
+waited out) before GLM can complete the harder comparative task at all --
+check the account balance at https://openrouter.ai/settings/credits rather
+than retrying blind. Once GLM can complete a run, get a matched pair of
+answers to this same task. Separately, Gemini's validateFunctionArgs
+factual error is worth a follow-up run on a fresh task to see whether it
+repeats -- if verifying a specific implementation detail against a file
+it already read is unreliable, that's a real quality concern regardless of
+how the provider comparison shakes out. Also still open: whether GLM's
+failure to act on repeated corrective feedback needs its own mitigation
+(e.g. counting invalid-arg repeats toward the existing stuck-loop counter)
+before it's considered validated for a `DEFAULT_LLM_PROVIDER` flip.
 
 ## Designer notes (future phase-2 port, not this plan's scope)
 
