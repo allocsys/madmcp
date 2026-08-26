@@ -220,13 +220,20 @@ serves `read_file`/`validate`, never `write_file`.
 
 ## Remaining open questions
 
-- GLM's `:free` fallback slug is retired -- `GLM_FALLBACK_MODELS` needs a
-  working free-tier entry (or should just cascade to other paid slugs) --
-  confirm current options at https://openrouter.ai/models.
-- OpenRouter credit sizing: initial testing has run into 402s twice
-  (context-cap and in-flight-concurrency variants) -- worth a real budget
-  check before heavier automated use.
+- **OpenRouter has no credit and the owner is declining to add any
+  (2026-08-27) -- GLM is parked, not actively being fixed.** Not a slug
+  problem: `z-ai/glm-4.5-air:free` is confirmed live and genuinely free on
+  a funded account, but this account's zero balance blocks it anyway (see
+  "Current status" update above for the three distinct error signatures).
+  Whenever this is revisited: re-verify `z-ai/glm-4.5-air:free` is still
+  the right free slug (availability rotates), pick a paid fallback cascade
+  again once there's headroom to fall back to, and re-run the smoke test
+  in "Current status" before assuming it's fixed.
 - Whether GLM's poor recovery from repeated corrective tool-call errors
   (see "Current status") is a `provider: "glm"` blocker for open-ended
   investigation tasks specifically, or just needs the stuck-loop guard
-  extended to cover it.
+  extended to cover it -- untestable until GLM is usable again.
+- The head-to-head comparative testing (rollout step 2) is effectively
+  paused: it needs both providers completing runs, and only Gemini
+  currently can. Gemini's standalone accuracy issue (validateFunctionArgs
+  factual error) can still be investigated on its own in the meantime.
