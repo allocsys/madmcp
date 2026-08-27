@@ -987,28 +987,42 @@ const SYSTEM_PREAMBLE =
   "code path) that changes what the match actually means; a full read does not have that limitation. " +
   "Do not let a later, narrower result override an earlier, complete one just because it came later.";
 
-// One-time, no-tools self-check appended after the model's first draft final
-// answer (see the verification-pass logic in the loop below). Targets a
-// specific, observed failure (plan.md, 2026-08-27: "gave a verifiably wrong
-// answer... appears to have trusted a later, narrower github_search_code
-// result... over the complete file it had already read") that the
-// SYSTEM_PREAMBLE rules above are meant to prevent DURING synthesis -- this
-// is the backstop for when they don't: a forced second pass, after the
-// draft answer already exists as concrete text to check claim-by-claim,
-// rather than trusting the first synthesis attempt to have applied its own
-// instructions correctly under a single pass.
+// One-time self-check appended after the model's first draft final answer
+// (see the verification-pass logic in the loop below). Targets a specific,
+// observed failure (plan.md, 2026-08-27: "gave a verifiably wrong answer...
+// appears to have trusted a later, narrower github_search_code result...
+// over the complete file it had already read") that the SYSTEM_PREAMBLE
+// rules above are meant to prevent DURING synthesis -- this is the backstop
+// for when they don't: a forced second pass, after the draft answer already
+// exists as concrete text to check claim-by-claim, rather than trusting the
+// first synthesis attempt to have applied its own instructions correctly
+// under a single pass.
+//
+// Tools stay available this turn (see withholdTools in the loop below,
+// 2026-08-27 fix) -- an earlier no-tools version of this prompt asked the
+// model to catch its own mechanical mistakes purely by re-reading scrollback
+// from memory, which is the same failure mode in miniature: a live test
+// (plan.md "Live verification test", runs 2-3) found it confidently
+// re-asserting the WRONG one of two similar constants during a no-tools
+// verification pass, rather than catching the error. Explicitly telling the
+// model to re-fetch when unsure, instead of just re-reading its own
+// transcript, is the actual fix.
 const VERIFICATION_PROMPT =
-  "[SYSTEM NOTE -- verification pass, no tools available this turn] Before your answer above is " +
-  "treated as final, check it against the evidence you already gathered in this conversation. Go back " +
-  "through the RAW tool results already in this conversation -- not your own summary of them -- and " +
-  "confirm every specific factual claim in your answer (file paths, line numbers, function/variable " +
-  "names, log entries, statuses, dates, verdicts like 'consistent' or 'stale') is directly supported by " +
-  "something you actually retrieved. If a full/direct read of a file or page conflicts with a narrower " +
-  "or derived result (a search snippet, a grep match) that your answer relied on, the full/direct read " +
-  "is the more authoritative source -- prefer it and correct your answer accordingly. If you find " +
-  "anything unsupported or contradicted, fix it now. Respond with the corrected final answer (or the " +
-  "same answer, if it already holds up under this check) as plain text only -- you cannot call any " +
-  "functions this turn.";
+  "[SYSTEM NOTE -- verification pass] Before your answer above is treated as final, check it against " +
+  "the evidence you already gathered in this conversation. Go back through the RAW tool results already " +
+  "in this conversation -- not your own summary of them -- and confirm every specific factual claim in " +
+  "your answer (file paths, line numbers, function/variable names, log entries, statuses, dates, " +
+  "verdicts like 'consistent' or 'stale') is directly supported by something you actually retrieved. " +
+  "You have tool access again this turn -- if you are not certain a claim is correct from what's " +
+  "already in the transcript (for example, you are recalling a variable/constant name or an exact " +
+  "condition rather than seeing it verbatim above), re-read the specific file or re-run the specific " +
+  "search rather than guessing from memory. Do not rely on remembering scrollback further back in this " +
+  "conversation when you can just look again. If a full/direct read of a file or page conflicts with a " +
+  "narrower or derived result (a search snippet, a grep match) that your answer relied on, the " +
+  "full/direct read is the more authoritative source -- prefer it and correct your answer accordingly. " +
+  "If you find anything unsupported or contradicted, fix it now. Once you are done checking, respond " +
+  "with the corrected final answer (or the same answer, if it already holds up under this check) as " +
+  "plain text with no further function calls.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
