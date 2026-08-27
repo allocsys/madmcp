@@ -1,19 +1,32 @@
 # Plan: Add GLM (via OpenRouter) as a switchable alternative to Gemini
 
-**STATUS (2026-08-27): GLM/OpenRouter implementation shipped and deployed,
-but currently non-functional (see "Current status" -- account has no
-credit and none is being added). Groq has been added as a third
-`delegate_agent` provider (PR #106, merged to main) -- steps 1-8 done,
-doc updates done. STEP 9 (live smoke test) IS NOW DONE, and the result is
-not the clean win hoped for: this account's Groq free tier is genuinely
-not balance-gated (unlike OpenRouter), but its 8000 TPM/model limit is
+**STATUS (2026-08-27, latest): Groq TPM-ceiling work (options 1-3 logged
+in "Groq live smoke test findings" below) is PARKED BY EXPLICIT USER
+DECISION, not resolved.** `provider: "groq"` and `provider: "glm"` both
+stay wired on main exactly as they were (opt-in only, `DEFAULT_LLM_PROVIDER`
+unchanged, no code removed) -- nobody should spend more time on the lean-
+schema/pacing/paid-tier options for Groq unless a future session is
+explicitly asked to revisit it. Effort shifted instead to a Gemini-side
+accuracy problem that's real regardless of the Groq/GLM situation: see
+"Gemini harness fix -- self-verification pass" below for what changed and
+why. **Practical effect: Gemini remains the only provider anyone should
+route real `delegate_agent` work through right now** -- same conclusion
+as before, but now because GLM/Groq work is paused rather than because
+Groq's TPM ceiling is considered unfixable in principle.
+
+**STATUS (2026-08-27, earlier same day, preserved for history): GLM/
+OpenRouter implementation shipped and deployed, but currently
+non-functional (see "Current status" -- account has no credit and none is
+being added). Groq was added as a third `delegate_agent` provider (PR
+#106, merged to main) -- steps 1-8 done, doc updates done. Step 9 (live
+smoke test) surfaced that this account's Groq free tier is genuinely not
+balance-gated (unlike OpenRouter), but its 8000 TPM/model limit is
 tripped almost immediately by `delegate_agent`'s own ~30-tool schema size
 -- see "Groq live smoke test findings" below. A single no-tool call works
-fine; any real tool-using investigation fails by step 1-2. `provider:
-"groq"` is live on main and technically functional, but not yet usable
-for its actual intended workload on this account without further work
-(see findings section for options). GLM code stays in place (not being
-ripped out) in case OpenRouter credit is ever added later.**
+fine; any real tool-using investigation fails by step 1-2. Three follow-up
+options were identified and partially researched (paid-tier TPM, a leaner
+groq-specific tool schema, TPM-window-aware pacing) but NOT implemented --
+see the now-superseded status paragraph above for why.**
 
 ## Why
 
