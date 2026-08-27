@@ -30,7 +30,7 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { geminiChat } from "../gemini/client.js";
+import { providerChat } from "../llm/router.js";
 import { readFile, writeFile, validate as validateFile } from "./designer_tool_functions.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./designer_checkpoint.js";
 import { isRedisConfigured } from "../gemini/cooldown.js";
@@ -309,7 +309,7 @@ export async function runDesignAgent({ owner, repo, branch, task, max_steps = FR
 
     let candidate;
     try {
-      candidate = await geminiChat(contents, { tools: withholdTools ? undefined : declarations });
+      candidate = await providerChat(contents, { tools: withholdTools ? undefined : declarations });
     } catch (err) {
       await saveState(step - 1);
       const redisOk = isRedisConfigured();
