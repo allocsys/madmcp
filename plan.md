@@ -678,15 +678,16 @@ Neither of those needed to change for the router swap itself, since
 `providerChat` is a drop-in replacement at the single call site -- they'd
 only matter for changes to the loop's own state-tracking logic.
 
+## Closed
+
+- **Gemini confident-wrong-claim accuracy pattern (Runs 1-14) -- CLOSED
+  2026-08-27, owner decision.** See the STATUS block at the top of this
+  file for the full record, including the one untested caveat
+  (checkpoint-resume-specific fabrication) kept on file in case this
+  needs reopening later.
+
 ## Remaining open questions (active -- no external blocker)
 
-- Gemini: repeat the heavy-task live verification test a few more times
-  to establish how often the verification pass / structural line-quote
-  check fails to catch a confident-wrong relationship claim (see Runs
-  2-8) -- current status after Run 8 is "meaningfully reduces but does
-  not close" the pattern, and it now generalizes beyond the original
-  verification-pass-gate question to at least one other mechanism (dedup
-  cache scope, Run 8).
 - Structural line-quote check (commit `4ff4260`'s follow-up): confirmed
   live (Run 8) that it does not catch a fabricated *relationship between
   two individually-true facts* when neither fact is itself phrased as a
