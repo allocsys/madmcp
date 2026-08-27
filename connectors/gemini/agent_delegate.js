@@ -1226,6 +1226,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // again rather than silently re-entering normal tool-use and re-drafting
   // a whole new answer from scratch.
   let pendingVerification = false;
+  // Bounds the NEW structural line-quote recheck (see LINE_QUOTE mechanism
+  // above) to exactly one extra round, same single-fire pattern as
+  // pendingVerification -- once a corrective round has been sent for a
+  // failed line-quote check, whatever comes back is accepted as final
+  // regardless of whether it still has issues, so this can never loop more
+  // than one extra step beyond the existing verification pass. Persisted
+  // across resumes below for the same reason pendingVerification is.
+  let structuralRecheckUsed = false;
   // How many entries of `contents` have already been pushed to the Redis
   // checkpoint list (fix #5) -- saveCheckpoint only ever needs the SLICE
   // added since the last checkpoint, not the whole array, so this cursor is
