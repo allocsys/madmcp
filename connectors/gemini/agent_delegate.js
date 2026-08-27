@@ -1026,6 +1026,15 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   let repeatCounts = new Map();
   let resultCache = new Map();
   let consecutiveAllRepeatSteps = 0;
+  // Verification pass (2026-08-27, see VERIFICATION_PROMPT's comment above
+  // for the specific failure it targets): true once the model has produced
+  // a draft final answer and been sent back for one no-tools self-check
+  // round before that answer is trusted. Persisted across resumes (below)
+  // so a run that dies mid-verification -- e.g. the verification call
+  // itself hits a transient 429/503 -- resumes into the verification turn
+  // again rather than silently re-entering normal tool-use and re-drafting
+  // a whole new answer from scratch.
+  let pendingVerification = false;
   // How many entries of `contents` have already been pushed to the Redis
   // checkpoint list (fix #5) -- saveCheckpoint only ever needs the SLICE
   // added since the last checkpoint, not the whole array, so this cursor is
@@ -1058,6 +1067,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // `checkpoint.task || task` below.
     repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
     consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
+    // Checkpoints saved before this field existed won't have it -- default
+    // to false (normal tool-use resumes as before), same defensive pattern
+    // as every other field restored here.
+    pendingVerification = checkpoint.pendingVerification || false;
     // Prefer the checkpoint's own record of the original task -- `task` is
     // genuinely ignored on a live resume (see file header), so this is the
     // only reliable source once a run is past step 1. Checkpoints saved
