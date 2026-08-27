@@ -6,8 +6,11 @@ provider anyone should route real `delegate_agent` work through.
 exactly as built (opt-in only, `DEFAULT_LLM_PROVIDER` unchanged, no code
 removed) but are both blocked for different reasons (see "Provider
 status" below). Effort has shifted to a Gemini accuracy problem
-(self-verification pass) and today's first live test of it on a heavy,
-open-ended task (see "Live verification test" at the end of this file).
+(self-verification pass + structural line-quote check). Repeated live
+testing (Runs 1-8, see "Live verification test") shows both fixes help
+but don't close the confident-wrong-relationship pattern -- Run 8 shows
+it generalizing beyond the original verification-pass-gate question to
+at least one other mechanism (dedup cache scope).
 
 ## Why
 
@@ -324,37 +327,19 @@ text-only nudges for loop-control guarantees.
 ## Live verification test (2026-08-27, post-merge)
 
 First live `delegate_agent` run (provider `gemini`, `max_steps: 25`)
-against a genuinely heavy, open-ended, multi-file task (trace provider
-routing + dedup + verification-pass mechanics across several source
-files, with 4 specific mechanical questions to answer). Findings:
+against a genuinely heavy, open-ended, multi-file task (4 planted
+mechanical questions). This is "Run 1" in the table below. Findings:
 
-- **Resume path exercised for real:** hit a transient Gemini 503 ("high
-  demand") at step 10. `resume_run_id` continued the checkpoint cleanly
-  with no lost work -- first live (non-mocked) confirmation this works
-  under a genuine mid-run provider failure, not just a test mock.
-- **Verification pass fired:** final step count (11) exceeded the
-  visible tool-call count (9), consistent with a draft-answer step plus
-  one no-tools verification step -- first live evidence the pass is
-  actually executing on a real open-ended task, not just the earlier
-  narrow/easy reproduction.
-- **Dedup fix confirmed live:** the model read the same file 5 times;
-  3 of those were exact-signature repeats and were correctly served from
-  cache. The 4th variant (`ref: "main"` right after a no-ref call) was
-  correctly NOT collapsed, per the deliberate design in the dedup section
-  above -- but it's still wasted effort on the model's part (no reason to
-  re-request the same file with an explicit `"main"` ref immediately
-  after fetching it with no ref). Not a bug, but a real efficiency gap
-  the dedup fix doesn't and isn't meant to cover.
-- **Answer quality -- mixed, and notably not a repeat of the original
-  failure mode:** of 4 planted mechanical questions, 2 were answered
-  correctly and specifically (citing the actual sort-before-stringify
-  line; correctly explaining named branches aren't collapsed). The other
-  2 (whether `validateFunctionArgs()` is unconditional before the single
-  `execute()` call site; the exact skip condition for the verification
-  pass) got vague, hedged answers instead of a precise confirmation. This
-  is better than the original bug (confidently wrong) but still short of
-  what the task asked for. **One run is not enough to call this a
-  trend** -- worth repeating.
+- **Resume path exercised for real:** hit a transient Gemini 503 at step
+  10; `resume_run_id` continued the checkpoint cleanly -- first live
+  (non-mocked) confirmation resume survives a genuine mid-run failure.
+- **Verification pass fired:** step count exceeded visible tool-call
+  count, consistent with a draft step plus one no-tools verification step.
+- **Dedup fix confirmed live:** 3 exact-signature repeats correctly
+  served from cache; a `ref:"main"`-after-no-ref variant correctly NOT
+  collapsed (deliberate design), though still wasted model effort.
+- **Answer quality:** 2/4 correct and specific, 2/4 hedged rather than
+  wrong -- see table below for how this evolved over later runs.
 
 ### Runs 2 and 3 (same task, re-run against `gemini`)
 
