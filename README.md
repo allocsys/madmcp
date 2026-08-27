@@ -81,6 +81,7 @@ Need connector tokens first? **[→ Get API keys](./docs/API_KEYS.md)** — one-
 [![Jules Key](https://img.shields.io/badge/Jules-API_Key-4285F4?style=flat-square&logo=googlegemini)](https://jules.google.com/settings#api)
 [![Exa Key](https://img.shields.io/badge/Exa-API_Key-000000?style=flat-square)](https://dashboard.exa.ai/api-keys)
 [![OpenRouter Key](https://img.shields.io/badge/OpenRouter-API_Key-6467F2?style=flat-square)](https://openrouter.ai/keys)
+[![Groq Key](https://img.shields.io/badge/Groq-API_Key-F55036?style=flat-square)](https://console.groq.com/keys)
 [![Upstash Redis](https://img.shields.io/badge/Upstash-Redis-00E9A3?style=flat-square)](https://console.upstash.com/redis)
 [![Generate Secret](https://img.shields.io/badge/Generate-MCP__SHARED__KEY-333333?style=flat-square)](https://generate-secret.vercel.app/32)
 
@@ -176,20 +177,25 @@ any in the first place.
 
 `delegate_agent` — hand an open-ended, multi-step, read-only investigation
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
-the last week") to Gemini (default) or GLM instead of making 5-10 separate
-manual tool calls. The model runs its own loop server-side across GitHub,
-Cloudflare, and Notion (bounded by `max_steps`, default 6, hard cap 20) and
-returns one synthesized answer. Falls through an ordered model cascade
-(`GEMINI_MODEL` → `GEMINI_FALLBACK_MODELS`, or for GLM `GLM_MODEL` →
-`GLM_FALLBACK_MODELS` across every key in `OPENROUTER_API_KEYS`) on rate
-limits, with Redis-backed per-model cooldown so already-limited models are
-skipped rather than retried. An explicit `provider: "gemini" | "glm"` arg
-picks which one backs a given call (default: `DEFAULT_LLM_PROVIDER`, itself
-defaulting to `"gemini"`) — the two are interchangeable in capability, not
-just cost/speed; try `"glm"` if Gemini's output has been unreliable for a
-given task. Ignored on a resume (the provider that started the run is
-always reused, so a checkpointed conversation can't be corrupted by
-resuming it on a different provider's wire format).
+the last week") to Gemini (default), GLM, or Groq instead of making 5-10
+separate manual tool calls. The model runs its own loop server-side across
+GitHub, Cloudflare, and Notion (bounded by `max_steps`, default 6, hard cap
+20) and returns one synthesized answer. Falls through an ordered model
+cascade (`GEMINI_MODEL` → `GEMINI_FALLBACK_MODELS`, `GLM_MODEL` →
+`GLM_FALLBACK_MODELS` across every key in `OPENROUTER_API_KEYS`, or
+`GROQ_MODEL` → `GROQ_FALLBACK_MODELS` across every key in `GROQ_API_KEYS`)
+on rate limits, with Redis-backed per-model cooldown so already-limited
+models are skipped rather than retried. An explicit
+`provider: "gemini" | "glm" | "groq"` arg picks which one backs a given
+call (default: `DEFAULT_LLM_PROVIDER`, itself defaulting to `"gemini"`) —
+all three are interchangeable in capability, not just cost/speed; try
+`"glm"` or `"groq"` if Gemini's output has been unreliable for a given
+task. GLM (via OpenRouter) is currently non-functional on a zero-credit
+account — see `docs/API_KEYS.md` — so Groq is the practical free-tier
+alternative to Gemini for now (request/token-rate-limited rather than
+credit-balance-gated, no card required). Ignored on a resume (the provider
+that started the run is always reused, so a checkpointed conversation
+can't be corrupted by resuming it on a different provider's wire format).
 
 `delegate_research` — web research, in one of two mutually-exclusive modes
 selected by which args are passed:
@@ -299,6 +305,10 @@ All tokens are optional independently — a connector's tools fail at call time
 | `GLM_MODEL` | Primary GLM model (via OpenRouter) for `provider: "glm"` delegation (default `z-ai/glm-4.6`) |
 | `GLM_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s, cascaded per `OPENROUTER_API_KEYS` key (default `z-ai/glm-4.5-air:free`) |
 | `GLM_REQUEST_TIMEOUT_MS` | Defensive ceiling on a single GLM/OpenRouter call (default `55000`) |
+| `GROQ_API_KEYS` | Comma-separated Groq API key(s) — required for `delegate_agent`'s `provider: "groq"` mode, unused otherwise; free-tier is request/token-rate-limited, not credit-balance-gated like OpenRouter/GLM |
+| `GROQ_MODEL` | Primary Groq model for `provider: "groq"` delegation (default `openai/gpt-oss-120b`, a production model) |
+| `GROQ_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s, cascaded per `GROQ_API_KEYS` key (default `qwen/qwen3.6-27b` — stronger on benchmarks but a Groq **preview** model, kept as fallback rather than primary for availability reasons) |
+| `GROQ_REQUEST_TIMEOUT_MS` | Defensive ceiling on a single Groq call (default `55000`) |
 | `DEFAULT_LLM_PROVIDER` | Which provider `delegate_agent` uses when a call omits `provider` (default `gemini`) |
 | `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) | Optional — persists per-model rate-limit cooldowns and `delegate_agent` resume checkpoints across invocations; fails open if neither pair is set. Either naming works — the raw Upstash Marketplace integration names them `UPSTASH_REDIS_REST_*`, Vercel's own "KV" product (also Upstash-backed) names them `KV_REST_API_*`. |
 | `DEFAULT_OWNER` | Default GitHub owner when omitted from a call (defaults to `allocsys`) |
