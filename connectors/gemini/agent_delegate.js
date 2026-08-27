@@ -199,22 +199,22 @@ function simpleLineDiff(aText, bText) {
 const FUNCTIONS = [
   {
     name: "github_read_file",
-    description: "Read a file's full contents from a GitHub repository.",
+    description: "Read a file's contents from a GitHub repository. Called with no char_offset/char_limit, returns the whole file up to 30,000 chars; if longer, returns the first 30,000 chars plus the file's total length and instructions to pass char_offset yourself to keep reading -- there is no separate chunked/paginated tool, this same function does both. Pass char_offset/char_limit directly to jump to or page through a specific window (e.g. after github_search_code points at a line deep in a large file) instead of always starting from char 0.",
     parameters: {
       type: "object",
       properties: {
-        owner: { type: "string", description: `Repository owner (default "${DEFAULT_OWNER}" if omitted)` },
-        repo:  { type: "string", description: "Repository name" },
-        path:  { type: "string", description: "File path within the repo" },
-        ref:   { type: "string", description: "Branch, tag, or commit SHA (default: repo default branch)" },
+        owner:       { type: "string", description: `Repository owner (default "${DEFAULT_OWNER}" if omitted)` },
+        repo:        { type: "string", description: "Repository name" },
+        path:        { type: "string", description: "File path within the repo" },
+        ref:         { type: "string", description: "Branch, tag, or commit SHA (default: repo default branch)" },
+        char_offset: { type: "number", description: "Character offset to start reading from. Omit for default behavior (whole file, or its first 30,000 chars if longer)." },
+        char_limit:  { type: "number", description: "Maximum number of characters to return (default 30000, max 100000). Ignored if char_offset is also omitted." },
       },
       required: ["repo", "path"],
     },
-    execute: async ({ owner = DEFAULT_OWNER, repo, path, ref }) => {
+    execute: async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
-      // Keep the loop's own context bounded -- this is server-side content
-      // feeding back into Gemini's next turn, not returned to the caller.
-      return content.length > 30000 ? content.slice(0, 30000) + "\n...[truncated]" : content;
+      return sliceFileContentForModel(content, path, { char_offset, char_limit });
     },
   },
   {
