@@ -987,6 +987,57 @@ const SYSTEM_PREAMBLE =
   "code path) that changes what the match actually means; a full read does not have that limitation. " +
   "Do not let a later, narrower result override an earlier, complete one just because it came later.";
 
+// Mechanical-claim extraction (2026-08-27, fix for the confident-wrong-
+// constant failure mode found in live testing -- see plan.md "Live
+// verification test", runs 3-4: the model asserted `HARD_MAX_STEPS` gated a
+// condition when the real gate was `cappedSteps`, confidently and with no
+// hedge, and the existing text-only VERIFICATION_PROMPT ("if you're not
+// certain, re-check") did not catch it because the model WAS certain -- just
+// wrong. "Are you sure?" cannot fix miscalibrated confidence; "can you paste
+// the exact line?" can. This turns that into a checkable, structural gate
+// instead of a request the model can silently skip.
+//
+// Deliberately a cheap regex pre-filter, not a real parser: it flags two
+// shapes of mechanical claim worth double-checking --
+//   (a) SCREAMING_SNAKE_CASE identifiers (constants/thresholds -- exactly
+//       the shape of the HARD_MAX_STEPS/cappedSteps confusion), and
+//       camelCase/PascalCase multi-word identifiers of the kind used for
+//       variables/functions in this codebase, and
+//   (b) backtick-quoted inline code spans, since the model already uses
+//       those for exactly this class of claim in its own answers (see this
+//       file's own comments/prompts for the convention).
+// False positives (an English word that happens to be ALL_CAPS, a backtick
+// span that's genuinely just a value already quoted correctly) are fine --
+// the cost of over-flagging is one extra check against text already in the
+// transcript, not a wrong answer.
+const IDENTIFIER_CLAIM_PATTERN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b|\b[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*\b|`[^`\n]+`/g;
+
+function extractMechanicalClaims(answerText) {
+  const claims = new Set();
+  for (const m of answerText.matchAll(IDENTIFIER_CLAIM_PATTERN)) {
+    const raw = m[0].startsWith("`") ? m[0].slice(1, -1) : m[0];
+    // Skip trivially short/common matches that are noise, not claims worth
+    // re-verifying (e.g. a stray 2-letter camelCase-looking fragment).
+    if (raw.length >= 4) claims.add(raw);
+  }
+  return [...claims];
+}
+
+// Checks each extracted claim against the RAW tool-result text already
+// gathered this run (functionResponse parts in `contents`) -- deliberately
+// NOT against the model's own prior turns/text, since matching against its
+// own earlier assertions would just let a wrong claim "verify" itself by
+// citing itself. A claim is "verified" only if it appears verbatim in
+// something an actual tool returned.
+function findUnverifiedClaims(claims, contents) {
+  const rawToolText = contents
+    .flatMap((turn) => turn.parts || [])
+    .filter((p) => p.functionResponse)
+    .map((p) => p.functionResponse.response?.result || "")
+    .join("\n");
+  return claims.filter((claim) => !rawToolText.includes(claim));
+}
+
 // One-time self-check appended after the model's first draft final answer
 // (see the verification-pass logic in the loop below). Targets a specific,
 // observed failure (plan.md, 2026-08-27: "gave a verifiably wrong answer...
@@ -1305,8 +1356,20 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // (step < cappedSteps) still bounds worst-case cost, but this makes
       // the intent explicit -- verify once, then trust the result.
       if (answer && !withholdTools && !pendingVerification && step < cappedSteps) {
+        // Mechanical-claim citation check (see extractMechanicalClaims'
+        // comment above): identify specific identifier/constant/threshold-
+        // shaped claims in the draft that do NOT appear verbatim in any raw
+        // tool result gathered so far, and name them explicitly in the
+        // verification prompt rather than leaving "check your claims" as a
+        // generic instruction the model can satisfy by just re-reading its
+        // own draft and feeling confident about it again.
+        const mechanicalClaims = extractMechanicalClaims(answer);
+        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents);
+        const claimNote = unverifiedClaims.length
+          ? `\n\n[SPECIFIC ITEMS TO CHECK] The following identifier(s)/snippet(s) in your draft answer do not appear verbatim in any raw tool result you've fetched so far this run: ${unverifiedClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: re-read or re-search the specific file/location it's claimed to come from and confirm it exact-matches what's actually there, THEN either (a) keep the claim only if you can now quote it verbatim from a fresh tool result, or (b) correct it if the fresh read shows something different. Do not restate any of these unchanged based on memory or on the fact that you already wrote it once -- that is exactly the failure mode this check exists to catch. (Note: some of these may be false positives -- ordinary words, or claims already correctly quoted -- but each one still needs a fresh check, not a guess about which category it's in.)`
+          : "";
         contents.push({ role: "model", parts });
-        contents.push({ role: "user", parts: [{ text: VERIFICATION_PROMPT }] });
+        contents.push({ role: "user", parts: [{ text: VERIFICATION_PROMPT + claimNote }] });
         pendingVerification = true;
         await saveCheckpoint(runId, {
           newContents: contents.slice(contentsCheckpointedUpTo),
