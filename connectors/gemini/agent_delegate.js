@@ -1270,6 +1270,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // to false (normal tool-use resumes as before), same defensive pattern
     // as every other field restored here.
     pendingVerification = checkpoint.pendingVerification || false;
+    // Same defensive pattern -- checkpoints saved before this field existed
+    // won't have it -- default to false (no structural recheck round used
+    // yet), same as pendingVerification above.
+    structuralRecheckUsed = checkpoint.structuralRecheckUsed || false;
     // Prefer the checkpoint's own record of the original task -- `task` is
     // genuinely ignored on a live resume (see file header), so this is the
     // only reliable source once a run is past step 1. Checkpoints saved
