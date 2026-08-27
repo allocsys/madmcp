@@ -224,7 +224,7 @@ and final answer to a Notion page under a fixed Gemini root page
 (`log_to_notion`, default `false`).
 
 ### GitHub
-File/repo ops: `read_file`, `read_file_chunked`, `get_file_at_commit`, `list_directory`,
+File/repo ops: `read_file` (accepts optional `char_offset`/`char_limit` to page through large files), `get_file_at_commit`, `list_directory`,
 `get_file_tree`, `create_repo_file`, `edit_file`, `overwrite_files`, `rename_file`,
 `delete_file`, `diff_files`
 
