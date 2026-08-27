@@ -211,89 +211,50 @@ bounded structural round, even though a token-level check alone would pass
 it; also confirms `LINE_QUOTE` markers never leak into a returned answer.
 Full suite: 24 files, 362 tests, all green.
 
-### Run 6 (2026-08-27, re-run against `gemini` on the structural-line-quote build)
+### Runs 6-7 (2026-08-27, structural-line-quote build, reconstructed six-question task)
 
-First live re-test against this build. Note on comparability: the exact
-verbatim task text used in Runs 1-5 was not available when this run was
-kicked off (it lived in an earlier chat session, referenced but not
-quoted in the handoff that led to this fix), so this run used a
-reconstructed task asking the same six mechanical questions the Runs
-table already tracks, worded fresh rather than replayed verbatim. Treat
-as comparable in substance, not a byte-for-byte repeat.
+Exact verbatim Runs 1-5 task text wasn't available (lived in an earlier
+chat session), so Runs 6-7 used a reconstructed task asking the same six
+questions -- comparable in substance, not byte-for-byte. **Both fully
+clean**: all six correct in both runs, including question (2), the exact
+gate that failed in Runs 3-5 -- verbatim match `answer && !withholdTools
+&& !pendingVerification && step < cappedSteps`. Run 7 additionally hit
+and cleanly resumed through a transient Gemini 503 at step 11 (second
+live resume confirmation), and had every claim independently re-checked
+against fetched source rather than trusting the run's own citations --
+all six held up.
 
-**Result: all six questions answered correctly, including question (2)
--- the exact verification-pass gate condition -- which was the specific
-question that came back confidently wrong in Runs 3, 4, and 5.** Verbatim
-match against source: `answer && !withholdTools && !pendingVerification
-&& step < cappedSteps`. Question (6) (asked fresh this round, on the
-structural line-quote mechanism itself) was also answered correctly:
-named `extractConditionalClaims`/`extractLineQuotes`/
-`lineIsVerbatimInToolResults` and described the single-bounded-round
-behavior accurately. Commit `4ff4260`'s follow-up (this fix) was also
-correctly confirmed present and test-covered.
+**Tally after Runs 6-7:** 2/2 clean on this build vs. 0/3 on Runs 3-5
+before the fix. Still too few points to call the pattern closed -- two of
+the three earlier fixes also looked solved after an initial clean pass
+before failing later (see Run 8 below, which is exactly that).
 
-One minor, non-substantive slip on question (5): the model described the
-verification-pass tools argument as `FUNCTIONS` rather than the actual
-`FUNCTION_DECLARATIONS` -- the claim about WHEN tools are withheld
-(`withholdTools` gate) was correct, only the variable name was off, and
-that name was never asked for or asserted as an exact quote, so the
-structural line-quote check had no reason to flag it.
+### Run 8 (2026-08-27, same build, fresh task -- fabrication recurs on a new target)
 
-**Caveat, consistent with this file's existing pattern of not
-overclaiming from one data point:** this is the first fully clean run in
-the series, but two of the three earlier fixes (tool-access-during-
-verification; extractMechanicalClaims/findUnverifiedClaims) also looked
-solved after their own initial passes before failing on a later run.
-Treat this as real evidence the structural line-quote check catches the
-specific failure class it targets, not as proof the confident-wrong
-pattern is fully closed. Repeating this test a few more times, per the
-open question below, remains the way to raise confidence further.
+Run via Claude (not the earlier chat's own re-runs), using a *new* task
+-- not the six-question reconstruction -- asking six different mechanical
+questions about this same file. 5/6 correct with verbatim-accurate quotes.
+**One came back confidently wrong**, on whether the stuck-loop dedup cache
+applies to `github_get_file_tree` or only to the two
+`READ_FILE_SIGNATURE_FAMILY` members: the model claimed it "does not
+apply to `github_get_file_tree` ... only applies to the two functions in
+`READ_FILE_SIGNATURE_FAMILY`."
 
-### Run 7 (2026-08-27, re-run against `gemini` on the same structural-line-quote build)
+Independently checked against fetched source: `normalizedSignature(name,
+args)` and the `repeatCounts`/`resultCache` repeat-check run inside
+`functionCalls.map(...)` for every function call, `github_get_file_tree`
+included -- `READ_FILE_SIGNATURE_FAMILY` only controls whether ref-variant
+calls to its two members collapse into one shared signature. Both quoted
+lines were individually verbatim-true; the fabrication was in the
+inference layered on top ("only gets special collapsing" misread as
+"only thing that's deduped at all") -- same shape as Run 5's gap, just on
+a different mechanism. Confirms the pattern generalizes beyond the
+verification-pass-gate question Runs 3-7 focused on.
 
-Same reconstructed six-question task as Run 6, run again. Hit the same transient
-Gemini 503 ("high demand") mid-run (step 11 this time, vs step 10 in the
-earlier "Live verification test" run below) -- resumed cleanly via
-`resume_run_id` with the 10 already-completed steps intact, second live
-confirmation the resume path holds under a genuine provider failure.
-
-**Result: all six questions answered correctly again.** Unlike Run 6, this
-time every claim was independently re-checked directly against the raw source
-(not just trusting the run's own citations) by fetching
-`connectors/gemini/agent_delegate.js` in full outside the delegated run:
-
-- (1) `validateFunctionArgs()` before `execute()`: confirmed -- every code path
-  that reaches `fn.execute()` passes through `validateFunctionArgs(fn, args)`
-  first (cache-served repeats and unknown-function calls never reach
-  `execute()` at all, so the check is unconditional relative to the
-  `execute()` call site itself, which is exactly what was claimed).
-- (2) verification-pass gate: verbatim match --
-  `if (answer && !withholdTools && !pendingVerification && step < cappedSteps)`.
-  This is the exact question that came back confidently wrong in Runs 3, 4,
-  and 5, and right again in Run 6 and now Run 7.
-- (3) key-order-insensitivity: confirmed -- `Object.keys(a).sort()` into a
-  fresh `sortedArgs` object before stringifying.
-- (4) named-branch exclusion: confirmed -- `isHeadLike` only matches
-  `undefined`/`null`/`""`/`"HEAD"`; a `ref:"main"` call is deliberately never
-  collapsed into the no-ref signature even when `main` is the default branch.
-- (5) tool access during verification: confirmed -- `withholdTools` is
-  `isFinalStep || stuckLoopForce` only; the verification-pass branch does not
-  add `pendingVerification` to that condition, so `FUNCTION_DECLARATIONS` are
-  still sent on that turn.
-- (6) structural line-quote mechanism: confirmed -- `extractConditionalClaims`
-  flags comparison-shaped claims, `lineIsVerbatimInToolResults` checks a
-  model-quoted `LINE_QUOTE:` line via plain `.includes()` against raw tool
-  output, bounded to one corrective round by `structuralRecheckUsed`.
-
-**Updated running tally:** 2 of the last 2 runs against the structural-line-
-quote build (Runs 6-7) are now fully clean, versus the earlier pattern (Runs
-3-5) where the same question (2) failed three times in a row before the fix.
-Still only two data points on this specific build -- consistent with this
-file's standing caution against overclaiming from one (or two) clean runs --
-but the specific failure mode (fabricated relationship between two real
-identifiers) has now gone 2-for-2 since the fix, including under independent
-re-verification against source rather than relying on the delegated run's own
-citations.
+**Tally after Run 8:** 2/3 recent runs on this build clean (6, 7), 1/3
+caught a confident-wrong relationship claim (8) -- on a mechanism never
+probed before. Treat the structural line-quote check as reducing but not
+closing this failure class.
 
 ## Repeat/redundant tool-call dedup fix (PR #108, merged)
 
