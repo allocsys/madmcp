@@ -528,12 +528,12 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
   acceptance that inferential (not just conditional-expression)
   fabrication is out of scope for an automated check. Undecided.
 - Structural read cap fix (commits `32877bf`/`a38336b`, `github_read_file`/
-  `github_get_file_at_commit` char_offset/char_limit): mechanism is in,
-  but not yet run live -- need a heavy-task re-run on a file bigger than
-  30K to see (a) whether Gemini actually reaches for the new char_offset
-  when it gets the truncation message, and (b) whether that changes the
-  confident-wrong-claim rate on Runs 3-8-style questions at all, versus
-  the fabrication being downstream of something else entirely (the Run 8
-  error, for instance, was about a claim's *relationship*, not about
-  content past the cap -- so this fix may turn out to help less than
-  hoped once tested).
+  `github_get_file_at_commit` char_offset/char_limit): live-verified, Run 9
+  -- 6/6 clean on a fresh planted-question set specifically targeting the
+  Runs 3-8 failure shapes (including a Q2 reproducing Run 8's exact
+  fabrication pattern, which came back correct this time). Required fixing
+  a dedup-cache bug first (Gap 3, commit `1ae2c30`) before the pagination
+  mechanism actually worked end-to-end. One clean run is a positive signal,
+  not a closed case -- Runs 6-7 also looked clean before Run 8 broke the
+  streak on a fresh question. Needs more repetitions with fresh question
+  sets each time before calling the confident-wrong-claim pattern closed.
