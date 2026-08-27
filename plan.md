@@ -280,6 +280,30 @@ information. The existing repeat-detection cache (keyed on
    verification test" below): a `ref:"main"` call was correctly NOT
    collapsed with a no-ref call on the same file.
 
+3. **Missing `char_offset`/`char_limit` in the `READ_FILE_SIGNATURE_FAMILY`
+   signature (found live, fixed in commit `1ae2c30`, same day as the
+   `char_offset`/`char_limit` pagination feature itself landed on
+   `github_read_file`/`github_get_file_at_commit` -- see "Structural read
+   cap" below):** once those two functions gained pagination params, the
+   family signature (`{ owner, repo, path, ref: "HEAD" }`) didn't include
+   them, so every paginated call to the same file -- offset 0, 30000,
+   60000, ... -- collapsed to one identical signature and got served the
+   cached FIRST chunk back regardless of the offset actually requested.
+   Confirmed via a live `delegate_agent` run: asked to read
+   `agent_delegate.js` in full with no offset instructions given, the model
+   correctly inferred and issued `char_offset=30000`, `60000`, `86295` from
+   the truncation messages -- but got the same first-30,000-char slice back
+   every time, and confidently reported a wrong last-function-in-file
+   answer (never independently verified) built entirely on that one stale
+   chunk. Fixed by folding `char_offset`/`char_limit` into the family
+   signature, so each distinct offset/limit pair gets its own cache entry.
+   Re-run twice post-fix with no offset hints given (once on
+   `agent_delegate.js` itself, once on the unrelated, differently-sized
+   `connectors/notion/tools.js`) -- both times the model paginated correctly
+   on its own, received genuinely different content per call, and landed on
+   verifiably correct answers. See "Structural read cap" section below for
+   the fuller live-verification writeup (Run 9), which built on this fix.
+
 Text-only SYSTEM_PREAMBLE guidance (telling the model re-reading won't
 help) was considered and rejected in favor of the structural cache fix
 alone, consistent with this codebase's existing pattern of not trusting
