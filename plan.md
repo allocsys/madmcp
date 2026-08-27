@@ -545,6 +545,86 @@ recurrence rate, then the same task the same number of times against this
 branch post-merge, to get a real before/after comparison instead of a
 single anecdote either way.
 
+## Repeat/redundant tool-call dedup fix (PR #108, merged 2026-08-27)
+
+**Why:** separate from the Gemini self-verification-pass work above (PR #107,
+landed first), live testing on a heavier, open-ended task the same day found
+`delegate_agent`'s loop making genuinely redundant tool calls -- e.g.
+re-reading the same file 5-6 times with no new information gained -- which
+burned through Gemini's free-tier token quota before the task finished
+(observed: a 429 quota-exhaustion failure at step 17 of a 25-step run,
+`resume_run_id: "20c9914d-c7d0-457b-9a67-04e711f3d74f"`).
+
+The loop already had a repeat-detection/caching mechanism keyed on
+`${name}:${JSON.stringify(args || {})}` (exact-signature repeats served from
+cache, 3 consecutive all-repeat steps force tools off). Two gaps let real
+repeats slip through anyway:
+
+1. **Key-order sensitivity:** `JSON.stringify` on a plain JS object depends
+   on key insertion order, not sorted/canonical order. Two calls with
+   identical values but different key order in Gemini's own emitted
+   function-call JSON produced different signature strings and were never
+   recognized as repeats.
+2. **No semantic equivalence across tools/params:** the guard only matched
+   identical `(function name, args)` pairs -- it had no concept that
+   `github_read_file` (no ref, or ref omitted) and
+   `github_get_file_at_commit(commit: "HEAD")` on the same path return
+   identical content (both are the tip of the default branch).
+
+**Fix implemented (commit `dcf1f51`, tests in `9b29114`, merged as `6c17360`):**
+a new `normalizedSignature(name, args)` function in `agent_delegate.js`
+replaces the raw signature used by the stuck-loop/cache guard:
+
+- Gap 1: keys are sorted (`Object.keys(a).sort()`) before stringifying, so
+  key order in the model's emitted JSON no longer matters.
+- Gap 2: `github_read_file` and `github_get_file_at_commit` are treated as a
+  signature family (`READ_FILE_SIGNATURE_FAMILY`). When either is called with
+  an omitted/empty ref or commit, or the literal string `"HEAD"`, both
+  collapse to a single canonical signature keyed on `(owner, repo, path)`.
+  **Deliberately lightweight, not the full fix originally proposed:** this
+  does NOT resolve a named branch (e.g. `"main"`) that happens to currently
+  equal the default branch to the same signature -- doing that correctly
+  would require an extra API call to look up the default branch before every
+  dedup check, a bad latency/cost trade for the common case. If the
+  lightweight version doesn't catch enough real-world redundancy, revisit
+  with the heavier default-branch-SHA resolution.
+- The weaker/supplementary SYSTEM_PREAMBLE-guidance option from the original
+  handoff (telling the model outright that re-reading via a different
+  ref/tool won't surface new info) was NOT added -- the structural cache fix
+  above was judged sufficient on its own, consistent with this file's
+  existing pattern (see isFinalStep/stuckLoopForce/pendingVerification) of
+  not trusting text-only nudges alone for loop-control guarantees.
+
+**Tests (`9b29914`):** `test/agent-delegate-loop.test.js` gained two new
+cases -- "recognizes repeat calls despite different key order in args (dedup
+fix gap 1)" and "recognizes github_read_file and
+github_get_file_at_commit(commit: \"HEAD\") on the same path as equivalent
+(dedup fix gap 2)" -- each asserting the underlying execute function
+(`mockGithubRequest` / `mockReadFileViaBlob`) was only actually invoked once
+despite two differently-expressed calls. Both genuinely exercise the fix
+(confirmed by direct reading, 2026-08-27) and would catch a regression if
+`normalizedSignature` were reverted to the raw `JSON.stringify` form.
+
+**NOT YET DONE as of this writing:**
+- **No live smoke test yet.** Everything above has only been verified by
+  reading the code and test suite directly (via a `delegate_agent`
+  self-audit, 2026-08-27) -- nobody has yet re-run a heavier, open-ended
+  task live against the deployed fix to confirm redundant calls actually
+  drop in practice, the way the original 25-step run surfaced the problem.
+  Treat the fix as code-correct but production-unverified until that
+  happens.
+- **`resume_run_id: "20c9914d-c7d0-457b-9a67-04e711f3d74f"`** (the original
+  429 quota-exhaustion run that motivated this fix) has not been checked or
+  resumed. Given the 1-hour checkpoint TTL and the time elapsed since it was
+  recorded, it should be treated as stale/expired rather than something
+  worth resuming -- a fresh live test is the right way to validate the fix,
+  not resuming a pre-fix run's checkpoint (which was captured under the OLD
+  signature logic anyway, so resuming it would not even exercise the new
+  dedup code on the steps already completed).
+- This section was written retroactively -- PR #108 shipped and merged
+  before `plan.md` was updated to describe it, unlike PR #107 which was
+  documented as it happened. No functional gap, just a process note.
+
 ## Designer notes (future phase-2 port, not this plan's scope)
 
 `connectors/frontend/designer_delegate.js` imports `geminiChat`/
