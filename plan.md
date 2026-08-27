@@ -161,6 +161,56 @@ rather than silently drafting a new answer.
 Merged and green in CI (24 files, 350 tests). Branch:
 `gemini-verification-pass`.
 
+## Structural line-quote check (commit `4ff4260` follow-up, fix for Run 5 gap)
+
+Run 5 (below) showed the citation-forcing fix (`extractMechanicalClaims`/
+`findUnverifiedClaims`) does not catch a fabricated RELATIONSHIP between two
+real, individually-verifiable identifiers (`step < max_steps - 1` asserted
+when the real code is `step < cappedSteps` -- both `step` and `max_steps`
+really do appear in fetched source, so a token-presence check alone passes).
+
+Research direction (arxiv 2512.12117 "Citation-Grounded Code Comprehension",
+CoVe arxiv 2309.11495, "Tool Receipts" arxiv 2603.10060): self-verification
+via LLM judgment is weak; mechanical/structural verification against ground
+truth is what works. Applied here as two changes in
+`connectors/gemini/agent_delegate.js`:
+
+1. **`CONDITIONAL_CLAIM_PATTERN`/`extractConditionalClaims`:** a second,
+   stricter claim class alongside the existing identifier-token check --
+   flags claims shaped like a conditional/comparison expression (contains
+   `<`, `>`, `===`, `&&`, `||`, etc., either backtick-quoted or as bare
+   `identifier op identifier` text), since these need the exact-line-quote
+   treatment below rather than mere token presence.
+2. **`LINE_QUOTE` mechanism (`lineIsVerbatimInToolResults`,
+   `extractLineQuotes`, `stripLineQuoteMarkers`):** for each flagged
+   conditional claim, the verification prompt now requires the model to
+   quote the exact literal source line, in a fixed `LINE_QUOTE: <line>`
+   format. That quote is checked with a plain JS `.includes()` against raw
+   tool-result text already in `contents` -- not another LLM judgment call.
+   A failed check triggers exactly ONE bounded corrective round
+   (`structuralRecheckUsed`, single-fire like `pendingVerification`), after
+   which whatever comes back is accepted as final. `LINE_QUOTE:` marker
+   lines are stripped before any answer is returned to a caller.
+
+Per CoVe's factored-verification finding (verification questions posed
+without re-showing the model its own prior draft wording, to avoid
+anchoring), the correction note explicitly instructs a fresh re-read rather
+than re-confirming from the existing draft/scrollback.
+
+**State threading:** `structuralRecheckUsed` persisted through
+checkpoint save/load exactly like `pendingVerification`, defaulted `false`
+for pre-existing checkpoints.
+
+**Tests:** `test/agent-delegate-loop.test.js` -- new regression test
+confirms a draft with a plausible-but-wrong composed conditional (real
+identifiers, wrong relationship) is flagged and corrected via exactly one
+bounded structural round, even though a token-level check alone would pass
+it; also confirms `LINE_QUOTE` markers never leak into a returned answer.
+Full suite: 24 files, 362 tests, all green.
+
+See "Run 6" below for the first live re-test against the same heavy task
+used in Runs 1-5.
+
 ## Repeat/redundant tool-call dedup fix (PR #108, merged)
 
 Found via a heavier open-ended task hitting a 429 quota exhaustion at
@@ -270,7 +320,8 @@ trusting it, even post-verification-pass.
 times against `gemini` to see how often the confident-wrong pattern
 recurs and on which categories of claim, and whether it clusters around
 specific kinds of mechanical detail (e.g. named constants/thresholds) or
-is unpredictable.
+is unpredictable. (Superseded by "Run 6" below, run against the
+structural-line-quote-check build.)
 
 ### Run 5 (same task, re-run against `gemini` after commit `4ff4260`)
 
