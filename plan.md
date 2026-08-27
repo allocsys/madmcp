@@ -344,6 +344,70 @@ are both real, so a token-level check passes even when the composed
 expression combining them is fabricated. This gap motivated the
 structural line-quote check below.
 
+## Structural read cap in Gemini's own `github_read_file` (found via Claude review, 2026-08-27)
+
+All of Runs 1-8 above treat the confident-wrong-answer pattern as an
+inferential failure -- Gemini has the relevant source in context and
+misreads or fabricates a relationship within it. A Claude-driven review of
+`connectors/gemini/agent_delegate.js` (prompted by re-checking the Run 8
+claim against source) found at least one case where that framing is wrong:
+the context was never available in the first place.
+
+`FUNCTIONS[0]` (`github_read_file`, the function Gemini itself calls
+inside its own `delegate_agent` loop -- separate from the MCP-facing
+`read_file` tool in `connectors/github/files.js`, which chunks via
+`read_file_chunked`) hard-truncates:
+
+```js
+execute: async ({ owner = DEFAULT_OWNER, repo, path, ref }) => {
+  const content = await readFileViaBlob(owner, repo, path, ref);
+  return content.length > 30000 ? content.slice(0, 30000) + "\n...[truncated]" : content;
+},
+```
+
+The declared schema (`owner`/`repo`/`path`/`ref`) has no offset/pagination
+parameter, unlike the MCP-facing `github_read_file`/`read_file_chunked`
+pair or the `char_offset`/`char_limit` pattern already used elsewhere. Once
+a file exceeds 30,000 chars, Gemini gets a `"...[truncated]"` marker telling
+it more exists, but has no declared mechanism to ever retrieve it within
+the same `delegate_agent` run -- other than hoping a later
+`github_search_code` snippet happens to surface the missing section (which
+is itself capped at 20,000 chars via the same pattern in
+`github_search_issues`'s neighbor, and returns narrow snippets, not full
+context).
+
+`agent_delegate.js` itself is 113,038 chars -- 3.8x the cap. Checked where
+the two logged confident-wrong claims actually live in the file:
+
+| Failure | Approx. char offset | Within 30K cap? |
+|---|---|---|
+| Runs 3-5: verification-pass gate (`step < cappedSteps`) | ~86,000 | No -- 2.9x past it |
+| Run 8: dedup applying to `github_get_file_tree` | ~102,000 | No -- 3.4x past it |
+
+Both sit well past the point Gemini's own tool can physically reach in a
+single read. This doesn't contradict the Run 5/8 root-cause analysis above
+(fabricated relationships between individually-real tokens) -- it adds a
+prior-stage explanation for *why* the model was reasoning from an
+incomplete picture rather than the full function body: on this file, past
+char 30,000, it structurally can't have read the real thing at all, only
+seen a truncation marker plus whatever fragments turned up in search
+results.
+
+**Not yet done:** confirming this was the actual proximate cause for Runs
+3-8 specifically (vs. one plausible contributing factor among others) --
+that needs re-running against a smaller file or a raised/paginated cap and
+seeing whether the fabrication rate on precise mechanical claims drops.
+Also not yet checked: whether `agent_checkpoint.js` or `connectors/llm/router.js`
+have the same fixed-cap-no-pagination pattern elsewhere in the Gemini-facing
+tool surface.
+
+**Candidate fix (not implemented):** add an offset/pagination parameter to
+`github_read_file`'s own schema here (mirroring `char_offset`/`char_limit`),
+or raise the cap, or have the loop auto-chunk/auto-warn across turns when a
+file is truncated. Any of these changes the provider-agnostic loop body in
+`agent_delegate.js`, so -- like the verification pass -- would apply to
+GLM/Groq too whenever those are unparked.
+
 ## Designer notes (future phase-2 port, not this plan's scope)
 
 `connectors/frontend/designer_delegate.js` imports `geminiChat`/
