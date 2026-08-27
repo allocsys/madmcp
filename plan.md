@@ -425,6 +425,35 @@ pattern is eliminated. Needs more repetitions, ideally with fresh
 questions each time (per the Run 6-7-vs-8 lesson: the same question set
 re-run doesn't test much once a fix targets it specifically).
 
+### Run 10 (2026-08-27, same day, fresh file + fresh questions)
+
+Following the Run 6-7-vs-8 lesson directly: re-ran against a *different*
+file (`connectors/notion/tools.js`, 61,475 chars, unrelated to the
+pagination/dedup code Run 9 targeted) with six brand-new planted questions
+designed to probe the same class of trap Run 8 fell into -- claims that
+combine two real facts into a relationship (which of two things does X
+apply to; which of two similar nearby findings has which date; does a
+filter affect the raw count or only the display). **6/6 correct**,
+independently verified against the actual file content, including two
+deliberately Run-8-shaped traps:
+
+- Q3 required distinguishing two similar, nearby but different bugfix
+  comments with different dates (an archive-ordering fix confirmed
+  2026-07-23, vs. a related changelog-skip-on-archive note confirmed
+  2026-07-17) -- both dates correctly attributed to the right finding,
+  not conflated.
+- Q5 was an include/exclude relationship claim structurally identical to
+  Run 8's failure shape ("are changelog blocks excluded from the raw block
+  count, or only from what's displayed") -- correctly answered: included
+  in the raw count, excluded only from the rendered view.
+
+**Tally after Run 10:** 2 consecutive clean runs (9, 10) post-read-cap-fix,
+each with a fresh file and fresh question set (not a re-run of the same
+probe). Still short of the repetition count needed to call the Runs 3-8
+pattern closed, but two clean runs in a row with deliberately adversarial,
+fresh questions -- rather than the same questions that were already fixed
+for -- is a stronger signal than Run 9 alone.
+
 Original finding, for context on what motivated the fix:
 
 All of Runs 1-8 above treat the confident-wrong-answer pattern as an
