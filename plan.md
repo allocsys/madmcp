@@ -609,6 +609,44 @@ file is truncated. Any of these changes the provider-agnostic loop body in
 `agent_delegate.js`, so -- like the verification pass -- would apply to
 GLM/Groq too whenever those are unparked.
 
+### Run 14 (2026-08-27, same day, absence-detection stress test)
+
+A sixth failure mode, the first of the two candidates flagged after Run 13:
+whether Gemini correctly asserts something is NOT present in a file, rather
+than the earlier runs' pattern of wrong relationships between things that
+ARE present. Target file: `connectors/mem/tools.js` (70,361 chars, untested
+by any prior run). Six planted yes/no questions, deliberately mixing
+genuine absences (no bounded retry loop in `verifyLanded`; no dedicated
+`tags` filter on `mem0_delete_all`; no dedicated `entity_id`-rename param on
+`mem0_update`; no write-time multi-hop cycle detection in `processRelations`;
+no indexed lookup in `findByEntityId`, only client-side pagination) with one
+question where a lazy "probably absent for latency" guess would be WRONG
+(`mem0_add_batch` does call `verifyLanded` per item, same as `mem0_add`) --
+specifically to prevent a run from looking clean by defaulting to "no" on
+everything.
+
+**Result: 6/6 correct**, independently verified against a full read of the
+file's actual content done before the run (not trusting the run's own
+citations). Every answer's cited evidence -- including the exact comment
+text quoted for `verifyLanded` ("Deliberately a SINGLE check after one wait,
+not a bounded retry loop") -- matched the real source verbatim. Notably
+handled the one false-absence trap correctly (question 1) rather than
+lumping it in with the five genuine absences, and correctly distinguished
+write-time self-loop protection (present) from write-time multi-hop cycle
+detection (genuinely absent, only exists read-side in `traverseRelations`)
+in question 5 -- a nuance shaped like Run 8's original failure (which of two
+similar-sounding mechanisms actually applies).
+
+**Tally after Run 14:** 6 consecutive clean runs (9-14) post-read-cap-fix,
+now spanning six failure-mode categories: relationship-fabrication (9, 10),
+false-premise anchoring (11), stale/removed-tool correction (12), multi-hop
+cross-file contradiction (13), and now absence-detection (14). The other
+flagged candidate -- checkpoint-resume-specific fabrication (does a
+*resumed* run fabricate more than a fresh one, as opposed to just surviving
+infra failures, which is already confirmed) -- remains untested. Streak
+length alone is not being treated as proof of closure, consistent with Run
+8 breaking an earlier 2/2 streak on a fresh probe shape.
+
 ## Designer notes (future phase-2 port, not this plan's scope)
 
 **Router swap done (commit `c5165f4`, 2026-08-27, direct push to `main`,
