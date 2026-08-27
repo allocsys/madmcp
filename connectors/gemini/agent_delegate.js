@@ -1185,6 +1185,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         provider: effectiveProvider,
         model: effectiveModel,
         maxOutputTokens: effectiveMaxOutputTokens,
+        pendingVerification,
       });
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
@@ -1421,6 +1422,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         provider: effectiveProvider,
         model: effectiveModel,
         maxOutputTokens: effectiveMaxOutputTokens,
+        pendingVerification,
       });
       const errMessage = err?.message ?? String(err);
       return {
@@ -1481,6 +1483,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       provider: effectiveProvider,
       model: effectiveModel,
       maxOutputTokens: effectiveMaxOutputTokens,
+      // Always false here in practice: this checkpoint fires only after a
+      // step that made function calls, and a verification-pass turn never
+      // reaches this branch (withholdTools forces it to text-only, so it
+      // either returns from the !functionCalls.length branch above or, on
+      // the MALFORMED_FUNCTION_CALL edge case, returns early with an
+      // error) -- included explicitly so the persisted checkpoint always
+      // states this field rather than silently omitting it on this path.
+      pendingVerification,
     });
     contentsCheckpointedUpTo = contents.length;
   }
