@@ -264,9 +264,10 @@ comments) -- do not revert to the original ordering above without
 re-checking https://console.groq.com/docs/models for whether either
 model's classification has changed.
 
-**Sequenced steps:**
+**Sequenced steps (steps 1-8 DONE as of commit `00a5edb`, all green in CI;
+steps 9-10 still outstanding -- see updated STATUS line above):**
 
-1. **Config (`config.js`):** add `GROQ_API_KEYS` (comma-separated, plural
+1. **DONE. Config (`config.js`):** add `GROQ_API_KEYS` (comma-separated, plural
    -- same rotation pattern as `OPENROUTER_API_KEYS`/`EXA_API_KEYS`),
    `GROQ_API` endpoint, `GROQ_MODEL`, `GROQ_FALLBACK_MODELS`,
    `GROQ_REQUEST_TIMEOUT_MS`. Also add `GROQ_DEFAULT_MAX_OUTPUT_TOKENS`
@@ -275,12 +276,12 @@ model's classification has changed.
    default; don't repeat that discovery-by-failure cycle for Groq. Pick a
    conservative starting value (e.g. 4096-8192) and confirm Groq's actual
    per-model max-output limits from its docs before the first live call.
-2. **Client (`connectors/groq/client.js`):** model closely on
+2. **DONE. Client (`connectors/groq/client.js`):** model closely on
    `connectors/glm/client.js` -- outer cascade over `GROQ_API_KEYS`
    (401/403/429), inner cascade over `GROQ_MODEL` + `GROQ_FALLBACK_MODELS`
    (429/503/transient). Groq's chat-completions endpoint is OpenAI-shaped
    like OpenRouter's, so this should be a close port, not a redesign.
-3. **Adapter -- decide before writing, don't default to copy-paste:**
+3. **DONE (chose option (a), the shared module):** ~~Adapter -- decide before writing, don't default to copy-paste:~~
    `connectors/glm/adapter.js` (`toOpenAIMessages`/`toOpenAITools`/
    `fromOpenAIChoice`) is pure OpenAI-shape translation with nothing
    OpenRouter-specific in it. Either (a) extract it to a shared
@@ -292,29 +293,38 @@ model's classification has changed.
    translation logic is exactly the kind of drift this codebase's other
    shared-harness fixes (e.g. `validateFunctionArgs`) have had to unwind
    after the fact.
-4. **Router (`connectors/llm/router.js`):** add a `groq` branch alongside
+4. **DONE. Router (`connectors/llm/router.js`):** add a `groq` branch alongside
    `gemini`/`glm` in `providerChat`, applying `GROQ_DEFAULT_MAX_OUTPUT_TOKENS`
    the same way the `glm` branch applies its own default (only when the
    caller doesn't pass an explicit `maxOutputTokens`).
-5. **Cooldown (`connectors/gemini/cooldown.js`):** already takes a
+5. **DONE (no changes needed -- confirmed already provider-agnostic). Cooldown (`connectors/gemini/cooldown.js`):** already takes a
    `namespace` param -- have Groq pass `groq:${keyIndex}` for its own
    per-(model,key) cooldown tracking, same pattern GLM uses.
-6. **Checkpoint (`connectors/gemini/agent_checkpoint.js`):** confirm the
+6. **DONE (confirmed by direct read, genuinely provider-agnostic). Checkpoint (`connectors/gemini/agent_checkpoint.js`):** confirm the
    provider/model/maxOutputTokens restore-on-resume logic is genuinely
    provider-agnostic (stores whatever string it's given) before assuming
    a third provider value "just works" -- verify by reading the file, not
    by inference from the GLM integration having worked.
-7. **Tool schema (`connectors/gemini/agent_tools.js`):** the `provider`
+7. **DONE. Tool schema (`connectors/gemini/agent_tools.js`):** the `provider`
    arg is very likely a zod enum -- if so it needs `"groq"` added
    explicitly, since zod enums don't silently accept unlisted values.
    Check this before assuming the router-level change alone is sufficient.
-8. **Tests:** mirror the GLM test set --
+8. **DONE. Tests:** mirror the GLM test set --
    `test/groq-client.test.js`, and a shared/adapter test if step 3 goes
    with option (a); extend `test/llm-router.test.js`'s dispatch test to
    cover the `groq` branch; extend `test/agent-delegate-loop.test.js`'s
    provider parametrization to include `groq` as a third case.
-9. **Live smoke test, sequenced to catch GLM's failure modes early rather
-   than late:** run the same three-stage test that surfaced GLM's
+9. **NOT DONE -- still the main gap before this can be trusted with real
+   traffic.** Everything in steps 1-8 has only been exercised against
+   mocked `fetch`/`providerChat` calls (see test/groq-client.test.js,
+   test/llm-router.test.js, test/agent-delegate-loop.test.js) -- nothing
+   has actually hit `api.groq.com` yet, so the `max_tokens` vs
+   `max_completion_tokens` question flagged in config.js's
+   `GROQ_DEFAULT_MAX_OUTPUT_TOKENS` comment, and whether the "not
+   balance-gated" assumption holds, are both still open. Requires a real
+   `GROQ_API_KEYS` value to run -- can't be completed from this branch
+   alone. **Live smoke test, sequenced to catch GLM's failure modes early
+   rather than late:** run the same three-stage test that surfaced GLM's
    problems -- (a) a tool-using multi-step task at the default output cap,
    (b) the same with a reduced `maxOutputTokens` to check for a prompt-
    token-side cap independent of the completion cap, (c) a minimal
@@ -323,7 +333,11 @@ model's classification has changed.
    assumption above -- if any of the three reproduce a GLM-style 402/404,
    that assumption is wrong and needs documenting here before going
    further.
-10. **Rollout:** ship behind `provider: "groq"`, opt-in only -- default
+10. **Code-wise DONE, but gated on step 9:** `provider: "groq"` is already
+    wired as opt-in-only with `DEFAULT_LLM_PROVIDER` unchanged (see step 7) --
+    the remaining rollout question is whether to treat it as trustworthy for
+    real tasks before step 9's live verification, same caution GLM's rollout
+    used. **Rollout:** ship behind `provider: "groq"`, opt-in only -- default
     stays `gemini` (`DEFAULT_LLM_PROVIDER` unchanged). Do not remove or
     disable the `glm`/OpenRouter code path in the process -- it stays
     available and will resume working immediately if OpenRouter credit is
