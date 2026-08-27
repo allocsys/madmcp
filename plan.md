@@ -272,6 +272,55 @@ recurs and on which categories of claim, and whether it clusters around
 specific kinds of mechanical detail (e.g. named constants/thresholds) or
 is unpredictable.
 
+### Run 5 (same task, re-run against `gemini` after commit `4ff4260`)
+
+First re-run after the citation-forcing fix (`extractMechanicalClaims`/
+`findUnverifiedClaims`, see that commit) that was built specifically to
+catch the Run 3/4 failure mode. Result: **the fix did not catch it.**
+Question (2) -- the exact verification-pass skip condition -- came back
+wrong again, confidently, with no hedge: the model asserted the gate was
+`if (!withholdTools && pendingVerification && step < max_steps - 1)`.
+The actual code (confirmed directly against
+`connectors/gemini/agent_delegate.js`) is
+
+```js
+if (answer && !withholdTools && !pendingVerification && step < cappedSteps) {
+```
+
+Two distinct errors in one claim: the `pendingVerification` polarity is
+inverted (real code requires it to be `false`, i.e. `!pendingVerification`,
+to proceed -- the model stated the opposite), and `step < cappedSteps` was
+again misstated as `step < max_steps - 1` -- the same class of
+fabricated-threshold error the fix targeted, just a different wrong
+constant than Run 3's `HARD_MAX_STEPS`.
+
+Questions (1), (3), (4), (5), and (6) were all answered correctly this
+run, including (5) and (6), which directly probe the citation-forcing fix
+itself (tool access retained during verification; the
+extractMechanicalClaims/findUnverifiedClaims mechanism) -- the model can
+correctly describe how the fix works while still failing to apply
+equivalent scrutiny to its own answer on question (2) in the same
+response.
+
+**Likely reason the fix didn't catch this:** `extractMechanicalClaims`
+checks whether each extracted identifier token appears verbatim
+somewhere in raw tool output already fetched -- not whether the specific
+*combination/relationship* asserted between tokens (e.g. "`step` is
+compared against `max_steps - 1`") matches what the source actually
+shows. Both `step` and `max_steps` are real identifiers that do appear in
+the file, so a token-level verbatim check can pass even when the composed
+expression citing them is fabricated. The fix narrows the failure surface
+(catches invented identifiers) but not this shape of error (real
+identifiers, wrong relationship/threshold between them).
+
+**Revised status:** the confident-wrong pattern on precise mechanical
+relationships (not just invented names) is not solved by the
+citation-forcing fix. Treat this as still open -- any claim from this
+harness about an exact conditional expression, especially one combining
+multiple named variables/constants, needs independent verification
+regardless of how many other questions in the same run were answered
+correctly.
+
 ## Designer notes (future phase-2 port, not this plan's scope)
 
 `connectors/frontend/designer_delegate.js` imports `geminiChat`/
