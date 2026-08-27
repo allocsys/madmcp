@@ -631,19 +631,8 @@ Neither of those needed to change for the router swap itself, since
 `providerChat` is a drop-in replacement at the single call site -- they'd
 only matter for changes to the loop's own state-tracking logic.
 
-## Remaining open questions
+## Remaining open questions (active -- no external blocker)
 
-- GLM: whenever OpenRouter credit is added, re-verify `z-ai/glm-4.5-air:free`
-  is still the right free slug (availability rotates) and re-run the
-  3-stage smoke test before assuming it's fixed.
-- Groq: whether to pay for a higher TPM tier, build a leaner groq-specific
-  tool schema, or rely on inter-step pacing -- undecided, needs a TPM
-  window-length check against Groq's docs first.
-- Whether GLM's poor recovery from repeated corrective tool-call errors is
-  a `provider: "glm"` blocker specifically, or a stuck-loop-guard gap --
-  untestable until GLM is unparked.
-- Head-to-head provider comparison (originally rollout step 2) stays
-  paused until at least one of GLM/Groq is usable again.
 - Gemini: repeat the heavy-task live verification test a few more times
   to establish how often the verification pass / structural line-quote
   check fails to catch a confident-wrong relationship claim (see Runs
@@ -677,3 +666,19 @@ only matter for changes to the loop's own state-tracking logic.
   wrong relationship between things that are; or a checkpoint-resume-
   specific adversarial claim (untested resume path for fabrication, only
   tested for infra-failure survival so far).
+- Groq: needs a TPM window-length check against Groq's docs -- a plain
+  lookup, not blocked on funding or on Groq being unparked for real work.
+  The resulting decision (pay for a higher TPM tier, build a leaner
+  groq-specific tool schema, or rely on inter-step pacing) still isn't
+  worth making until that number is known.
+
+## Blocked -- revisit only when unparked (no action to take now)
+
+- GLM: whenever OpenRouter credit is added, re-verify `z-ai/glm-4.5-air:free`
+  is still the right free slug (availability rotates) and re-run the
+  3-stage smoke test before assuming it's fixed. Nothing to do until then.
+- Whether GLM's poor recovery from repeated corrective tool-call errors is
+  a `provider: "glm"` blocker specifically, or a stuck-loop-guard gap --
+  untestable until GLM is unparked.
+- Head-to-head provider comparison (originally rollout step 2) stays
+  paused until at least one of GLM/Groq is usable again.
