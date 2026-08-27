@@ -390,13 +390,40 @@ after a `github_search_code` hit points at a line deep in a large file --
 instead of always re-reading from char 0 and re-paying the 30K cap on the
 same early section every time.
 
-**Not yet done:** this fixes the *mechanism* (Gemini can now reach any part
-of a file across turns) but doesn't yet confirm the fix actually reduces
-the confident-wrong-claim rate on Runs 3-8's kind of question -- that still
-needs a live re-run, same as the open item below it. It's also still worth
-checking whether Gemini reliably *uses* the new offset (i.e. whether the
-truncation message is prominent/clear enough to get followed under a step
-budget), vs. still trusting a stale first-30K read the way Run 3-8 did.
+**Live-verified (Run 9, 2026-08-27):** confirmed both open questions from
+the original "not yet done" note above.
+
+First, a dedup-cache bug ("Gap 3" in the dedup-fix section above, fixed in
+`1ae2c30`) had to be found and fixed before the mechanism actually worked:
+the family signature didn't include `char_offset`/`char_limit`, so every
+paginated call collapsed to the same cached first chunk regardless of the
+offset requested. Once fixed, re-run twice with zero offset hints given (on
+`agent_delegate.js` itself, and separately on the unrelated
+`connectors/notion/tools.js`, 61,475 chars) -- both times Gemini correctly
+inferred and issued the `char_offset` sequence on its own from the
+truncation message, received genuinely different content per call, and
+landed on verifiably correct final answers (last function/symbol in file,
+total char count). So: yes, Gemini reliably discovers and uses the new
+offset mechanism unprompted, once the cache bug behind it was fixed.
+
+Second, Run 9 re-ran the actual heavy task -- six planted mechanical
+questions about `agent_delegate.js`'s own internals, phrased to specifically
+hit the Runs 3-8 failure shapes, including a Q2 designed to reproduce Run
+8's exact fabrication ("does the dedup cache apply to `github_get_file_tree`
+or only to `READ_FILE_SIGNATURE_FAMILY`'s two members"). Result: **6/6
+correct, zero hedging, zero fabrication**, verified independently against
+the actual file content (not trusting the run's own citations). Notably, Q2
+came back with the correct nuanced answer (cache applies to all functions;
+`READ_FILE_SIGNATURE_FAMILY` only changes ref/commit normalization for its
+two members) -- exactly the distinction Run 8 got backwards.
+
+This is one clean run, not a closed case -- Runs 6-7 also looked fully
+clean before Run 8 broke the streak on a fresh question. Treat this as a
+positive signal that reaching the full file (rather than a 30K-truncated
+view) measurably helps the confident-wrong-claim pattern, not as proof the
+pattern is eliminated. Needs more repetitions, ideally with fresh
+questions each time (per the Run 6-7-vs-8 lesson: the same question set
+re-run doesn't test much once a fix targets it specifically).
 
 Original finding, for context on what motivated the fix:
 
