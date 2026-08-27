@@ -2,11 +2,16 @@
 
 **STATUS (2026-08-27): GLM/OpenRouter implementation shipped and deployed,
 but currently non-functional (see "Current status" -- account has no
-credit and none is being added). A third provider, Groq, is queued to
-replace GLM as the practical free-tier alternative to Gemini -- see
-"Groq provider addition" below for the sequenced plan. GLM code stays in
-place (not being ripped out) in case OpenRouter credit is ever added
-later.**
+credit and none is being added). Groq has been added as the practical
+free-tier alternative to Gemini -- steps 1-8 of "Groq provider addition"
+below (config, client, shared adapter extraction, router wiring,
+checkpoint/cooldown reuse, tool schema, tests) are implemented and green
+in CI as of commit `00a5edb`. STILL OUTSTANDING: step 9 (live smoke test
+against a real Groq account -- nothing here has been run against Groq's
+actual API yet, only mocked), step 10 (rollout confirmation), and doc
+updates -- README.md/docs/API_KEYS.md/docs/env.html still don't mention
+Groq at all as of this STATUS line. GLM code stays in place (not being
+ripped out) in case OpenRouter credit is ever added later.**
 
 ## Why
 
