@@ -34,6 +34,10 @@ None of these providers support auto-injecting the key back into our env — you
 [![Create OpenRouter API Key](https://img.shields.io/badge/Create-OpenRouter_Key-6467F2?style=for-the-badge)](https://openrouter.ai/keys)
 > Comma-separated list — same reasoning as `EXA_API_KEYS` above (rate-limit headroom + account isolation). Backs the optional `provider: "glm"` mode of `delegate_agent` (GLM via OpenRouter) — leave unset to stick with the default Gemini provider.
 
+### Groq — `GROQ_API_KEYS`
+[![Create Groq API Key](https://img.shields.io/badge/Create-Groq_API_Key-F55036?style=for-the-badge)](https://console.groq.com/keys)
+> Comma-separated list — same reasoning as `EXA_API_KEYS`/`OPENROUTER_API_KEYS` above. Backs the optional `provider: "groq"` mode of `delegate_agent` — free-tier request/token-rate-limited rather than credit-balance-gated (unlike OpenRouter/GLM), so it's the practical free alternative while `provider: "glm"` is blocked on account credit. Leave unset to stick with the default Gemini provider.
+
 ### Context7 — `CONTEXT7_API_KEY` (optional)
 Works unauthenticated at low rate limits — only provision this if you're hitting limits.
 
