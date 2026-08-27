@@ -1155,7 +1155,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // lesson as isFinalStep's own history, see its comment above), so this
     // reuses that structural fix instead of a new mechanism.
     const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
-    const withholdTools = isFinalStep || stuckLoopForce;
+    // Verification pass (see VERIFICATION_PROMPT above): once a draft final
+    // answer has been sent back for self-checking, this turn must also be
+    // no-tools -- the point is to make the model re-examine evidence it
+    // already gathered, not go fetch more of it, and withholding tools is
+    // the same structural guarantee isFinalStep/stuckLoopForce already rely
+    // on (a text-only SYSTEM NOTE alone wasn't trusted for either of those,
+    // per their own history above -- no reason to trust it here instead).
+    const withholdTools = isFinalStep || stuckLoopForce || pendingVerification;
     let candidate;
     try {
       candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens });
