@@ -557,12 +557,13 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
   acceptance that inferential (not just conditional-expression)
   fabrication is out of scope for an automated check. Undecided.
 - Structural read cap fix (commits `32877bf`/`a38336b`, `github_read_file`/
-  `github_get_file_at_commit` char_offset/char_limit): live-verified, Run 9
-  -- 6/6 clean on a fresh planted-question set specifically targeting the
-  Runs 3-8 failure shapes (including a Q2 reproducing Run 8's exact
-  fabrication pattern, which came back correct this time). Required fixing
-  a dedup-cache bug first (Gap 3, commit `1ae2c30`) before the pagination
-  mechanism actually worked end-to-end. One clean run is a positive signal,
-  not a closed case -- Runs 6-7 also looked clean before Run 8 broke the
-  streak on a fresh question. Needs more repetitions with fresh question
-  sets each time before calling the confident-wrong-claim pattern closed.
+  `github_get_file_at_commit` char_offset/char_limit): live-verified, Runs
+  9-10 -- 6/6 clean on both, each with a fresh file and fresh planted-
+  question set (Run 9: `agent_delegate.js`; Run 10: `connectors/notion/
+  tools.js`), including Run-8-shaped relationship/include-exclude traps in
+  both. Required fixing a dedup-cache bug first (Gap 3, commit `1ae2c30`)
+  before the pagination mechanism actually worked end-to-end. Two
+  consecutive clean runs with genuinely fresh questions (not re-runs of an
+  already-fixed-for probe) is a stronger signal than one, but Runs 6-7 also
+  looked clean before Run 8 broke the streak -- still needs more
+  repetitions before calling the confident-wrong-claim pattern closed.
