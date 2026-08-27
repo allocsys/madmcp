@@ -1038,6 +1038,78 @@ function findUnverifiedClaims(claims, contents) {
   return claims.filter((claim) => !rawToolText.includes(claim));
 }
 
+// Conditional/comparison-expression claims (2026-08-27, fix for the Run 5
+// gap documented in plan.md: extractMechanicalClaims/findUnverifiedClaims
+// check whether each individual identifier TOKEN appears verbatim in raw
+// tool output, but not whether the specific COMBINATION/relationship
+// asserted between two real tokens (e.g. "step is compared against
+// max_steps - 1") matches what the source actually shows. Both `step` and
+// `max_steps` are real identifiers that really do appear in the file, so a
+// token-level check passes even when the composed expression citing them
+// together is fabricated -- confirmed live, Run 5: the model asserted
+// `step < max_steps - 1` when the real code is `step < cappedSteps`, and
+// both `step` and `max_steps` are genuine tokens present in fetched source;
+// only the RELATIONSHIP between them was invented.
+//
+// This flags claims shaped like a conditional/comparison expression --
+// containing a comparison/logical operator (<, >, <=, >=, ===, !==, &&, ||)
+// either inside a backtick-quoted span or as bare identifier-op-identifier
+// text -- since these need stricter treatment than a bare identifier check:
+// not "does this token appear somewhere", but "quote me the EXACT source
+// line this composed expression came from" (see the LINE_QUOTE mechanism
+// below), because a token-level verbatim check cannot catch a fabricated
+// relationship between two real, individually-verifiable tokens.
+const CONDITIONAL_CLAIM_PATTERN = /`[^`\n]*(?:<=|>=|===|!==|&&|\|\||[<>])[^`\n]*`|\b[a-zA-Z_$][\w$]*\s*(?:<=|>=|===|!==|&&|\|\||[<>])\s*[\w$.]+(?:\s*[-+]\s*\w+)?/g;
+
+function extractConditionalClaims(answerText) {
+  const claims = new Set();
+  for (const m of answerText.matchAll(CONDITIONAL_CLAIM_PATTERN)) {
+    const raw = (m[0].startsWith("`") ? m[0].slice(1, -1) : m[0]).trim();
+    if (raw.length >= 4) claims.add(raw);
+  }
+  return [...claims];
+}
+
+// Mechanical (NOT LLM-judged) check that a model-quoted source line is a
+// literal substring of the raw tool-result text already gathered this run.
+// Deliberately a plain JS .includes() call, per the research backing this
+// fix: self-verification via LLM judgment is weak, mechanical/structural
+// verification against ground truth is what actually catches fabrication --
+// asking the model itself "is this line real?" would just be another
+// LLM-judgment call with the same miscalibrated-confidence failure mode
+// this whole mechanism exists to route around.
+function lineIsVerbatimInToolResults(quotedLine, contents) {
+  const rawToolText = contents
+    .flatMap((turn) => turn.parts || [])
+    .filter((p) => p.functionResponse)
+    .map((p) => p.functionResponse.response?.result || "")
+    .join("\n");
+  return rawToolText.includes(quotedLine.trim());
+}
+
+// Parses `LINE_QUOTE: <text>` markers (see the structural line-quote ask in
+// the verification prompt below) out of a model response -- the exact-line
+// quotes the model was asked to produce for each flagged conditional/
+// comparison claim, one per line, in a fixed format specifically so they
+// can be parsed and checked programmatically rather than trusting the model
+// to have actually done the check just because it says so in prose.
+const LINE_QUOTE_PATTERN = /^LINE_QUOTE:\s*(.+)$/gm;
+
+function extractLineQuotes(answerText) {
+  const quotes = [];
+  for (const m of answerText.matchAll(LINE_QUOTE_PATTERN)) {
+    quotes.push(m[1].trim());
+  }
+  return quotes;
+}
+
+// Strips LINE_QUOTE: marker lines out of a final answer before it's ever
+// returned to a caller -- they're an internal verification artifact for
+// this loop to parse, not something a caller asked for or should see.
+function stripLineQuoteMarkers(answerText) {
+  return answerText.replace(LINE_QUOTE_PATTERN, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 // One-time self-check appended after the model's first draft final answer
 // (see the verification-pass logic in the loop below). Targets a specific,
 // observed failure (plan.md, 2026-08-27: "gave a verifiably wrong answer...
