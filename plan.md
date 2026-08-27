@@ -225,11 +225,50 @@ files, with 4 specific mechanical questions to answer). Findings:
   what the task asked for. **One run is not enough to call this a
   trend** -- worth repeating.
 
+### Runs 2 and 3 (same task, re-run against `gemini`)
+
+| Question | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| (1) `validateFunctionArgs` unconditional before `execute()` | hedged | correct | correct (less precise) |
+| (2) verification-pass skip condition | hedged | correct | **wrong** |
+| (3) key-sort order-insensitivity | correct | correct | correct |
+| (4) named-branch exclusion | correct | correct | correct |
+
+Run 2 answered point (2) correctly: the skip condition is `step <
+cappedSteps`. Run 3 instead asserted the gate was `step < HARD_MAX_STEPS`.
+Checked directly against `connectors/gemini/agent_delegate.js`
+(`runInvestigation`): the real condition is
+
+```js
+if (answer && !withholdTools && step < cappedSteps) {
+```
+
+where `cappedSteps = Math.min(max_steps, HARD_MAX_STEPS)` -- the
+effective per-call ceiling, not the fixed platform-wide `HARD_MAX_STEPS`
+(30) that only feeds into computing it. These are genuinely different
+whenever a caller passes `max_steps` below 30, which is exactly what our
+test calls do (`max_steps: 25`). So Run 3's version of the claim was
+substantively wrong for the very call it was describing, not a
+rounding-error nitpick.
+
+**Revised conclusion:** the original concern -- Gemini confidently
+stating an incorrect mechanical detail -- recurred, just on a different
+question than the first run (point 2 instead of point 1). That's a more
+concerning pattern than plain hedging: the model isn't shy about details
+it's unsure of, it's willing to assert a specific, wrong, plausible-
+sounding variable name (`HARD_MAX_STEPS` in place of `cappedSteps`) with
+no hedge at all. The verification pass helps -- Run 2 shows it can
+produce a fully correct, precise answer -- but it does not reliably
+prevent confident-wrong claims on precise mechanical details. Treat any
+such claim from this harness (exact variable/condition names, precise
+mechanical specifics) as needing an independent human/code check before
+trusting it, even post-verification-pass.
+
 **Still needed:** re-run this same or a similarly heavy task a few more
-times against `gemini` to see whether the hedging-instead-of-precise
-pattern on point-of-fact questions repeats, before drawing a conclusion
-about whether the verification pass fully closed the original accuracy
-gap or only partially did.
+times against `gemini` to see how often the confident-wrong pattern
+recurs and on which categories of claim, and whether it clusters around
+specific kinds of mechanical detail (e.g. named constants/thresholds) or
+is unpredictable.
 
 ## Designer notes (future phase-2 port, not this plan's scope)
 
