@@ -435,6 +435,93 @@ way as `provider: "glm"` is currently treated: wired, live, opt-in, but
 not yet something to route real investigative work through.**
 `DEFAULT_LLM_PROVIDER` remains `"gemini"`.
 
+## Gemini harness fix -- self-verification pass (2026-08-27)
+
+**Why:** independent of the Groq/GLM situation above, Gemini itself has a
+real, observed accuracy problem in long investigations (see "Current
+status" earlier in this file): on a 13-step run, Gemini had the complete
+file in context from its very first tool call, then in its final synthesis
+incorrectly claimed a specific implementation detail was false -- it
+appears to have trusted a later, narrower `github_search_code` result
+(which only showed a function's definition line, not its call site) over
+the complete file it had already read earlier in the same run. The
+SYSTEM_PREAMBLE already carried general "re-scan your own retrieved text"
+guidance before this fix, but that guidance lives inside a single synthesis
+pass -- the same pass that produced the wrong answer despite the guidance
+being present. This targets that specific failure mode with two changes,
+not with a rewrite of the loop's architecture (which would be a much
+bigger, riskier change for one observed bug):
+
+1. **SYSTEM_PREAMBLE addition (`connectors/gemini/agent_delegate.js`):** a
+   new explicit rule -- when a full/direct read (`github_read_file`,
+   `github_get_file_at_commit`, `notion_get_page`, etc.) and a narrower or
+   derived result about the same fact (a `github_search_code` snippet, a
+   `mem0_search` match) disagree, the full/direct read is the more
+   authoritative source, even if the narrower result was fetched more
+   recently in the conversation. Directly names the exact failure pattern
+   observed rather than a general "be careful" instruction.
+2. **Mandatory one-time self-verification pass (new mechanism, not just a
+   prompt change):** the first time the model produces a draft final
+   answer (no function calls in its response) WITH tool budget still
+   available (`step < cappedSteps` and this wasn't already a forced
+   no-tools turn), the loop does NOT return that answer immediately.
+   Instead it pushes the draft back onto `contents` along with a new
+   `VERIFICATION_PROMPT` -- a no-tools turn (tools withheld the same
+   structural way the final step and stuck-loop force already withhold
+   them, not just a text reminder -- see those mechanisms' own history in
+   this file for why a text-only nudge alone wasn't trusted) instructing
+   the model to re-check every specific claim in its own draft against the
+   RAW tool results already in the conversation, applying the same
+   full-read-outranks-narrow-result rule from (1). Whatever text comes
+   back from that second call is what's actually returned to the caller.
+   If no steps remain when the draft answer arrives (e.g. the draft itself
+   IS the final allowed step), the verification pass is skipped and the
+   draft is returned as-is -- there's no budget left to check twice, and
+   returning nothing would be worse than returning an unverified draft.
+
+**Cost/tradeoff, stated plainly:** this adds one extra provider call (and
+therefore one extra step, extra latency, and extra token spend) to every
+successful investigation that would otherwise have finished with budget to
+spare -- a `max_steps: 6` run that used to finish in 3 steps now finishes
+in 4. This is a deliberate accuracy-for-cost tradeoff, not a bug. It also
+applies identically to GLM/Groq if those providers are ever unparked --
+the verification mechanism lives entirely in the provider-agnostic loop
+body, not in Gemini-specific code, so it isn't a Gemini-only patch even
+though Gemini is the only provider it's actually being exercised against
+right now.
+
+**State threading:** a new `pendingVerification` boolean is threaded
+through exactly like `consecutiveAllRepeatSteps`/`repeatCounts` already
+were -- restored from a resumed checkpoint (`agent_checkpoint.js`'s
+`saveCheckpoint`/`loadCheckpoint` both gained this field), defaulted to
+`false` for checkpoints saved before this existed (same defensive pattern
+as every other field there). A run that dies mid-verification (the
+verification call itself hits a transient 429/503) resumes back into the
+verification turn rather than silently re-entering normal tool-use and
+drafting an entirely new answer.
+
+**Tests:** `test/agent-delegate-loop.test.js` updated -- every existing
+test that reached a draft final answer with steps remaining needed a
+second mocked `providerChat` response added (the verification pass) and
+its step-count/call-count assertions bumped by one; a new dedicated test
+confirms the verification pass can actually change the returned answer
+and that its call carries no tools; another new test confirms the
+verification pass is skipped when the draft answer is itself the final
+allowed step (no budget to check twice). Full suite (`npx vitest run`)
+verified green locally against a fresh clone before pushing: 24 files, 350
+tests, all passing. Branch: `gemini-verification-pass`.
+
+**NOT YET DONE -- this is a harness/prompt change, not yet re-validated
+live:** everything above has only been exercised against the mocked test
+suite. The actual claim this is meant to fix -- Gemini trusting a narrow
+result over a full read it already has -- has NOT yet been re-tested
+against a live Gemini call on a similar task. Next step once this PR is up
+(or merged): re-run a comparable investigation task live and confirm (a)
+the verification pass actually fires and completes, and (b) it either
+catches a similar contradiction or the original bug simply doesn't recur --
+either result is useful signal, but treat this as unverified in production
+until that live run happens.
+
 ## Designer notes (future phase-2 port, not this plan's scope)
 
 `connectors/frontend/designer_delegate.js` imports `geminiChat`/
