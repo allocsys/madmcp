@@ -208,8 +208,43 @@ bounded structural round, even though a token-level check alone would pass
 it; also confirms `LINE_QUOTE` markers never leak into a returned answer.
 Full suite: 24 files, 362 tests, all green.
 
-See "Run 6" below for the first live re-test against the same heavy task
-used in Runs 1-5.
+### Run 6 (2026-08-27, re-run against `gemini` on the structural-line-quote build)
+
+First live re-test against this build. Note on comparability: the exact
+verbatim task text used in Runs 1-5 was not available when this run was
+kicked off (it lived in an earlier chat session, referenced but not
+quoted in the handoff that led to this fix), so this run used a
+reconstructed task asking the same six mechanical questions the Runs
+table already tracks, worded fresh rather than replayed verbatim. Treat
+as comparable in substance, not a byte-for-byte repeat.
+
+**Result: all six questions answered correctly, including question (2)
+-- the exact verification-pass gate condition -- which was the specific
+question that came back confidently wrong in Runs 3, 4, and 5.** Verbatim
+match against source: `answer && !withholdTools && !pendingVerification
+&& step < cappedSteps`. Question (6) (asked fresh this round, on the
+structural line-quote mechanism itself) was also answered correctly:
+named `extractConditionalClaims`/`extractLineQuotes`/
+`lineIsVerbatimInToolResults` and described the single-bounded-round
+behavior accurately. Commit `4ff4260`'s follow-up (this fix) was also
+correctly confirmed present and test-covered.
+
+One minor, non-substantive slip on question (5): the model described the
+verification-pass tools argument as `FUNCTIONS` rather than the actual
+`FUNCTION_DECLARATIONS` -- the claim about WHEN tools are withheld
+(`withholdTools` gate) was correct, only the variable name was off, and
+that name was never asked for or asserted as an exact quote, so the
+structural line-quote check had no reason to flag it.
+
+**Caveat, consistent with this file's existing pattern of not
+overclaiming from one data point:** this is the first fully clean run in
+the series, but two of the three earlier fixes (tool-access-during-
+verification; extractMechanicalClaims/findUnverifiedClaims) also looked
+solved after their own initial passes before failing on a later run.
+Treat this as real evidence the structural line-quote check catches the
+specific failure class it targets, not as proof the confident-wrong
+pattern is fully closed. Repeating this test a few more times, per the
+open question below, remains the way to raise confidence further.
 
 ## Repeat/redundant tool-call dedup fix (PR #108, merged)
 
