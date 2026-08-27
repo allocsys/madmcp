@@ -227,12 +227,13 @@ files, with 4 specific mechanical questions to answer). Findings:
 
 ### Runs 2 and 3 (same task, re-run against `gemini`)
 
-| Question | Run 1 | Run 2 | Run 3 |
-|---|---|---|---|
-| (1) `validateFunctionArgs` unconditional before `execute()` | hedged | correct | correct (less precise) |
-| (2) verification-pass skip condition | hedged | correct | **wrong** |
-| (3) key-sort order-insensitivity | correct | correct | correct |
-| (4) named-branch exclusion | correct | correct | correct |
+| Question | Run 1 | Run 2 | Run 3 | Run 4 |
+|---|---|---|---|---|
+| (1) `validateFunctionArgs` unconditional before `execute()` | hedged | correct | correct (less precise) | correct |
+| (2) verification-pass skip condition | hedged | correct | **wrong** | **wrong (fabricated)** |
+| (3) key-sort order-insensitivity | correct | correct | correct | correct |
+| (4) named-branch exclusion | correct | correct | correct | correct |
+| (5, new) tool access available during verification pass itself | -- | -- | -- | **wrong (fabricated + backwards)** |
 
 Run 2 answered point (2) correctly: the skip condition is `step <
 cappedSteps`. Run 3 instead asserted the gate was `step < HARD_MAX_STEPS`.
