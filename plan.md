@@ -476,3 +476,13 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
   token-level check. Needs either a broader claim classifier or
   acceptance that inferential (not just conditional-expression)
   fabrication is out of scope for an automated check. Undecided.
+- Structural read cap fix (commits `32877bf`/`a38336b`, `github_read_file`/
+  `github_get_file_at_commit` char_offset/char_limit): mechanism is in,
+  but not yet run live -- need a heavy-task re-run on a file bigger than
+  30K to see (a) whether Gemini actually reaches for the new char_offset
+  when it gets the truncation message, and (b) whether that changes the
+  confident-wrong-claim rate on Runs 3-8-style questions at all, versus
+  the fabrication being downstream of something else entirely (the Run 8
+  error, for instance, was about a claim's *relationship*, not about
+  content past the cap -- so this fix may turn out to help less than
+  hoped once tested).
