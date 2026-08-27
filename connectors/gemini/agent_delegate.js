@@ -108,6 +108,60 @@ function validateFunctionArgs(fn, args) {
   return lines.join(" ");
 }
 
+// Repeat-detection signature (fix for redundant/wasted tool calls found in
+// live testing 2026-08-27 -- see plan.md "Redundant tool call dedup fix").
+// Used by the stuck-loop guard below in place of the old raw
+// `${name}:${JSON.stringify(args || {})}` signature, which had two gaps
+// that let genuine repeats slip past the dedup cache:
+//
+// Gap 1 -- key-order sensitivity: JSON.stringify on a plain JS object
+// serializes keys in insertion order, not sorted/canonical order. Two
+// functionCall args with identical VALUES but different key order in
+// Gemini's own emitted JSON (confirmed as a real, observed pattern in
+// live-testing transcripts -- Gemini's key order for a given call is not
+// guaranteed stable across turns) therefore produced two different
+// signature strings and were never recognized as the same call. Fixed
+// below by sorting keys before stringifying -- this is a pure JS-semantics
+// fix (JSON.stringify key order depends only on insertion order, which is
+// enough on its own to explain the gap), independent of the live-transcript
+// evidence that motivated looking for it.
+//
+// Gap 2 -- no cross-tool/ref semantic equivalence: github_read_file(no ref
+// or ref: "HEAD") and github_get_file_at_commit(commit: "HEAD") on the same
+// path resolve to the exact same content (both are the tip of the default
+// branch), but were treated as entirely distinct signatures -- different
+// function names, and even different parameter names (ref vs commit) for
+// the same concept. This is intentionally a LIGHTWEIGHT fix, not the full
+// resolve-to-the-actual-default-branch-SHA normalization described in the
+// original handoff: it only collapses the cheap-to-detect case of an
+// omitted ref/commit or the literal string "HEAD" across those two
+// functions for the same (owner, repo, path). It does NOT resolve a named
+// branch (e.g. "main") that happens to currently equal the default branch
+// to that same signature -- doing that correctly requires an extra API
+// call to look up the default branch before every single dedup check
+// (i.e. paying latency/cost on every call to occasionally catch a rarer
+// redundant one), which is a bad trade for the common case. If this
+// lightweight version doesn't catch enough real-world redundancy, revisit
+// with the heavier default-branch-SHA resolution.
+const READ_FILE_SIGNATURE_FAMILY = new Set(["github_read_file", "github_get_file_at_commit"]);
+
+function normalizedSignature(name, args) {
+  const a = args || {};
+  const sortedArgs = {};
+  for (const key of Object.keys(a).sort()) sortedArgs[key] = a[key];
+
+  if (READ_FILE_SIGNATURE_FAMILY.has(name)) {
+    const refValue = "ref" in sortedArgs ? sortedArgs.ref : sortedArgs.commit;
+    const isHeadLike = refValue === undefined || refValue === null || refValue === "" || refValue === "HEAD";
+    if (isHeadLike) {
+      const { owner, repo, path } = sortedArgs;
+      return `github_read_file_family:${JSON.stringify({ owner, repo, path, ref: "HEAD" })}`;
+    }
+  }
+
+  return `${name}:${JSON.stringify(sortedArgs)}`;
+}
+
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
 // summaries, not a full unified-diff implementation. Capped so a huge file
 // pair can't blow up the O(n*m) table.
@@ -1325,7 +1379,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // increment below); repeatCounts itself is incremented regardless
         // of whether it's a repeat, purely for observability/debugging --
         // only the boolean matters to the stuck-loop logic further down.
-        const signature = `${name}:${JSON.stringify(args || {})}`;
+        const signature = normalizedSignature(name, args);
         const isRepeat = repeatCounts.has(signature);
         repeatCounts.set(signature, (repeatCounts.get(signature) || 0) + 1);
 
