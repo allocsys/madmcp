@@ -292,5 +292,8 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
 - Head-to-head provider comparison (originally rollout step 2) stays
   paused until at least one of GLM/Groq is usable again.
 - Gemini: repeat the heavy-task live verification test a few more times
-  to establish whether the hedging pattern on precise mechanical
-  questions (see "Live verification test") is consistent or a one-off.
+  to establish how often the verification pass fails to catch a
+  confident-wrong mechanical claim (see "Live verification test", runs
+  2-3) and whether it clusters around particular kinds of detail (e.g.
+  named constants/thresholds) -- current status is "helps, but not a
+  reliable guarantee," not "solved."
