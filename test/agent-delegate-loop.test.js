@@ -43,6 +43,14 @@ vi.mock("../connectors/github/client.js", () => ({
   githubRequest: mockGithubRequest,
 }));
 
+// github_read_file/github_get_file_at_commit's execute() calls
+// readFileViaBlob (not githubRequest) -- mocked here for the gap-2 dedup
+// test below, same hermetic-test reasoning as mockGithubRequest above.
+const mockReadFileViaBlob = vi.fn();
+vi.mock("../connectors/github/helpers.js", () => ({
+  readFileViaBlob: mockReadFileViaBlob,
+}));
+
 const originalEnv = { ...process.env };
 
 describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation (provider: %s)", (provider) => {
@@ -137,6 +145,72 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
     expect(mockProviderChat.mock.calls[2][1].tools).toBeUndefined();
     // The transcript recorded the call, whatever its result (error or not).
     expect(result.transcript[0]).toMatch(/^\[step 1\] github_get_repo_topics/);
+  });
+
+  it("recognizes repeat calls despite different key order in args (dedup fix gap 1)", async () => {
+    mockProviderChat
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_1" } }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        // Same values as step 1, but keys written in a different order --
+        // the raw `JSON.stringify(args)` signature this fix replaces would
+        // treat this as a brand-new call.
+        content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { repo: "b", owner: "a" }, id: "call_2" } }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "done" }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "done" }] },
+        finishReason: "STOP",
+      });
+
+    mockGithubRequest.mockResolvedValueOnce({ names: ["mcp", "ai"] });
+
+    const result = await runInvestigation({ task: "check key order dedup", max_steps: 5, provider });
+
+    expect(result.transcript[0]).not.toMatch(/\[CACHED/);
+    expect(result.transcript[1]).toMatch(/\[CACHED/);
+    // The underlying API was only actually hit once -- the second call,
+    // despite different key order, was served from the repeat cache.
+    expect(mockGithubRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes github_read_file and github_get_file_at_commit(commit: \"HEAD\") on the same path as equivalent (dedup fix gap 2)", async () => {
+    mockProviderChat
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { owner: "a", repo: "b", path: "x.js" }, id: "call_1" } }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        // Different tool, different parameter name (commit vs ref), but the
+        // same effective content: commit "HEAD" on the same path resolves
+        // to the same tip-of-default-branch read as step 1's omitted ref.
+        content: { role: "model", parts: [{ functionCall: { name: "github_get_file_at_commit", args: { owner: "a", repo: "b", path: "x.js", commit: "HEAD" }, id: "call_2" } }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "done" }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "done" }] },
+        finishReason: "STOP",
+      });
+
+    mockReadFileViaBlob.mockResolvedValueOnce("file contents here");
+
+    const result = await runInvestigation({ task: "check ref/commit equivalence dedup", max_steps: 5, provider });
+
+    expect(result.transcript[0]).not.toMatch(/\[CACHED/);
+    expect(result.transcript[1]).toMatch(/\[CACHED/);
+    // readFileViaBlob only actually ran once -- the second, differently-
+    // expressed call was served from the repeat cache instead of re-fetching.
+    expect(mockReadFileViaBlob).toHaveBeenCalledTimes(1);
   });
 
   it("withholds tools on the final allowed step", async () => {
