@@ -184,6 +184,73 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
     expect(result.transcript[0]).toMatch(/^\[step 1\] github_get_repo_topics/);
   });
 
+  // Regression test for the structural line-quote check (2026-08-27, see
+  // plan.md "Run 5" and CONDITIONAL_CLAIM_PATTERN/lineIsVerbatimInToolResults'
+  // comments in agent_delegate.js): extractMechanicalClaims/
+  // findUnverifiedClaims alone check whether each individual identifier
+  // TOKEN appears verbatim in raw tool output -- not whether the specific
+  // RELATIONSHIP asserted between two real tokens matches the source. A
+  // draft claiming `step < max_steps - 1` when the real line is
+  // `step < cappedSteps` would pass a token-level check (both `step` and
+  // `max_steps` are real identifiers present in fetched source) even though
+  // the composed expression is fabricated. This test confirms the
+  // structural line-quote mechanism catches that shape of error where the
+  // token-level check alone would not, and that it is bounded to exactly
+  // one corrective round.
+  it("catches a plausible-but-wrong composed conditional via the structural line-quote check, even though a token-level check alone would pass it", async () => {
+    const realSourceLine = "if (answer && !withholdTools && step < cappedSteps) {";
+
+    mockProviderChat
+      // Step 1: reads the file containing the real conditional.
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { owner: "a", repo: "b", path: "agent_delegate.js" }, id: "call_1" } }] },
+        finishReason: "STOP",
+      })
+      // Step 2: draft answer asserts a wrong relationship between two real
+      // identifiers (`step`, `max_steps`) -- both tokens are individually
+      // real/verifiable, but the composed expression is fabricated.
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "The verification pass is skipped once `step < max_steps - 1` is false." }] },
+        finishReason: "STOP",
+      })
+      // Step 3 (round 1 of verification): the model "confirms" its own
+      // wrong claim with a fabricated LINE_QUOTE that does not match the
+      // real source verbatim -- this is exactly the miscalibrated-
+      // confidence failure mode the structural check exists to route
+      // around instead of trusting the model's own say-so.
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "Confirmed.\nLINE_QUOTE: if (answer && !withholdTools && step < max_steps - 1) {" }] },
+        finishReason: "STOP",
+      })
+      // Step 4 (round 2, the bounded corrective round): the model finally
+      // quotes the real line verbatim and corrects its answer.
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "Corrected: the pass is skipped when `step < cappedSteps`.\nLINE_QUOTE: if (answer && !withholdTools && step < cappedSteps) {" }] },
+        finishReason: "STOP",
+      });
+
+    mockReadFileViaBlob.mockResolvedValueOnce(`...\n${realSourceLine}\n...`);
+
+    const result = await runInvestigation({ task: "what gates the verification pass", max_steps: 10, provider });
+
+    // Exactly 4 calls: the read, the draft, the failed line-quote round,
+    // and the one bounded corrective round -- never a second corrective
+    // round even though the mechanism could in principle loop.
+    expect(mockProviderChat).toHaveBeenCalledTimes(4);
+
+    // The third call (round 1's response) must have been challenged with
+    // the structural failure note, not silently accepted.
+    const [round2Contents] = mockProviderChat.mock.calls[3];
+    const correctionMessage = round2Contents[round2Contents.length - 1];
+    expect(correctionMessage.parts[0].text).toMatch(/STRUCTURAL LINE-QUOTE CHECK FAILED/);
+
+    // Final answer is the corrected one, with internal LINE_QUOTE markers
+    // stripped before ever being returned to a caller.
+    expect(result.answer).toBe("Corrected: the pass is skipped when `step < cappedSteps`.");
+    expect(result.answer).not.toMatch(/LINE_QUOTE/);
+    expect(result.steps).toBe(4);
+  });
+
   it("recognizes repeat calls despite different key order in args (dedup fix gap 1)", async () => {
     mockProviderChat
       .mockResolvedValueOnce({
