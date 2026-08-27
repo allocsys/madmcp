@@ -32,10 +32,9 @@ import { githubRequest, toBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 import { readFileViaBlob, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
 
-// Shared slicing logic behind read_file's optional char_offset/char_limit and
-// read_file_chunked (kept as a thin back-compat alias -- see note on
-// read_file_chunked below). A single source of truth here means the two
-// tools can never drift on how offset/limit/remaining are computed.
+// Slicing logic behind read_file's optional char_offset/char_limit.
+// (Formerly shared with a separate read_file_chunked tool, removed once
+// read_file grew its own char_offset/char_limit params -- see plan.md.)
 function sliceFileContent(content, path, { char_offset, char_limit }) {
   const total = content.length;
 
@@ -83,25 +82,6 @@ export function register(server) {
       char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000 when char_offset/char_limit is used, max: 100000). Ignored if both char_offset and char_limit are omitted."),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit }) => {
-      const content = await readFileViaBlob(owner, repo, path, ref);
-      return sliceFileContent(content, path, { char_offset, char_limit });
-    }
-  );
-
-  server.tool(
-    "read_file_chunked",
-    "DOES: Read a slice of a large file. Use when read_file times out or is truncated.\n" +
-    "NOTE: read_file now accepts char_offset/char_limit directly -- this tool is kept as a back-compat alias with identical behavior, not a separate mechanism. Prefer passing char_offset/char_limit to read_file itself in new code.\n" +
-    "RULE: chunking through several large files for one open-ended question -> delegate_agent instead of many manual round-trips.",
-    {
-      owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:        z.string().describe("Repository name"),
-      path:        z.string().describe("File path within the repo"),
-      ref:         z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
-      char_offset: z.number().optional().describe("Character offset to start reading from (default: 0)"),
-      char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000, max: 100000)"),
-    },
-    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset = 0, char_limit = 20000 }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
       return sliceFileContent(content, path, { char_offset, char_limit });
     }
