@@ -143,6 +143,43 @@ function validateFunctionArgs(fn, args) {
 // redundant one), which is a bad trade for the common case. If this
 // lightweight version doesn't catch enough real-world redundancy, revisit
 // with the heavier default-branch-SHA resolution.
+// Shared slicing logic for github_read_file/github_get_file_at_commit below.
+// Mirrors connectors/github/files.js's sliceFileContent (the MCP-facing
+// read_file's helper) but returns a plain string, not { content: [...] }
+// blocks -- these execute() results feed back into GEMINI's own
+// conversation as a function response, not out to the calling model, so
+// there's no MCP content-block wrapping to match. Kept as a distinct copy
+// rather than importing the other one: the two tool surfaces are
+// deliberately decoupled (see the file-header note on why editing one
+// FUNCTIONS entry must never assume it affects the other model's tools),
+// and a shared import would blur that boundary for a few lines of logic.
+//
+// Default (no char_offset/char_limit): matches the old hard-30000-cutoff
+// behavior in spirit, but replaces the old bare "...[truncated]" marker
+// (which gave Gemini no way to ever see the rest) with an explicit total
+// length and the exact char_offset to pass next -- same fix as plan.md's
+// "Structural read cap" entry recommended.
+function sliceFileContentForModel(content, path, { char_offset, char_limit }) {
+  const total = content.length;
+
+  if (char_offset === undefined && char_limit === undefined) {
+    if (total <= 30000) return content;
+    const slice     = content.slice(0, 30000);
+    const remaining = total - 30000;
+    return (
+      `[File: ${path} | Total: ${total} chars | Offset: 0 | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n` +
+      `Pass char_offset=30000 to this same function to keep reading.\n\n${slice}`
+    );
+  }
+
+  const offset    = char_offset ?? 0;
+  const safeLimit = Math.min(char_limit ?? 30000, 100000);
+  const slice     = content.slice(offset, offset + safeLimit);
+  const remaining = Math.max(0, total - offset - slice.length);
+  const header    = `[File: ${path} | Total: ${total} chars | Offset: ${offset} | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
+  return header + slice;
+}
+
 const READ_FILE_SIGNATURE_FAMILY = new Set(["github_read_file", "github_get_file_at_commit"]);
 
 function normalizedSignature(name, args) {
@@ -645,11 +682,15 @@ const FUNCTIONS = [
   },
   {
     name: "github_get_file_at_commit",
-    description: "Read a file's contents as it existed at a specific commit SHA.",
-    parameters: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" }, path: { type: "string" }, commit: { type: "string" } }, required: ["repo", "path", "commit"] },
-    execute: async ({ owner = DEFAULT_OWNER, repo, path, commit }) => {
+    description: "Read a file's contents as it existed at a specific commit SHA. Called with no char_offset/char_limit, returns the whole file up to 30,000 chars, or the first 30,000 plus total length and the offset to continue if longer -- pass char_offset/char_limit directly to page further or jump to a specific window.",
+    parameters: { type: "object", properties: {
+      owner: { type: "string" }, repo: { type: "string" }, path: { type: "string" }, commit: { type: "string" },
+      char_offset: { type: "number", description: "Character offset to start reading from. Omit for default behavior." },
+      char_limit: { type: "number", description: "Maximum characters to return (default 30000, max 100000). Ignored if char_offset is also omitted." },
+    }, required: ["repo", "path", "commit"] },
+    execute: async ({ owner = DEFAULT_OWNER, repo, path, commit, char_offset, char_limit }) => {
       const content = await readFileViaBlob(owner, repo, path, commit);
-      return content.length > 30000 ? content.slice(0, 30000) + "\n...[truncated]" : content;
+      return sliceFileContentForModel(content, path, { char_offset, char_limit });
     },
   },
   {
