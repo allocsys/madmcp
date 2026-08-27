@@ -649,12 +649,17 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
   fabrication is out of scope for an automated check. Undecided.
 - Structural read cap fix (commits `32877bf`/`a38336b`, `github_read_file`/
   `github_get_file_at_commit` char_offset/char_limit): live-verified, Runs
-  9-10 -- 6/6 clean on both, each with a fresh file and fresh planted-
-  question set (Run 9: `agent_delegate.js`; Run 10: `connectors/notion/
-  tools.js`), including Run-8-shaped relationship/include-exclude traps in
-  both. Required fixing a dedup-cache bug first (Gap 3, commit `1ae2c30`)
-  before the pagination mechanism actually worked end-to-end. Two
-  consecutive clean runs with genuinely fresh questions (not re-runs of an
-  already-fixed-for probe) is a stronger signal than one, but Runs 6-7 also
-  looked clean before Run 8 broke the streak -- still needs more
-  repetitions before calling the confident-wrong-claim pattern closed.
+  9-13 -- 5 consecutive clean runs across five different failure-mode
+  categories (relationship-fabrication: 9, 10; false-premise anchoring: 11;
+  stale/removed-tool correction: 12; multi-hop cross-file contradiction:
+  13). Required fixing a dedup-cache bug first (Gap 3, commit `1ae2c30`)
+  before the pagination mechanism actually worked end-to-end. This is the
+  longest and most varied clean streak recorded so far, but Runs 6-7 also
+  looked clean (2/2) before Run 8 broke the streak on a fresh probe shape --
+  still not treating the confident-wrong-claim pattern as closed, just as
+  increasingly well-tested. Next stress test not yet designed; candidates
+  discussed but not written: a claim requiring the model to notice an
+  *absence* across the whole file (something NOT there) rather than a
+  wrong relationship between things that are; or a checkpoint-resume-
+  specific adversarial claim (untested resume path for fabrication, only
+  tested for infra-failure survival so far).
