@@ -36,7 +36,7 @@ export function register(server) {
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
       provider: z.enum(["gemini"]).optional()
-        .describe(`Only "gemini" is currently supported (and is the default). GLM and Groq exist as providers in the codebase (connectors/llm/router.js) but are both parked with no active work and not selectable here -- see plan.md's "Provider status" section if that changes.`),
+        .describe(`Only "gemini" is currently supported (and is the default).`),
       model: z.string().optional()
         .describe(`Override the specific Gemini model to use (default: GEMINI_MODEL from config). ` +
           `WARNING -- CASCADE DISABLED: passing a model different from the default skips GEMINI_FALLBACK_MODELS entirely -- only the requested model is tried, so a 429/503 on it fails the call instead of cascading to another model. ` +
