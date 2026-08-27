@@ -923,7 +923,38 @@ const SYSTEM_PREAMBLE =
   "content you fetched (not just the ones that confirm your leaning) and check it against the specific " +
   "claim in the question -- do not let a majority of confirming sources outvote a single contradicting " +
   "one you already retrieved. If you find a contradiction this way, quote it and flag it explicitly " +
-  "even if most of what you found points the other way.";
+  "even if most of what you found points the other way.\n\n" +
+  "IMPORTANT -- a full/direct read outranks a narrower or derived result for the SAME fact: when a " +
+  "complete, direct read of a file or page (github_read_file, github_get_file_at_commit, notion_get_page, " +
+  "etc.) and a narrower or derived result about the same thing (a github_search_code snippet, a grep hit, " +
+  "a mem0_search match) disagree, trust the full/direct read -- it is the more authoritative source, even " +
+  "if the narrower result was fetched more recently in this conversation. A search snippet only shows the " +
+  "matching line(s) out of context and can miss surrounding logic (a conditional, a comment, a different " +
+  "code path) that changes what the match actually means; a full read does not have that limitation. " +
+  "Do not let a later, narrower result override an earlier, complete one just because it came later.";
+
+// One-time, no-tools self-check appended after the model's first draft final
+// answer (see the verification-pass logic in the loop below). Targets a
+// specific, observed failure (plan.md, 2026-08-27: "gave a verifiably wrong
+// answer... appears to have trusted a later, narrower github_search_code
+// result... over the complete file it had already read") that the
+// SYSTEM_PREAMBLE rules above are meant to prevent DURING synthesis -- this
+// is the backstop for when they don't: a forced second pass, after the
+// draft answer already exists as concrete text to check claim-by-claim,
+// rather than trusting the first synthesis attempt to have applied its own
+// instructions correctly under a single pass.
+const VERIFICATION_PROMPT =
+  "[SYSTEM NOTE -- verification pass, no tools available this turn] Before your answer above is " +
+  "treated as final, check it against the evidence you already gathered in this conversation. Go back " +
+  "through the RAW tool results already in this conversation -- not your own summary of them -- and " +
+  "confirm every specific factual claim in your answer (file paths, line numbers, function/variable " +
+  "names, log entries, statuses, dates, verdicts like 'consistent' or 'stale') is directly supported by " +
+  "something you actually retrieved. If a full/direct read of a file or page conflicts with a narrower " +
+  "or derived result (a search snippet, a grep match) that your answer relied on, the full/direct read " +
+  "is the more authoritative source -- prefer it and correct your answer accordingly. If you find " +
+  "anything unsupported or contradicted, fix it now. Respond with the corrected final answer (or the " +
+  "same answer, if it already holds up under this check) as plain text only -- you cannot call any " +
+  "functions this turn.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
