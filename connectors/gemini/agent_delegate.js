@@ -1209,14 +1209,21 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // lesson as isFinalStep's own history, see its comment above), so this
     // reuses that structural fix instead of a new mechanism.
     const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
-    // Verification pass (see VERIFICATION_PROMPT above): once a draft final
-    // answer has been sent back for self-checking, this turn must also be
-    // no-tools -- the point is to make the model re-examine evidence it
-    // already gathered, not go fetch more of it, and withholding tools is
-    // the same structural guarantee isFinalStep/stuckLoopForce already rely
-    // on (a text-only SYSTEM NOTE alone wasn't trusted for either of those,
-    // per their own history above -- no reason to trust it here instead).
-    const withholdTools = isFinalStep || stuckLoopForce || pendingVerification;
+    // Verification pass (see VERIFICATION_PROMPT above): deliberately does
+    // NOT withhold tools, unlike isFinalStep/stuckLoopForce. Those two
+    // withhold tools to force a stop; this one exists to catch the model
+    // trusting a wrong or misremembered mechanical detail (a variable name,
+    // a threshold, which of two similar-looking things gates a condition),
+    // and the fix for "misremembered" is letting it look again, not asking
+    // it to recall harder from a long scrollback transcript -- that's the
+    // same failure mode in a smaller box. Confirmed live (2026-08-27, see
+    // plan.md "Live verification test" runs 2-3): a no-tools verification
+    // pass confidently asserted the wrong constant (HARD_MAX_STEPS instead
+    // of the actual cappedSteps) gated a condition, i.e. it re-affirmed a
+    // wrong answer from memory instead of catching it. Tool access lets the
+    // model re-read the actual line instead of guessing which of two
+    // constants it half-remembers is the real one.
+    const withholdTools = isFinalStep || stuckLoopForce;
     let candidate;
     try {
       candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens });
@@ -1276,7 +1283,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // step, stuck-loop, or the verification pass itself -- all captured
       // by withholdTools), fall through to the ordinary return below
       // instead: there's no budget left to check, or this IS the check.
-      if (answer && !withholdTools && step < cappedSteps) {
+      // `!pendingVerification` here (new alongside the withholdTools change
+      // above) is what keeps this a ONE-TIME check: now that verification
+      // turns keep tool access, a draft answer produced BY the verification
+      // turn would otherwise satisfy this same condition again and loop
+      // back into another verification round indefinitely. The step budget
+      // (step < cappedSteps) still bounds worst-case cost, but this makes
+      // the intent explicit -- verify once, then trust the result.
+      if (answer && !withholdTools && !pendingVerification && step < cappedSteps) {
         contents.push({ role: "model", parts });
         contents.push({ role: "user", parts: [{ text: VERIFICATION_PROMPT }] });
         pendingVerification = true;
