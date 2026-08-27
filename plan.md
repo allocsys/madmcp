@@ -611,11 +611,25 @@ GLM/Groq too whenever those are unparked.
 
 ## Designer notes (future phase-2 port, not this plan's scope)
 
-`connectors/frontend/designer_delegate.js` imports `geminiChat`/
-`isRedisConfigured` directly and would need the same router swap. Not a
-copy-paste: (1) its checkpoint does a full-array overwrite per step, not
-append-delta; (2) its repeat-call cache only serves `read_file`/
-`validate`, never `write_file`.
+**Router swap done (commit `c5165f4`, 2026-08-27, direct push to `main`,
+CI green).** `connectors/frontend/designer_delegate.js` now imports
+`providerChat` from `connectors/llm/router.js` instead of `geminiChat`
+from `connectors/gemini/client.js`; the one call site was updated to
+match. Same call shape (only `tools` passed, no `model`/`maxOutputTokens`),
+and `router.js` defaults to `provider: "gemini"` when unset, so this
+preserves current behavior exactly -- `runDesignAgent` doesn't expose a
+`provider` argument yet, so designer runs still always use Gemini in
+practice, but the connector-level plumbing to route them through
+GLM/Groq once those are unparked is now in place, matching
+`agent_delegate.js`.
+
+Still true, and still relevant to any future work threading a `provider`
+argument through `runDesignAgent` itself: designer_delegate.js's
+checkpoint does a full-array overwrite per step, not append-delta; its
+repeat-call cache only serves `read_file`/`validate`, never `write_file`.
+Neither of those needed to change for the router swap itself, since
+`providerChat` is a drop-in replacement at the single call site -- they'd
+only matter for changes to the loop's own state-tracking logic.
 
 ## Remaining open questions
 
