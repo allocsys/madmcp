@@ -32,6 +32,40 @@ import { githubRequest, toBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 import { readFileViaBlob, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
 
+// Shared slicing logic behind read_file's optional char_offset/char_limit and
+// read_file_chunked (kept as a thin back-compat alias -- see note on
+// read_file_chunked below). A single source of truth here means the two
+// tools can never drift on how offset/limit/remaining are computed.
+function sliceFileContent(content, path, { char_offset, char_limit }) {
+  const total = content.length;
+
+  // No explicit paging args: preserve the original read_file behavior
+  // exactly -- return everything under the threshold, or an auto-truncated
+  // first chunk with a pointer to continue, above it. This keeps the
+  // common case ("just read me the file") a single call with no params.
+  if (char_offset === undefined && char_limit === undefined) {
+    if (total <= CHUNK_THRESHOLD) {
+      return { content: [{ type: "text", text: content }] };
+    }
+    const slice     = content.slice(0, CHUNK_SIZE);
+    const remaining = total - CHUNK_SIZE;
+    const header    =
+      `⚠️ File too large to return in full (${total.toLocaleString()} chars). ` +
+      `Returning first ${CHUNK_SIZE.toLocaleString()} chars. ` +
+      `Pass char_offset=${CHUNK_SIZE} to this same tool to continue.\n` +
+      `[File: ${path} | Total: ${total} chars | Offset: 0 | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
+    return { content: [{ type: "text", text: header + slice }] };
+  }
+
+  // Explicit paging: caller is asking for a specific window.
+  const offset    = char_offset ?? 0;
+  const safeLimit = Math.min(char_limit ?? 20000, 100000);
+  const slice     = content.slice(offset, offset + safeLimit);
+  const remaining = Math.max(0, total - offset - slice.length);
+  const header    = `[File: ${path} | Total: ${total} chars | Offset: ${offset} | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
+  return { content: [{ type: "text", text: header + slice }] };
+}
+
 export function register(server) {
 
   server.tool(
@@ -39,33 +73,25 @@ export function register(server) {
     "USE: single, specifically-named file, exact path already known.\n" +
     "RULE: >2 files needed, OR request = understand/review/summarize a repo or directory (any phrasing: 'read the repo', 'dig into it', 'get up to speed') -> delegate_agent instead. Never loop read_file manually for that.\n" +
     "RULE: repo is PUBLIC and goal = run/test/lint code (not just read it) -> git clone via bash_tool instead (github.com/codeload.github.com/raw.githubusercontent.com allowlisted; zero context cost; can execute code). PUBLIC REPOS ONLY -- no GitHub creds in sandbox.\n" +
-    "DOES: reads a file's contents from a GitHub repository. Auto-chunks if >100,000 chars -- use read_file_chunked for subsequent pages.",
+    "DOES: reads a file's contents from a GitHub repository. Called with no char_offset/char_limit, auto-chunks if >100,000 chars and tells you the offset to pass next. Pass char_offset/char_limit yourself at any time to jump straight to or page through a specific window (e.g. after a search hit tells you roughly where in the file to look) instead of always starting from the top.",
     {
-      owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:  z.string().describe("Repository name"),
-      path:  z.string().describe("File path within the repo, e.g. 'src/server.js'"),
-      ref:   z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:        z.string().describe("Repository name"),
+      path:        z.string().describe("File path within the repo, e.g. 'src/server.js'"),
+      ref:         z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      char_offset: z.number().optional().describe("Character offset to start reading from. Omit for default behavior (full file, or first chunk of a large one)."),
+      char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000 when char_offset/char_limit is used, max: 100000). Ignored if both char_offset and char_limit are omitted."),
     },
-    async ({ owner = DEFAULT_OWNER, repo, path, ref }) => {
+    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
-      const total   = content.length;
-      if (total <= CHUNK_THRESHOLD) {
-        return { content: [{ type: "text", text: content }] };
-      }
-      const slice     = content.slice(0, CHUNK_SIZE);
-      const remaining = total - CHUNK_SIZE;
-      const header    =
-        `⚠️ File too large to return in full (${total.toLocaleString()} chars). ` +
-        `Returning first ${CHUNK_SIZE.toLocaleString()} chars. ` +
-        `Use read_file_chunked with char_offset=${CHUNK_SIZE} to continue.\n` +
-        `[File: ${path} | Total: ${total} chars | Offset: 0 | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
-      return { content: [{ type: "text", text: header + slice }] };
+      return sliceFileContent(content, path, { char_offset, char_limit });
     }
   );
 
   server.tool(
     "read_file_chunked",
     "DOES: Read a slice of a large file. Use when read_file times out or is truncated.\n" +
+    "NOTE: read_file now accepts char_offset/char_limit directly -- this tool is kept as a back-compat alias with identical behavior, not a separate mechanism. Prefer passing char_offset/char_limit to read_file itself in new code.\n" +
     "RULE: chunking through several large files for one open-ended question -> delegate_agent instead of many manual round-trips.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
@@ -76,13 +102,8 @@ export function register(server) {
       char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000, max: 100000)"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset = 0, char_limit = 20000 }) => {
-      const safeLimit = Math.min(char_limit, 100000);
-      const content   = await readFileViaBlob(owner, repo, path, ref);
-      const total     = content.length;
-      const slice     = content.slice(char_offset, char_offset + safeLimit);
-      const remaining = Math.max(0, total - char_offset - slice.length);
-      const header    = `[File: ${path} | Total: ${total} chars | Offset: ${char_offset} | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
-      return { content: [{ type: "text", text: header + slice }] };
+      const content = await readFileViaBlob(owner, repo, path, ref);
+      return sliceFileContent(content, path, { char_offset, char_limit });
     }
   );
 
