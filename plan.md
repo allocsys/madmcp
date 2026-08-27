@@ -352,91 +352,36 @@ mechanical questions). This is "Run 1" in the table below. Findings:
 | (5) tool access available during verification pass itself | -- | -- | -- | **wrong (fabricated + backwards)** | correct |
 | (6, new) exact citation-forcing mechanism (post-4ff4260) | -- | -- | -- | -- | correct |
 
-Run 2 answered point (2) correctly: the skip condition is `step <
-cappedSteps`. Run 3 instead asserted the gate was `step < HARD_MAX_STEPS`.
-Checked directly against `connectors/gemini/agent_delegate.js`
-(`runInvestigation`): the real condition is
+Run 3 asserted the verification-pass gate was `step < HARD_MAX_STEPS`;
+the real code is `step < cappedSteps` where `cappedSteps = Math.min(max_steps,
+HARD_MAX_STEPS)` -- a different, caller-dependent value whenever
+`max_steps < 30` (true for our `max_steps: 25` calls). A specific, wrong,
+plausible-sounding name asserted with no hedge, not a rounding-error
+nitpick.
 
-```js
-if (answer && !withholdTools && step < cappedSteps) {
-```
-
-where `cappedSteps = Math.min(max_steps, HARD_MAX_STEPS)` -- the
-effective per-call ceiling, not the fixed platform-wide `HARD_MAX_STEPS`
-(30) that only feeds into computing it. These are genuinely different
-whenever a caller passes `max_steps` below 30, which is exactly what our
-test calls do (`max_steps: 25`). So Run 3's version of the claim was
-substantively wrong for the very call it was describing, not a
-rounding-error nitpick.
-
-**Revised conclusion:** the original concern -- Gemini confidently
-stating an incorrect mechanical detail -- recurred, just on a different
-question than the first run (point 2 instead of point 1). That's a more
-concerning pattern than plain hedging: the model isn't shy about details
-it's unsure of, it's willing to assert a specific, wrong, plausible-
-sounding variable name (`HARD_MAX_STEPS` in place of `cappedSteps`) with
-no hedge at all. The verification pass helps -- Run 2 shows it can
-produce a fully correct, precise answer -- but it does not reliably
-prevent confident-wrong claims on precise mechanical details. Treat any
-such claim from this harness (exact variable/condition names, precise
-mechanical specifics) as needing an independent human/code check before
-trusting it, even post-verification-pass.
-
-**Still needed:** re-run this same or a similarly heavy task a few more
-times against `gemini` to see how often the confident-wrong pattern
-recurs and on which categories of claim, and whether it clusters around
-specific kinds of mechanical detail (e.g. named constants/thresholds) or
-is unpredictable. (Superseded by "Run 6" below, run against the
-structural-line-quote-check build.)
+**Conclusion:** the verification pass helps (Run 2 was fully correct) but
+does not reliably prevent confident-wrong claims on precise mechanical
+detail -- treat exact variable/condition names from this harness as
+needing independent verification regardless of how many other questions
+in the same run were right. (Superseded by Runs 6-8 below, run against
+later builds.)
 
 ### Run 5 (same task, re-run against `gemini` after commit `4ff4260`)
 
-First re-run after the citation-forcing fix (`extractMechanicalClaims`/
-`findUnverifiedClaims`, see that commit) that was built specifically to
-catch the Run 3/4 failure mode. Result: **the fix did not catch it.**
-Question (2) -- the exact verification-pass skip condition -- came back
-wrong again, confidently, with no hedge: the model asserted the gate was
-`if (!withholdTools && pendingVerification && step < max_steps - 1)`.
-The actual code (confirmed directly against
-`connectors/gemini/agent_delegate.js`) is
+The citation-forcing fix (`extractMechanicalClaims`/`findUnverifiedClaims`)
+was built specifically to catch the Run 3/4 failure mode. **It didn't.**
+Question (2) came back wrong again, confidently: model claimed
+`if (!withholdTools && pendingVerification && step < max_steps - 1)`,
+real code is `if (answer && !withholdTools && !pendingVerification && step
+< cappedSteps)` -- two errors (inverted `pendingVerification` polarity,
+wrong threshold name again). Questions (1),(3),(4),(5),(6) all correct.
 
-```js
-if (answer && !withholdTools && !pendingVerification && step < cappedSteps) {
-```
-
-Two distinct errors in one claim: the `pendingVerification` polarity is
-inverted (real code requires it to be `false`, i.e. `!pendingVerification`,
-to proceed -- the model stated the opposite), and `step < cappedSteps` was
-again misstated as `step < max_steps - 1` -- the same class of
-fabricated-threshold error the fix targeted, just a different wrong
-constant than Run 3's `HARD_MAX_STEPS`.
-
-Questions (1), (3), (4), (5), and (6) were all answered correctly this
-run, including (5) and (6), which directly probe the citation-forcing fix
-itself (tool access retained during verification; the
-extractMechanicalClaims/findUnverifiedClaims mechanism) -- the model can
-correctly describe how the fix works while still failing to apply
-equivalent scrutiny to its own answer on question (2) in the same
-response.
-
-**Likely reason the fix didn't catch this:** `extractMechanicalClaims`
-checks whether each extracted identifier token appears verbatim
-somewhere in raw tool output already fetched -- not whether the specific
-*combination/relationship* asserted between tokens (e.g. "`step` is
-compared against `max_steps - 1`") matches what the source actually
-shows. Both `step` and `max_steps` are real identifiers that do appear in
-the file, so a token-level verbatim check can pass even when the composed
-expression citing them is fabricated. The fix narrows the failure surface
-(catches invented identifiers) but not this shape of error (real
-identifiers, wrong relationship/threshold between them).
-
-**Revised status:** the confident-wrong pattern on precise mechanical
-relationships (not just invented names) is not solved by the
-citation-forcing fix. Treat this as still open -- any claim from this
-harness about an exact conditional expression, especially one combining
-multiple named variables/constants, needs independent verification
-regardless of how many other questions in the same run were answered
-correctly.
+**Root cause:** the fix checks whether each identifier token appears
+verbatim in tool output already fetched, not whether the *relationship*
+asserted between two real tokens matches source. `step` and `max_steps`
+are both real, so a token-level check passes even when the composed
+expression combining them is fabricated. This gap motivated the
+structural line-quote check below.
 
 ## Designer notes (future phase-2 port, not this plan's scope)
 
