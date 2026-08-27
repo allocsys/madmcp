@@ -2,15 +2,17 @@
 
 **STATUS (2026-08-27): GLM/OpenRouter implementation shipped and deployed,
 but currently non-functional (see "Current status" -- account has no
-credit and none is being added). Groq has been added as the practical
-free-tier alternative to Gemini -- steps 1-8 of "Groq provider addition"
-below (config, client, shared adapter extraction, router wiring,
-checkpoint/cooldown reuse, tool schema, tests) are implemented and green
-in CI as of commit `00a5edb`. STILL OUTSTANDING: step 9 (live smoke test
-against a real Groq account -- nothing here has been run against Groq's
-actual API yet, only mocked), step 10 (rollout confirmation), and doc
-updates -- README.md/docs/API_KEYS.md/docs/env.html still don't mention
-Groq at all as of this STATUS line. GLM code stays in place (not being
+credit and none is being added). Groq has been added as a third
+`delegate_agent` provider (PR #106, merged to main) -- steps 1-8 done,
+doc updates done. STEP 9 (live smoke test) IS NOW DONE, and the result is
+not the clean win hoped for: this account's Groq free tier is genuinely
+not balance-gated (unlike OpenRouter), but its 8000 TPM/model limit is
+tripped almost immediately by `delegate_agent`'s own ~30-tool schema size
+-- see "Groq live smoke test findings" below. A single no-tool call works
+fine; any real tool-using investigation fails by step 1-2. `provider:
+"groq"` is live on main and technically functional, but not yet usable
+for its actual intended workload on this account without further work
+(see findings section for options). GLM code stays in place (not being
 ripped out) in case OpenRouter credit is ever added later.**
 
 ## Why
@@ -354,6 +356,71 @@ steps 9-10 still outstanding -- see updated STATUS line above):**
     disable the `glm`/OpenRouter code path in the process -- it stays
     available and will resume working immediately if OpenRouter credit is
     ever added later, with no code changes needed.
+
+## Groq live smoke test findings (2026-08-27, step 9)
+
+Ran against the real `GROQ_API_KEYS` value added to Vercel this same day.
+Three calls, mirroring the three-stage test this step called for:
+
+1. **Minimal, no-tool, single-step call** (`max_steps: 1` -- withholds
+   tools entirely on the final/only step, see agent_delegate.js's
+   `isFinalStep` logic): succeeded immediately, plain-text answer, no
+   errors. Confirms the wire-level plumbing (auth, request shape, response
+   parsing) all works end-to-end against the real API -- nothing wrong at
+   that layer.
+2. **Tool-using multi-step task, default config** (`max_steps: 5`, no
+   explicit `model`/`maxOutputTokens` override): failed on step 1 with a
+   413 from `qwen/qwen3.6-27b` -- "Request too large... Limit 8000,
+   Requested 10303" (tokens per minute). The error names the FALLBACK
+   model, meaning the PRIMARY model (`openai/gpt-oss-120b`, `GROQ_MODEL`)
+   also failed on this same first request with a retryable error (429/503)
+   that triggered the model cascade, and the fallback then hit an
+   unretryable 413 immediately, so the whole call surfaced that error.
+3. **Same task, `model: "openai/gpt-oss-120b"` pinned + `maxOutputTokens:
+   500`:** because the pinned value equals the current `GROQ_MODEL`
+   default, this did NOT disable the cascade (per client.js's own
+   contract: cascade is only disabled when the requested model DIFFERS
+   from the configured default -- worth remembering when testing "pin to
+   the primary model" scenarios). Step 1 succeeded (one `get_repo_topics`
+   tool call completed). Step 2 failed with a 429 from `qwen/qwen3.6-27b`:
+   "tokens per minute (TPM): Limit 8000, Used 6259, Requested 6772" --
+   i.e. step 1 alone had already consumed 6259 of the account's 8000 TPM
+   budget, leaving no room for step 2's request even at a reduced output
+   cap.
+
+**Root cause, distinct from GLM's:** this is NOT balance-gating (Groq's
+free tier really is request/token-rate-limited, not tied to a dollar
+balance, confirming the plan's original assumption) -- it's that
+`delegate_agent`'s `FUNCTION_DECLARATIONS` (all ~30 read-only
+GitHub/Cloudflare/Notion/Context7/Mem0 tool schemas, sent in full on
+EVERY turn, not just the first) is, on its own, large enough to consume
+most or all of an 8000 TPM budget in a single request -- before counting
+any file/page content the loop has already read back in. Lowering
+`maxOutputTokens` (stage 3 above) does not fix this: the bottleneck is
+prompt-side (the tool schema + accumulating conversation), which
+`GROQ_DEFAULT_MAX_OUTPUT_TOKENS` was never designed to cap.
+
+**Practical implication:** on this account's current Groq tier,
+`provider: "groq"` works for the no-tool/final-step case but is not
+usable for a genuine multi-step investigation -- the exact workload
+`delegate_agent` exists for. Options, not yet decided/actioned:
+- Check whether Groq's paid/dev tier raises the TPM limit enough to make
+  this workable (https://console.groq.com/settings/billing) -- would need
+  an explicit decision to pay, same kind of call as OpenRouter's credit
+  question.
+- A leaner tool schema specifically for the groq path (e.g. only the
+  GitHub-related subset) would reduce prompt size per turn, but this
+  cuts against `delegate_agent`'s whole premise (one investigation loop
+  across every connector) and would need its own design decision, not a
+  quick patch.
+- Confirm whether Groq's TPM window is genuinely 60-second (would make
+  spacing/backoff between steps a viable mitigation) or something else --
+  not yet checked against Groq's own docs.
+
+**Until one of the above is decided, treat `provider: "groq"` the same
+way as `provider: "glm"` is currently treated: wired, live, opt-in, but
+not yet something to route real investigative work through.**
+`DEFAULT_LLM_PROVIDER` remains `"gemini"`.
 
 ## Designer notes (future phase-2 port, not this plan's scope)
 
