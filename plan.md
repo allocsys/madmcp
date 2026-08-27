@@ -685,6 +685,20 @@ only matter for changes to the loop's own state-tracking logic.
   file for the full record, including the one untested caveat
   (checkpoint-resume-specific fabrication) kept on file in case this
   needs reopening later.
+- Structural read cap fix (commits `32877bf`/`a38336b`, `github_read_file`/
+  `github_get_file_at_commit` char_offset/char_limit): live-verified, Runs
+  9-14 -- 6 consecutive clean runs across six different failure-mode
+  categories (relationship-fabrication: 9, 10; false-premise anchoring: 11;
+  stale/removed-tool correction: 12; multi-hop cross-file contradiction: 13;
+  absence-detection: 14). Required fixing a dedup-cache bug first (Gap 3,
+  commit `1ae2c30`) before the pagination mechanism actually worked
+  end-to-end. This is the longest and most varied clean streak recorded so
+  far, but Runs 6-7 also looked clean (2/2) before Run 8 broke the streak on
+  a fresh probe shape. Of the two stress-test candidates flagged after Run
+  13, absence-detection is now done (Run 14); checkpoint-resume-specific
+  fabrication (untested resume path for fabrication, only tested for
+  infra-failure survival so far) remains undesigned -- kept on record per
+  the CLOSED note above, not being actively pursued.
 
 ## Remaining open questions (active -- no external blocker)
 
@@ -698,21 +712,6 @@ only matter for changes to the loop's own state-tracking logic.
   token-level check. Needs either a broader claim classifier or
   acceptance that inferential (not just conditional-expression)
   fabrication is out of scope for an automated check. Undecided.
-- Structural read cap fix (commits `32877bf`/`a38336b`, `github_read_file`/
-  `github_get_file_at_commit` char_offset/char_limit): live-verified, Runs
-  9-14 -- 6 consecutive clean runs across six different failure-mode
-  categories (relationship-fabrication: 9, 10; false-premise anchoring: 11;
-  stale/removed-tool correction: 12; multi-hop cross-file contradiction: 13;
-  absence-detection: 14). Required fixing a dedup-cache bug first (Gap 3,
-  commit `1ae2c30`) before the pagination mechanism actually worked
-  end-to-end. This is the longest and most varied clean streak recorded so
-  far, but Runs 6-7 also looked clean (2/2) before Run 8 broke the streak on
-  a fresh probe shape -- still not treating the confident-wrong-claim
-  pattern as closed, just as increasingly well-tested. Of the two stress-
-  test candidates flagged after Run 13, absence-detection is now done (Run
-  14); checkpoint-resume-specific fabrication (untested resume path for
-  fabrication, only tested for infra-failure survival so far) remains
-  undesigned.
 - Groq: needs a TPM window-length check against Groq's docs -- a plain
   lookup, not blocked on funding or on Groq being unparked for real work.
   The resulting decision (pay for a higher TPM tier, build a leaner
