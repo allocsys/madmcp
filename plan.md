@@ -522,6 +522,29 @@ catches a similar contradiction or the original bug simply doesn't recur --
 either result is useful signal, but treat this as unverified in production
 until that live run happens.
 
+**Pre-merge live check (2026-08-27, against `main`, provider `gemini`,
+no verification pass -- baseline only):** ran a live `delegate_agent`
+task asking Gemini to directly determine, on `main`, whether
+`validateFunctionArgs()` runs conditionally or unconditionally before
+`execute()` in `agent_delegate.js` -- the same underlying fact the
+original 13-step run got wrong. This run (14 steps) answered correctly:
+1 `execute()` call site, `validateFunctionArgs()` unconditional before
+it, code search agreeing with the full-file read. **Treat this as weak
+signal, not a validation of anything:** the task was narrow and pointed
+nearly directly at the fact in question, unlike the original open-ended
+13-step run where the wrong claim emerged from synthesizing across a
+longer, less targeted investigation -- not a faithful reproduction of the
+failure conditions. LLM output is also non-deterministic, so one correct
+run (on an easier task than the original) is not evidence the underlying
+failure mode is gone. This run also did not exercise the verification
+pass at all (ran against `main`, pre-merge). **Still needed before trusting
+this branch in production:** re-run a task that faithfully reproduces the
+original open-ended, multi-step conditions (not a narrowed version) --
+ideally several times against `main` first to establish an actual baseline
+recurrence rate, then the same task the same number of times against this
+branch post-merge, to get a real before/after comparison instead of a
+single anecdote either way.
+
 ## Designer notes (future phase-2 port, not this plan's scope)
 
 `connectors/frontend/designer_delegate.js` imports `geminiChat`/

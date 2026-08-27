@@ -923,7 +923,38 @@ const SYSTEM_PREAMBLE =
   "content you fetched (not just the ones that confirm your leaning) and check it against the specific " +
   "claim in the question -- do not let a majority of confirming sources outvote a single contradicting " +
   "one you already retrieved. If you find a contradiction this way, quote it and flag it explicitly " +
-  "even if most of what you found points the other way.";
+  "even if most of what you found points the other way.\n\n" +
+  "IMPORTANT -- a full/direct read outranks a narrower or derived result for the SAME fact: when a " +
+  "complete, direct read of a file or page (github_read_file, github_get_file_at_commit, notion_get_page, " +
+  "etc.) and a narrower or derived result about the same thing (a github_search_code snippet, a grep hit, " +
+  "a mem0_search match) disagree, trust the full/direct read -- it is the more authoritative source, even " +
+  "if the narrower result was fetched more recently in this conversation. A search snippet only shows the " +
+  "matching line(s) out of context and can miss surrounding logic (a conditional, a comment, a different " +
+  "code path) that changes what the match actually means; a full read does not have that limitation. " +
+  "Do not let a later, narrower result override an earlier, complete one just because it came later.";
+
+// One-time, no-tools self-check appended after the model's first draft final
+// answer (see the verification-pass logic in the loop below). Targets a
+// specific, observed failure (plan.md, 2026-08-27: "gave a verifiably wrong
+// answer... appears to have trusted a later, narrower github_search_code
+// result... over the complete file it had already read") that the
+// SYSTEM_PREAMBLE rules above are meant to prevent DURING synthesis -- this
+// is the backstop for when they don't: a forced second pass, after the
+// draft answer already exists as concrete text to check claim-by-claim,
+// rather than trusting the first synthesis attempt to have applied its own
+// instructions correctly under a single pass.
+const VERIFICATION_PROMPT =
+  "[SYSTEM NOTE -- verification pass, no tools available this turn] Before your answer above is " +
+  "treated as final, check it against the evidence you already gathered in this conversation. Go back " +
+  "through the RAW tool results already in this conversation -- not your own summary of them -- and " +
+  "confirm every specific factual claim in your answer (file paths, line numbers, function/variable " +
+  "names, log entries, statuses, dates, verdicts like 'consistent' or 'stale') is directly supported by " +
+  "something you actually retrieved. If a full/direct read of a file or page conflicts with a narrower " +
+  "or derived result (a search snippet, a grep match) that your answer relied on, the full/direct read " +
+  "is the more authoritative source -- prefer it and correct your answer accordingly. If you find " +
+  "anything unsupported or contradicted, fix it now. Respond with the corrected final answer (or the " +
+  "same answer, if it already holds up under this check) as plain text only -- you cannot call any " +
+  "functions this turn.";
 
 // Runs the investigation loop. Returns { answer, steps, transcript, runId,
 // failed? } where transcript is a human-readable log of each function call
@@ -995,6 +1026,15 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   let repeatCounts = new Map();
   let resultCache = new Map();
   let consecutiveAllRepeatSteps = 0;
+  // Verification pass (2026-08-27, see VERIFICATION_PROMPT's comment above
+  // for the specific failure it targets): true once the model has produced
+  // a draft final answer and been sent back for one no-tools self-check
+  // round before that answer is trusted. Persisted across resumes (below)
+  // so a run that dies mid-verification -- e.g. the verification call
+  // itself hits a transient 429/503 -- resumes into the verification turn
+  // again rather than silently re-entering normal tool-use and re-drafting
+  // a whole new answer from scratch.
+  let pendingVerification = false;
   // How many entries of `contents` have already been pushed to the Redis
   // checkpoint list (fix #5) -- saveCheckpoint only ever needs the SLICE
   // added since the last checkpoint, not the whole array, so this cursor is
@@ -1027,6 +1067,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // `checkpoint.task || task` below.
     repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
     consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
+    // Checkpoints saved before this field existed won't have it -- default
+    // to false (normal tool-use resumes as before), same defensive pattern
+    // as every other field restored here.
+    pendingVerification = checkpoint.pendingVerification || false;
     // Prefer the checkpoint's own record of the original task -- `task` is
     // genuinely ignored on a live resume (see file header), so this is the
     // only reliable source once a run is past step 1. Checkpoints saved
@@ -1111,7 +1155,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // lesson as isFinalStep's own history, see its comment above), so this
     // reuses that structural fix instead of a new mechanism.
     const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
-    const withholdTools = isFinalStep || stuckLoopForce;
+    // Verification pass (see VERIFICATION_PROMPT above): once a draft final
+    // answer has been sent back for self-checking, this turn must also be
+    // no-tools -- the point is to make the model re-examine evidence it
+    // already gathered, not go fetch more of it, and withholding tools is
+    // the same structural guarantee isFinalStep/stuckLoopForce already rely
+    // on (a text-only SYSTEM NOTE alone wasn't trusted for either of those,
+    // per their own history above -- no reason to trust it here instead).
+    const withholdTools = isFinalStep || stuckLoopForce || pendingVerification;
     let candidate;
     try {
       candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens });
@@ -1134,6 +1185,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         provider: effectiveProvider,
         model: effectiveModel,
         maxOutputTokens: effectiveMaxOutputTokens,
+        pendingVerification,
       });
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
@@ -1158,23 +1210,57 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
 
     if (!functionCalls.length) {
       const answer = parts.map((p) => p.text || "").join("").trim();
+
+      // First arrival at a draft final answer, with tool access still
+      // available this turn (not already a forced no-tools turn) and steps
+      // left in the budget: don't trust it at face value yet -- push it
+      // back for one additional no-tools self-check turn first. See
+      // VERIFICATION_PROMPT's comment above for the specific, observed
+      // failure this targets (a later, narrower search result trusted over
+      // a complete file already read earlier in the same run). If no steps
+      // remain, or this turn was ALREADY a forced no-tools turn (final
+      // step, stuck-loop, or the verification pass itself -- all captured
+      // by withholdTools), fall through to the ordinary return below
+      // instead: there's no budget left to check, or this IS the check.
+      if (answer && !withholdTools && step < cappedSteps) {
+        contents.push({ role: "model", parts });
+        contents.push({ role: "user", parts: [{ text: VERIFICATION_PROMPT }] });
+        pendingVerification = true;
+        await saveCheckpoint(runId, {
+          newContents: contents.slice(contentsCheckpointedUpTo),
+          transcript,
+          stepsDone: step,
+          task: effectiveTask,
+          repeatCounts: Object.fromEntries(repeatCounts),
+          consecutiveAllRepeatSteps,
+          provider: effectiveProvider,
+          model: effectiveModel,
+          maxOutputTokens: effectiveMaxOutputTokens,
+          pendingVerification,
+        });
+        contentsCheckpointedUpTo = contents.length;
+        continue;
+      }
+
       await deleteCheckpoint(runId);
       if (!answer) {
-        // MALFORMED_FUNCTION_CALL on the final step specifically means: this
-        // step had NO tools in the request (isFinalStep withholds them
-        // entirely, see above), but the model tried to make a function call
-        // anyway -- Gemini rejects that as malformed rather than falling
-        // back to text. Observed concretely with max_steps: 1 on a task that
-        // genuinely needed a file read: the model had no way to answer
-        // without a tool, no tools were offered, and the result was this
-        // opaque finishReason with zero explanation of why (2026-07-26
-        // stress test). Surface the actual cause instead of just the raw
-        // enum value, since "try a higher max_steps" is the fix and the
-        // caller has no way to infer that from "MALFORMED_FUNCTION_CALL"
-        // alone.
+        // MALFORMED_FUNCTION_CALL on a no-tools turn specifically means:
+        // this step had NO tools in the request (isFinalStep/stuckLoopForce/
+        // pendingVerification all withhold them, see withholdTools above),
+        // but the model tried to make a function call anyway -- Gemini
+        // rejects that as malformed rather than falling back to text.
+        // Observed concretely with max_steps: 1 on a task that genuinely
+        // needed a file read: the model had no way to answer without a
+        // tool, no tools were offered, and the result was this opaque
+        // finishReason with zero explanation of why (2026-07-26 stress
+        // test). Surface the actual cause instead of just the raw enum
+        // value, since "try a higher max_steps" is the fix and the caller
+        // has no way to infer that from "MALFORMED_FUNCTION_CALL" alone.
         const starvationNote = withholdTools && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
           ? (isFinalStep
               ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${cappedSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+              : pendingVerification
+              ? ` This was the verification pass (no tools offered on purpose -- see VERIFICATION_PROMPT), but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The draft answer from the step before this one was never returned to the caller as a result -- treat this run as having produced no usable answer, and consider retrying with a higher max_steps in case the verification turn simply needed more room.`
               : ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls (same function + arguments already tried this run) -- fix #4's stuck-loop guard forces a text-only answer the same way the final step does, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`)
           : "";
         return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask };
@@ -1336,6 +1422,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         provider: effectiveProvider,
         model: effectiveModel,
         maxOutputTokens: effectiveMaxOutputTokens,
+        pendingVerification,
       });
       const errMessage = err?.message ?? String(err);
       return {
@@ -1396,6 +1483,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       provider: effectiveProvider,
       model: effectiveModel,
       maxOutputTokens: effectiveMaxOutputTokens,
+      // Always false here in practice: this checkpoint fires only after a
+      // step that made function calls, and a verification-pass turn never
+      // reaches this branch (withholdTools forces it to text-only, so it
+      // either returns from the !functionCalls.length branch above or, on
+      // the MALFORMED_FUNCTION_CALL edge case, returns early with an
+      // error) -- included explicitly so the persisted checkpoint always
+      // states this field rather than silently omitting it on this path.
+      pendingVerification,
     });
     contentsCheckpointedUpTo = contents.length;
   }
