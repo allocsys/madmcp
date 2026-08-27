@@ -345,6 +345,15 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
 - Gemini: repeat the heavy-task live verification test a few more times
   to establish how often the verification pass fails to catch a
   confident-wrong mechanical claim (see "Live verification test", runs
-  2-3) and whether it clusters around particular kinds of detail (e.g.
+  2-5) and whether it clusters around particular kinds of detail (e.g.
   named constants/thresholds) -- current status is "helps, but not a
   reliable guarantee," not "solved."
+- Citation-forcing fix (commit `4ff4260`): confirmed live (Run 5) that it
+  does not catch a wrong *relationship/threshold between two real,
+  already-cited identifiers* (e.g. `step < cappedSteps` misstated as
+  `step < max_steps - 1`, both real names) -- it only checks whether each
+  individual token appears verbatim in raw tool output, not whether the
+  composed expression does. Needs either a stronger check (e.g. requiring
+  the model to quote the exact source line rather than individual tokens)
+  or acceptance that this class of error is out of scope for an automated
+  check. Undecided.
