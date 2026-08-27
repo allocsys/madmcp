@@ -14,18 +14,29 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // also lets the "resume with no live checkpoint" error path be exercised
 // for real rather than through a mock.
 //
-// VERIFICATION PASS (2026-08-27, see plan.md "Gemini harness fix --
-// self-verification pass"): any draft final answer produced with tool
-// budget still remaining (i.e. NOT already a forced no-tools turn, and at
-// least one step left after it) now triggers one extra no-tools
-// self-verification providerChat call before the answer is returned. This
-// is provider-agnostic (lives in the loop body, not gemini-specific code),
-// so every test below that reaches a draft answer with steps to spare needs
-// a second (or third) mocked providerChat response for that verification
-// round-trip, with step/call counts bumped by one accordingly. Tests that
-// reach their draft answer on an already-withheld-tools turn (the final
-// allowed step, or the stuck-loop force) are unaffected -- withholdTools
-// being true is exactly what skips the verification pass.
+// VERIFICATION PASS (2026-08-27, updated 2026-08-27 -- see plan.md "Gemini
+// harness fix -- self-verification pass" and the later "Live verification
+// test" runs 2-3): any draft final answer produced with tool budget still
+// remaining (i.e. NOT already a forced no-tools turn, and at least one step
+// left after it) triggers one extra self-verification providerChat call
+// before the answer is returned. This is provider-agnostic (lives in the
+// loop body, not gemini-specific code), so every test below that reaches a
+// draft answer with steps to spare needs a second (or third) mocked
+// providerChat response for that verification round-trip, with step/call
+// counts bumped by one accordingly. Tests that reach their draft answer on
+// an already-withheld-tools turn (the final allowed step, or the stuck-loop
+// force) are unaffected -- withholdTools being true is exactly what skips
+// the verification pass.
+//
+// IMPORTANT: unlike the original version, the verification-pass call is NOT
+// tool-withheld -- it receives the same `tools: FUNCTION_DECLARATIONS` as a
+// normal step. A no-tools verification pass was found live to sometimes
+// confidently re-assert a wrong mechanical detail from memory instead of
+// catching it (plan.md "Live verification test", runs 2-3); giving it tool
+// access lets the model re-fetch instead of guessing. So `opts.tools` on the
+// verification call should be asserted as defined (truthy), not undefined.
+// A `!pendingVerification` guard (new) still keeps this to exactly one
+// verification round per draft answer even though tools are available.
 
 const mockProviderChat = vi.fn();
 vi.mock("../connectors/llm/router.js", () => ({
@@ -88,7 +99,9 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
     expect(opts.provider).toBe(provider);
     const [, verifyOpts] = mockProviderChat.mock.calls[1];
     expect(verifyOpts.provider).toBe(provider);
-    expect(verifyOpts.tools).toBeUndefined();
+    // Verification pass keeps tool access (2026-08-27 fix) so the model can
+    // re-fetch instead of recalling a mechanical detail from memory.
+    expect(verifyOpts.tools).toBeDefined();
   });
 
   it("runs a self-verification pass that can correct the draft answer before returning it", async () => {
@@ -109,9 +122,33 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
     expect(mockProviderChat).toHaveBeenCalledTimes(2);
 
     const [verifyContents, verifyOpts] = mockProviderChat.mock.calls[1];
-    expect(verifyOpts.tools).toBeUndefined();
+    expect(verifyOpts.tools).toBeDefined();
     const lastMessage = verifyContents[verifyContents.length - 1];
     expect(lastMessage.parts[0].text).toMatch(/verification pass/i);
+  });
+
+  it("does not trigger a second verification round when the verification pass itself returns a draft answer", async () => {
+    // Regression test for the !pendingVerification guard added alongside
+    // the tool-access fix: since the verification turn now keeps tools, a
+    // text-only response FROM that turn would otherwise satisfy the same
+    // "draft answer with budget left" condition again and loop into a
+    // second verification round indefinitely.
+    mockProviderChat
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "draft answer" }] },
+        finishReason: "STOP",
+      })
+      .mockResolvedValueOnce({
+        content: { role: "model", parts: [{ text: "confirmed final answer" }] },
+        finishReason: "STOP",
+      });
+
+    const result = await runInvestigation({ task: "single verification round only", max_steps: 10, provider });
+
+    expect(result.answer).toBe("confirmed final answer");
+    expect(result.steps).toBe(2);
+    // Exactly 2 calls: the draft, then one verification pass. No third call.
+    expect(mockProviderChat).toHaveBeenCalledTimes(2);
   });
 
   it("executes a function call, feeds the result back, runs the verification pass, and returns the final answer", async () => {
@@ -141,8 +178,8 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
     expect(mockProviderChat.mock.calls[0][1].provider).toBe(provider);
     expect(mockProviderChat.mock.calls[1][1].provider).toBe(provider);
     expect(mockProviderChat.mock.calls[2][1].provider).toBe(provider);
-    // The verification-pass call (3rd) had no tools available.
-    expect(mockProviderChat.mock.calls[2][1].tools).toBeUndefined();
+    // The verification-pass call (3rd) keeps tool access (2026-08-27 fix).
+    expect(mockProviderChat.mock.calls[2][1].tools).toBeDefined();
     // The transcript recorded the call, whatever its result (error or not).
     expect(result.transcript[0]).toMatch(/^\[step 1\] github_get_repo_topics/);
   });
