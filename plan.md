@@ -246,6 +246,24 @@ deprecation page):**
 - Verify both slugs live at https://console.groq.com/docs/models
   immediately before implementation, not from this plan alone.
 
+**Model choice -- CORRECTED (2026-08-27, before implementation):** the
+ordering above was written before checking each slug's own catalog listing
+type, not just its churn history. Groq's model catalog
+(https://console.groq.com/docs/models) classifies `qwen/qwen3.6-27b` as a
+**preview** model -- "intended for evaluation purposes only... may be
+discontinued at short notice" -- despite scoring highest on Groq's own
+intelligence ranking, while `openai/gpt-oss-120b` is a **production**
+model. `delegate_agent` is a persistent, unattended provider option, not a
+one-off benchmark run, so availability stability outweighs a benchmark
+edge here. **Swap the ordering above**: `GROQ_MODEL` defaults to
+`openai/gpt-oss-120b` (production, primary) and `GROQ_FALLBACK_MODELS`
+defaults to `qwen/qwen3.6-27b` (preview, fallback only -- stronger when
+available, but not to be relied on as the primary path). This is what
+config.js actually ships (see its GROQ_MODEL/GROQ_FALLBACK_MODELS
+comments) -- do not revert to the original ordering above without
+re-checking https://console.groq.com/docs/models for whether either
+model's classification has changed.
+
 **Sequenced steps:**
 
 1. **Config (`config.js`):** add `GROQ_API_KEYS` (comma-separated, plural
