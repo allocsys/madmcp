@@ -1452,8 +1452,20 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         const claimNote = unverifiedClaims.length
           ? `\n\n[SPECIFIC ITEMS TO CHECK] The following identifier(s)/snippet(s) in your draft answer do not appear verbatim in any raw tool result you've fetched so far this run: ${unverifiedClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: re-read or re-search the specific file/location it's claimed to come from and confirm it exact-matches what's actually there, THEN either (a) keep the claim only if you can now quote it verbatim from a fresh tool result, or (b) correct it if the fresh read shows something different. Do not restate any of these unchanged based on memory or on the fact that you already wrote it once -- that is exactly the failure mode this check exists to catch. (Note: some of these may be false positives -- ordinary words, or claims already correctly quoted -- but each one still needs a fresh check, not a guess about which category it's in.)`
           : "";
+        // Structural line-quote ask (see CONDITIONAL_CLAIM_PATTERN's comment
+        // above): a token-presence check is not enough for a claim that
+        // COMBINES two or more real identifiers into a relationship (an
+        // operator between them) -- the model must instead quote the exact
+        // literal source line for each, in a fixed, parseable format, so
+        // round 2 below can verify the quote itself via a plain string
+        // .includes() rather than trusting the model's own assertion that
+        // it double-checked.
+        const conditionalClaims = extractConditionalClaims(answer);
+        const conditionalNote = conditionalClaims.length
+          ? `\n\n[STRUCTURAL LINE-QUOTE CHECK] Your draft answer contains conditional/comparison expression(s) that a simple identifier check cannot verify, because the individual tokens in them can be real even when the RELATIONSHIP between those tokens is wrong: ${conditionalClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: find the exact single source line it is based on (re-reading the file if you need to) and reproduce that line's ACTUAL, LITERAL text -- copied exactly, not paraphrased, reformatted, or reconstructed from memory -- on its own line in your response, in this exact format: LINE_QUOTE: <the exact literal source line>. Provide one LINE_QUOTE line for each conditional/comparison expression listed above, in addition to your corrected final answer text.`
+          : "";
         contents.push({ role: "model", parts });
-        contents.push({ role: "user", parts: [{ text: VERIFICATION_PROMPT + claimNote }] });
+        contents.push({ role: "user", parts: [{ text: VERIFICATION_PROMPT + claimNote + conditionalNote }] });
         pendingVerification = true;
         await saveCheckpoint(runId, {
           newContents: contents.slice(contentsCheckpointedUpTo),
@@ -1466,12 +1478,58 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           model: effectiveModel,
           maxOutputTokens: effectiveMaxOutputTokens,
           pendingVerification,
+          structuralRecheckUsed,
         });
         contentsCheckpointedUpTo = contents.length;
         continue;
       }
 
+      // Round 2: this is the model's response to the verification pass
+      // above (pendingVerification already true). Before trusting it,
+      // mechanically check any LINE_QUOTE: lines it produced against the raw
+      // tool-result text already gathered -- NOT another LLM judgment call,
+      // a plain string .includes() (see lineIsVerbatimInToolResults). If any
+      // quoted "exact" line can't actually be found verbatim, the model
+      // fabricated or misremembered it even while claiming to have checked,
+      // so send exactly ONE corrective round naming which quotes failed and
+      // accept whatever comes back after that as final -- bounded by
+      // structuralRecheckUsed so this can never loop more than once beyond
+      // the existing verification pass, consistent with pendingVerification's
+      // own single-fire guard.
+      if (answer && pendingVerification && !structuralRecheckUsed && step < cappedSteps) {
+        const quotedLines = extractLineQuotes(answer);
+        const badQuotes = quotedLines.filter((q) => !lineIsVerbatimInToolResults(q, contents));
+        if (badQuotes.length) {
+          const correctionNote =
+            `[STRUCTURAL LINE-QUOTE CHECK FAILED] The following line(s) you quoted as exact source text could NOT be found verbatim in any raw tool result already in this conversation: ${badQuotes.map((q) => `"${q}"`).join(", ")}. This means at least one quoted line was reconstructed, paraphrased, or misremembered rather than copied exactly, which means the conditional/comparison claim it was meant to support has NOT actually been confirmed. Re-read the actual file or location again right now, copy the REAL line character-for-character (do not paraphrase, reformat whitespace, or reconstruct from memory), and give your corrected final answer along with a corrected LINE_QUOTE: <line> for each expression you're re-checking. This is the last verification round -- give your best, fully corrected final answer this time.`;
+          contents.push({ role: "model", parts });
+          contents.push({ role: "user", parts: [{ text: correctionNote }] });
+          structuralRecheckUsed = true;
+          await saveCheckpoint(runId, {
+            newContents: contents.slice(contentsCheckpointedUpTo),
+            transcript,
+            stepsDone: step,
+            task: effectiveTask,
+            repeatCounts: Object.fromEntries(repeatCounts),
+            consecutiveAllRepeatSteps,
+            provider: effectiveProvider,
+            model: effectiveModel,
+            maxOutputTokens: effectiveMaxOutputTokens,
+            pendingVerification,
+            structuralRecheckUsed,
+          });
+          contentsCheckpointedUpTo = contents.length;
+          continue;
+        }
+      }
+
       await deleteCheckpoint(runId);
+      if (answer) {
+        // Strip internal LINE_QUOTE: markers before ever returning an answer
+        // to a caller -- they're a parseable artifact for THIS loop's own
+        // structural check, not something a caller asked for or should see.
+        return { answer: stripLineQuoteMarkers(answer), steps: step, transcript, runId, task: effectiveTask };
+      }
       if (!answer) {
         // MALFORMED_FUNCTION_CALL on a no-tools turn specifically means:
         // this step had NO tools in the request (isFinalStep/stuckLoopForce/
