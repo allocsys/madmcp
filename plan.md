@@ -246,6 +246,52 @@ specific failure class it targets, not as proof the confident-wrong
 pattern is fully closed. Repeating this test a few more times, per the
 open question below, remains the way to raise confidence further.
 
+### Run 7 (2026-08-27, re-run against `gemini` on the same structural-line-quote build)
+
+Same reconstructed six-question task as Run 6, run again. Hit the same transient
+Gemini 503 ("high demand") mid-run (step 11 this time, vs step 10 in the
+earlier "Live verification test" run below) -- resumed cleanly via
+`resume_run_id` with the 10 already-completed steps intact, second live
+confirmation the resume path holds under a genuine provider failure.
+
+**Result: all six questions answered correctly again.** Unlike Run 6, this
+time every claim was independently re-checked directly against the raw source
+(not just trusting the run's own citations) by fetching
+`connectors/gemini/agent_delegate.js` in full outside the delegated run:
+
+- (1) `validateFunctionArgs()` before `execute()`: confirmed -- every code path
+  that reaches `fn.execute()` passes through `validateFunctionArgs(fn, args)`
+  first (cache-served repeats and unknown-function calls never reach
+  `execute()` at all, so the check is unconditional relative to the
+  `execute()` call site itself, which is exactly what was claimed).
+- (2) verification-pass gate: verbatim match --
+  `if (answer && !withholdTools && !pendingVerification && step < cappedSteps)`.
+  This is the exact question that came back confidently wrong in Runs 3, 4,
+  and 5, and right again in Run 6 and now Run 7.
+- (3) key-order-insensitivity: confirmed -- `Object.keys(a).sort()` into a
+  fresh `sortedArgs` object before stringifying.
+- (4) named-branch exclusion: confirmed -- `isHeadLike` only matches
+  `undefined`/`null`/`""`/`"HEAD"`; a `ref:"main"` call is deliberately never
+  collapsed into the no-ref signature even when `main` is the default branch.
+- (5) tool access during verification: confirmed -- `withholdTools` is
+  `isFinalStep || stuckLoopForce` only; the verification-pass branch does not
+  add `pendingVerification` to that condition, so `FUNCTION_DECLARATIONS` are
+  still sent on that turn.
+- (6) structural line-quote mechanism: confirmed -- `extractConditionalClaims`
+  flags comparison-shaped claims, `lineIsVerbatimInToolResults` checks a
+  model-quoted `LINE_QUOTE:` line via plain `.includes()` against raw tool
+  output, bounded to one corrective round by `structuralRecheckUsed`.
+
+**Updated running tally:** 2 of the last 2 runs against the structural-line-
+quote build (Runs 6-7) are now fully clean, versus the earlier pattern (Runs
+3-5) where the same question (2) failed three times in a row before the fix.
+Still only two data points on this specific build -- consistent with this
+file's standing caution against overclaiming from one (or two) clean runs --
+but the specific failure mode (fabricated relationship between two real
+identifiers) has now gone 2-for-2 since the fix, including under independent
+re-verification against source rather than relying on the delegated run's own
+citations.
+
 ## Repeat/redundant tool-call dedup fix (PR #108, merged)
 
 Found via a heavier open-ended task hitting a 429 quota exhaustion at
