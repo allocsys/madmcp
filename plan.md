@@ -344,7 +344,37 @@ are both real, so a token-level check passes even when the composed
 expression combining them is fabricated. This gap motivated the
 structural line-quote check below.
 
-## Structural read cap in Gemini's own `github_read_file` (found via Claude review, 2026-08-27)
+## Structural read cap in Gemini's own `github_read_file` -- FIXED (commits `32877bf`, `a38336b`)
+
+**STATUS: fixed**, same day as found. `github_read_file` and
+`github_get_file_at_commit` in `agent_delegate.js` now take optional
+`char_offset`/`char_limit`, mirroring the MCP-facing `read_file`'s own
+recent change (commit `d690c62`, done first, on `connectors/github/files.js`
+-- see that entry's before/after further down for the parallel case). Both
+Gemini-facing functions share one local helper, `sliceFileContentForModel`
+-- a deliberate separate copy, not an import of the MCP-facing tool's
+helper, per this file's own header note that the two tool surfaces (what
+Gemini sees vs. what the calling model sees) must stay decoupled.
+
+Called with no args, behavior is unchanged in spirit (whole file, or first
+30,000 chars if longer) but the truncation message no longer dead-ends: it
+now states the file's total length and the exact `char_offset` to pass
+next, instead of the old bare `"...[truncated]"` marker that gave Gemini
+no declared way to ever retrieve the rest. Passing `char_offset`/`char_limit`
+directly also lets Gemini jump straight to a specific window -- e.g. right
+after a `github_search_code` hit points at a line deep in a large file --
+instead of always re-reading from char 0 and re-paying the 30K cap on the
+same early section every time.
+
+**Not yet done:** this fixes the *mechanism* (Gemini can now reach any part
+of a file across turns) but doesn't yet confirm the fix actually reduces
+the confident-wrong-claim rate on Runs 3-8's kind of question -- that still
+needs a live re-run, same as the open item below it. It's also still worth
+checking whether Gemini reliably *uses* the new offset (i.e. whether the
+truncation message is prominent/clear enough to get followed under a step
+budget), vs. still trusting a stale first-30K read the way Run 3-8 did.
+
+Original finding, for context on what motivated the fix:
 
 All of Runs 1-8 above treat the confident-wrong-answer pattern as an
 inferential failure -- Gemini has the relevant source in context and
