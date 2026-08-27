@@ -5,12 +5,21 @@ provider anyone should route real `delegate_agent` work through.
 `provider: "glm"` and `provider: "groq"` both stay wired on `main`
 exactly as built (opt-in only, `DEFAULT_LLM_PROVIDER` unchanged, no code
 removed) but are both blocked for different reasons (see "Provider
-status" below). Effort has shifted to a Gemini accuracy problem
-(self-verification pass + structural line-quote check). Repeated live
-testing (Runs 1-8, see "Live verification test") shows both fixes help
-but don't close the confident-wrong-relationship pattern -- Run 8 shows
-it generalizing beyond the original verification-pass-gate question to
-at least one other mechanism (dedup cache scope).
+status" below).
+
+The Gemini confident-wrong-claim accuracy problem (self-verification
+pass + structural line-quote check, Runs 1-14) is **CLOSED as of Run 14
+(2026-08-27), by owner decision** -- 6 consecutive clean runs (9-14)
+across six distinct failure-mode categories (relationship-fabrication,
+false-premise anchoring, stale/removed-tool correction, multi-hop
+cross-file contradiction, absence-detection) was judged sufficient.
+**Caveat kept on record:** one flagged angle was never actually tested --
+checkpoint-resume-specific fabrication (whether a *resumed* run
+fabricates more than a fresh one). Only resume-survives-infra-failure was
+confirmed live (Runs 1, 7), which is a different question. "Closed" here
+means accepted as sufficient given the streak, not that every flagged
+angle came back clean -- reopen and design that resume-specific test
+first if this pattern resurfaces on a resumed run specifically.
 
 ## Why
 
