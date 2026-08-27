@@ -191,8 +191,14 @@ function normalizedSignature(name, args) {
     const refValue = "ref" in sortedArgs ? sortedArgs.ref : sortedArgs.commit;
     const isHeadLike = refValue === undefined || refValue === null || refValue === "" || refValue === "HEAD";
     if (isHeadLike) {
-      const { owner, repo, path } = sortedArgs;
-      return `github_read_file_family:${JSON.stringify({ owner, repo, path, ref: "HEAD" })}`;
+      const { owner, repo, path, char_offset, char_limit } = sortedArgs;
+      // char_offset/char_limit MUST be part of this signature -- omitting them
+      // was a real bug (found live, 2026-08-27): every paginated call to the
+      // same file (offset 0, 30000, 60000, ...) collapsed to one identical
+      // signature and got served the cached FIRST chunk back regardless of
+      // the offset actually requested, silently corrupting a multi-step read
+      // into N repeats of the same 30000-char slice.
+      return `github_read_file_family:${JSON.stringify({ owner, repo, path, ref: "HEAD", char_offset: char_offset ?? null, char_limit: char_limit ?? null })}`;
     }
   }
 
