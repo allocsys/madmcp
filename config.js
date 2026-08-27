@@ -258,6 +258,63 @@ export const GLM_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GLM_DEFAULT_MAX_
 export const DEFAULT_LLM_PROVIDER = process.env.DEFAULT_LLM_PROVIDER || "gemini";
 
 // ---------------------------------------------------------------------------
+// Groq -- third `delegate_agent` provider option (see plan.md "Groq provider
+// addition"), added because GLM/OpenRouter's free tier turned out to be
+// gated by account credit balance (see plan.md "Current status" -- a
+// zero-balance account is blocked from OpenRouter's free models too, not
+// just paid ones). Groq's free tier is documented as request/token-rate-
+// limited instead, not tied to a dollar balance, and needs no credit card.
+// Also OpenAI-compatible like OpenRouter, so it reuses the same
+// translation layer (see connectors/openai_shape/adapter.js, extracted
+// from connectors/glm/adapter.js specifically so both providers share one
+// implementation instead of two copies drifting apart).
+//
+// GROQ_API_KEYS is plural/comma-separated, same rotation pattern as
+// OPENROUTER_API_KEYS/EXA_API_KEYS above.
+export const GROQ_API_KEYS = (process.env.GROQ_API_KEYS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+export const GROQ_API = "https://api.groq.com/openai/v1/chat/completions";
+
+// Model choice verified directly against https://console.groq.com/docs/models
+// on 2026-08-27 (not from third-party benchmarks alone): Groq explicitly
+// classifies qwen/qwen3.6-27b as a PREVIEW model ("intended for evaluation
+// purposes only... may be discontinued at short notice") despite it
+// scoring highest on Groq's own intelligence ranking, while
+// openai/gpt-oss-120b is a PRODUCTION model. For a persistent, unattended
+// delegate_agent provider, availability stability matters more than a
+// benchmark edge, so production is the default and the stronger-but-
+// preview model is only the fallback -- do not swap this ordering without
+// re-reading plan.md's "Model choice -- CORRECTED" note first.
+export const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+export const GROQ_FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS || "qwen/qwen3.6-27b")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS/
+// GLM_REQUEST_TIMEOUT_MS above.
+export const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS) || 55000;
+
+// Default cap on Groq's max_tokens when a caller doesn't specify one
+// explicitly -- set UP FRONT this time, unlike GLM_DEFAULT_MAX_OUTPUT_TOKENS,
+// which was only added reactively after a live 402 revealed OpenRouter has
+// no sane default at all (see plan.md's "Current status" and the Groq
+// section's step 1 note: don't repeat that discovery-by-failure cycle).
+// 4096 follows Groq's own tool-use guidance ("set max_completion_tokens to
+// 3000-4000 for complex tasks" -- see console.groq.com/docs on built-in
+// tool use). NOT YET LIVE-VERIFIED: Groq's chat completions endpoint is
+// OpenAI-compatible, but it's unconfirmed whether it honors the legacy
+// `max_tokens` field name (what connectors/openai_shape/adapter.js and
+// glm/client.js both send) the same way for every model, or whether some
+// Groq models expect the newer `max_completion_tokens` name instead --
+// this needs live-testing in plan.md step 9 before being treated as
+// settled, exactly the kind of thing pre-emptive comments can flag but not
+// substitute for actually running the smoke test.
+export const GROQ_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_DEFAULT_MAX_OUTPUT_TOKENS) || 4096;
+
+// ---------------------------------------------------------------------------
 // Frontend/design delegate (connectors/frontend/) -- delegate_designer's
 // write-capable agent loop (agent.js), backed by the existing Gemini
 // connector (geminiChat/GEMINI_API_KEY/GEMINI_MODEL above) -- no separate

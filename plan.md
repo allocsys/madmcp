@@ -2,11 +2,16 @@
 
 **STATUS (2026-08-27): GLM/OpenRouter implementation shipped and deployed,
 but currently non-functional (see "Current status" -- account has no
-credit and none is being added). A third provider, Groq, is queued to
-replace GLM as the practical free-tier alternative to Gemini -- see
-"Groq provider addition" below for the sequenced plan. GLM code stays in
-place (not being ripped out) in case OpenRouter credit is ever added
-later.**
+credit and none is being added). Groq has been added as the practical
+free-tier alternative to Gemini -- steps 1-8 of "Groq provider addition"
+below (config, client, shared adapter extraction, router wiring,
+checkpoint/cooldown reuse, tool schema, tests) are implemented and green
+in CI as of commit `00a5edb`. STILL OUTSTANDING: step 9 (live smoke test
+against a real Groq account -- nothing here has been run against Groq's
+actual API yet, only mocked), step 10 (rollout confirmation), and doc
+updates -- README.md/docs/API_KEYS.md/docs/env.html still don't mention
+Groq at all as of this STATUS line. GLM code stays in place (not being
+ripped out) in case OpenRouter credit is ever added later.**
 
 ## Why
 
@@ -253,9 +258,28 @@ primary/fallback order from the original plan is swapped:
   (already deprecated qwen3-32b, llama-4-scout-17b, and an earlier
   kimi-k2-instruct build as of mid-2026 per Groq's own deprecation page).
 
-**Sequenced steps:**
+**Model choice -- CORRECTED (2026-08-27, before implementation):** the
+ordering above was written before checking each slug's own catalog listing
+type, not just its churn history. Groq's model catalog
+(https://console.groq.com/docs/models) classifies `qwen/qwen3.6-27b` as a
+**preview** model -- "intended for evaluation purposes only... may be
+discontinued at short notice" -- despite scoring highest on Groq's own
+intelligence ranking, while `openai/gpt-oss-120b` is a **production**
+model. `delegate_agent` is a persistent, unattended provider option, not a
+one-off benchmark run, so availability stability outweighs a benchmark
+edge here. **Swap the ordering above**: `GROQ_MODEL` defaults to
+`openai/gpt-oss-120b` (production, primary) and `GROQ_FALLBACK_MODELS`
+defaults to `qwen/qwen3.6-27b` (preview, fallback only -- stronger when
+available, but not to be relied on as the primary path). This is what
+config.js actually ships (see its GROQ_MODEL/GROQ_FALLBACK_MODELS
+comments) -- do not revert to the original ordering above without
+re-checking https://console.groq.com/docs/models for whether either
+model's classification has changed.
 
-1. **Config (`config.js`):** add `GROQ_API_KEYS` (comma-separated, plural
+**Sequenced steps (steps 1-8 DONE as of commit `00a5edb`, all green in CI;
+steps 9-10 still outstanding -- see updated STATUS line above):**
+
+1. **DONE. Config (`config.js`):** add `GROQ_API_KEYS` (comma-separated, plural
    -- same rotation pattern as `OPENROUTER_API_KEYS`/`EXA_API_KEYS`),
    `GROQ_API` endpoint, `GROQ_MODEL`, `GROQ_FALLBACK_MODELS`,
    `GROQ_REQUEST_TIMEOUT_MS`. Also add `GROQ_DEFAULT_MAX_OUTPUT_TOKENS`
@@ -264,12 +288,12 @@ primary/fallback order from the original plan is swapped:
    default; don't repeat that discovery-by-failure cycle for Groq. Pick a
    conservative starting value (e.g. 4096-8192) and confirm Groq's actual
    per-model max-output limits from its docs before the first live call.
-2. **Client (`connectors/groq/client.js`):** model closely on
+2. **DONE. Client (`connectors/groq/client.js`):** model closely on
    `connectors/glm/client.js` -- outer cascade over `GROQ_API_KEYS`
    (401/403/429), inner cascade over `GROQ_MODEL` + `GROQ_FALLBACK_MODELS`
    (429/503/transient). Groq's chat-completions endpoint is OpenAI-shaped
    like OpenRouter's, so this should be a close port, not a redesign.
-3. **Adapter -- decide before writing, don't default to copy-paste:**
+3. **DONE (chose option (a), the shared module):** ~~Adapter -- decide before writing, don't default to copy-paste:~~
    `connectors/glm/adapter.js` (`toOpenAIMessages`/`toOpenAITools`/
    `fromOpenAIChoice`) is pure OpenAI-shape translation with nothing
    OpenRouter-specific in it. Either (a) extract it to a shared
@@ -281,29 +305,38 @@ primary/fallback order from the original plan is swapped:
    translation logic is exactly the kind of drift this codebase's other
    shared-harness fixes (e.g. `validateFunctionArgs`) have had to unwind
    after the fact.
-4. **Router (`connectors/llm/router.js`):** add a `groq` branch alongside
+4. **DONE. Router (`connectors/llm/router.js`):** add a `groq` branch alongside
    `gemini`/`glm` in `providerChat`, applying `GROQ_DEFAULT_MAX_OUTPUT_TOKENS`
    the same way the `glm` branch applies its own default (only when the
    caller doesn't pass an explicit `maxOutputTokens`).
-5. **Cooldown (`connectors/gemini/cooldown.js`):** already takes a
+5. **DONE (no changes needed -- confirmed already provider-agnostic). Cooldown (`connectors/gemini/cooldown.js`):** already takes a
    `namespace` param -- have Groq pass `groq:${keyIndex}` for its own
    per-(model,key) cooldown tracking, same pattern GLM uses.
-6. **Checkpoint (`connectors/gemini/agent_checkpoint.js`):** confirm the
+6. **DONE (confirmed by direct read, genuinely provider-agnostic). Checkpoint (`connectors/gemini/agent_checkpoint.js`):** confirm the
    provider/model/maxOutputTokens restore-on-resume logic is genuinely
    provider-agnostic (stores whatever string it's given) before assuming
    a third provider value "just works" -- verify by reading the file, not
    by inference from the GLM integration having worked.
-7. **Tool schema (`connectors/gemini/agent_tools.js`):** the `provider`
+7. **DONE. Tool schema (`connectors/gemini/agent_tools.js`):** the `provider`
    arg is very likely a zod enum -- if so it needs `"groq"` added
    explicitly, since zod enums don't silently accept unlisted values.
    Check this before assuming the router-level change alone is sufficient.
-8. **Tests:** mirror the GLM test set --
+8. **DONE. Tests:** mirror the GLM test set --
    `test/groq-client.test.js`, and a shared/adapter test if step 3 goes
    with option (a); extend `test/llm-router.test.js`'s dispatch test to
    cover the `groq` branch; extend `test/agent-delegate-loop.test.js`'s
    provider parametrization to include `groq` as a third case.
-9. **Live smoke test, sequenced to catch GLM's failure modes early rather
-   than late:** run the same three-stage test that surfaced GLM's
+9. **NOT DONE -- still the main gap before this can be trusted with real
+   traffic.** Everything in steps 1-8 has only been exercised against
+   mocked `fetch`/`providerChat` calls (see test/groq-client.test.js,
+   test/llm-router.test.js, test/agent-delegate-loop.test.js) -- nothing
+   has actually hit `api.groq.com` yet, so the `max_tokens` vs
+   `max_completion_tokens` question flagged in config.js's
+   `GROQ_DEFAULT_MAX_OUTPUT_TOKENS` comment, and whether the "not
+   balance-gated" assumption holds, are both still open. Requires a real
+   `GROQ_API_KEYS` value to run -- can't be completed from this branch
+   alone. **Live smoke test, sequenced to catch GLM's failure modes early
+   rather than late:** run the same three-stage test that surfaced GLM's
    problems -- (a) a tool-using multi-step task at the default output cap,
    (b) the same with a reduced `maxOutputTokens` to check for a prompt-
    token-side cap independent of the completion cap, (c) a minimal
@@ -312,7 +345,11 @@ primary/fallback order from the original plan is swapped:
    assumption above -- if any of the three reproduce a GLM-style 402/404,
    that assumption is wrong and needs documenting here before going
    further.
-10. **Rollout:** ship behind `provider: "groq"`, opt-in only -- default
+10. **Code-wise DONE, but gated on step 9:** `provider: "groq"` is already
+    wired as opt-in-only with `DEFAULT_LLM_PROVIDER` unchanged (see step 7) --
+    the remaining rollout question is whether to treat it as trustworthy for
+    real tasks before step 9's live verification, same caution GLM's rollout
+    used. **Rollout:** ship behind `provider: "groq"`, opt-in only -- default
     stays `gemini` (`DEFAULT_LLM_PROVIDER` unchanged). Do not remove or
     disable the `glm`/OpenRouter code path in the process -- it stays
     available and will resume working immediately if OpenRouter credit is

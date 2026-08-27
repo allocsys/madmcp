@@ -32,7 +32,7 @@ vi.mock("../connectors/github/client.js", () => ({
 
 const originalEnv = { ...process.env };
 
-describe.each(["gemini", "glm"])("agent_delegate.js — runInvestigation (provider: %s)", (provider) => {
+describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation (provider: %s)", (provider) => {
   let runInvestigation;
 
   beforeEach(async () => {
