@@ -366,17 +366,19 @@ append-delta; (2) its repeat-call cache only serves `read_file`/
 - Head-to-head provider comparison (originally rollout step 2) stays
   paused until at least one of GLM/Groq is usable again.
 - Gemini: repeat the heavy-task live verification test a few more times
-  to establish how often the verification pass fails to catch a
-  confident-wrong mechanical claim (see "Live verification test", runs
-  2-5) and whether it clusters around particular kinds of detail (e.g.
-  named constants/thresholds) -- current status is "helps, but not a
-  reliable guarantee," not "solved."
-- Citation-forcing fix (commit `4ff4260`): confirmed live (Run 5) that it
-  does not catch a wrong *relationship/threshold between two real,
-  already-cited identifiers* (e.g. `step < cappedSteps` misstated as
-  `step < max_steps - 1`, both real names) -- it only checks whether each
-  individual token appears verbatim in raw tool output, not whether the
-  composed expression does. Needs either a stronger check (e.g. requiring
-  the model to quote the exact source line rather than individual tokens)
-  or acceptance that this class of error is out of scope for an automated
-  check. Undecided.
+  to establish how often the verification pass / structural line-quote
+  check fails to catch a confident-wrong relationship claim (see Runs
+  2-8) -- current status after Run 8 is "meaningfully reduces but does
+  not close" the pattern, and it now generalizes beyond the original
+  verification-pass-gate question to at least one other mechanism (dedup
+  cache scope, Run 8).
+- Structural line-quote check (commit `4ff4260`'s follow-up): confirmed
+  live (Run 8) that it does not catch a fabricated *relationship between
+  two individually-true facts* when neither fact is itself phrased as a
+  comparison expression -- Run 8's error ("only gets special collapsing"
+  misread as "only thing that's deduped at all") wasn't a `<`/`>`/`&&`
+  claim the `CONDITIONAL_CLAIM_PATTERN` would flag, so it slipped past the
+  same way Run 5's `step`/`max_steps` error slipped past the earlier
+  token-level check. Needs either a broader claim classifier or
+  acceptance that inferential (not just conditional-expression)
+  fabrication is out of scope for an automated check. Undecided.
