@@ -450,6 +450,34 @@ action outside this repo's commits and needs separate human confirmation.
 Do not treat the code fix above as having addressed the live-traffic
 exposure; they're independent action items.
 
+**2026-08-28, post-fix production smoke test -- SUCCESS, `DELEGATE_AGENT_ASYNC=qstash`
+confirmed live and working end-to-end.**
+
+With the `isFinalStep`/`effectiveOverallMaxSteps` fix (bc79946/766348d/b5e76e4)
+live and `DELEGATE_AGENT_ASYNC=qstash` confirmed set in Vercel (dashboard
+state confirmed by a human), ran a fresh `delegate_agent` call against a
+real multi-step, multi-tool-call task (list `connectors/gemini/`, then read
+`agent_checkpoint.js`, then report specific fields from it) -- deliberately
+chosen to force at least one real tool call per step, the exact condition
+the earlier bug broke on.
+
+Result: fresh call returned a `run_id` immediately (no blocking). Polling
+showed the worker self-chaining on its own -- `stepsDone` advanced from 0
+to 1 to 2 to a completed 3-step run across successive polls, each with a
+fresh `lastStepAt`, with no manual re-invocation needed beyond polling.
+Step 1 (`github_list_directory`) and step 2 (`github_read_file`) both
+executed as real tool calls with no `MALFORMED_FUNCTION_CALL` error -- the
+failure mode from the earlier smoke test did not recur. The run completed
+normally on step 3 with a synthesized final answer, and the answer was
+factually correct against the actual file (correctly listed all fields
+`saveCheckpoint` stores, including `overallMaxSteps` and `finalAnswer`,
+and confirmed both are present in its destructured params).
+
+This closes the one piece of step 9 that was explicitly flagged as
+unexercisable by unit tests (a true round trip against live QStash
+infra, publish + signed webhook delivery + worker invocation, chained
+across multiple real steps). No further step-10 action identified.
+
 ## Open questions
 
 - Does a single Gemini turn that issues multiple parallel function calls
