@@ -493,9 +493,14 @@ export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) ||
 export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 24;
 
 // Rollout flag (plan.md step 10), same "disable without a revert" reasoning
-// as DELEGATE_AGENT_ASYNC above. Stays "false" until the tool is actually
-// registered (plan.md step 7) -- setting this today has no effect yet.
-export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED === "true";
+// as DELEGATE_AGENT_ASYNC above. FLIPPED TO DEFAULT-ON 2026-08-28 per explicit
+// operator request -- delegate_editor is now registered and callable unless
+// this is explicitly set to "false". Prior to this change it defaulted off
+// pending a deliberate human decision (plan.md step 10's original rollout
+// posture, and its own step 9 notes that checkpoint/validate-specific unit
+// tests and a live end-to-end smoke test were still outstanding at the time
+// this was flipped -- see plan.md's progress log).
+export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
 
 // ---------------------------------------------------------------------------
 // GitHub App -- scoped, short-lived clone tokens for PRIVATE repos (2026-07-28
