@@ -13,31 +13,58 @@ vi.mock("../connectors/github/helpers.js", () => ({
   readFileViaBlob: vi.fn(),
 }));
 
-describe("agent_delegate.js — runInvestigation failure path compacting", () => {
+describe("delegate_agent failure path compacting", () => {
   let runInvestigation;
+  let register;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     ({ runInvestigation } = await import("../connectors/gemini/agent_delegate.js"));
+    ({ register } = await import("../connectors/gemini/agent_tools.js"));
   });
 
-  it("compacts failure output by default when show_transcript is unset/false", async () => {
-    // Simulate a failure: runInvestigation returns failed: true, answer: err
-    // This isn't a direct call to runInvestigation (which would involve
-    // mocking providerChat to actually fail), but we can call it in a way
-    // that triggers the failure result naturally.
-    // Actually, just need to see how runInvestigation formats its result object.
-    // Wait, I can't easily mock the internal failure of runInvestigation.
-    // Let's just mock providerChat to return a failure.
-    mockProviderChat.mockResolvedValueOnce({
-      content: { role: "model", parts: [{ text: "Error: something broke" }] },
-      finishReason: "STOP",
+  it("returns compact summary on failure when show_transcript is false", async () => {
+    // Mock runInvestigation failure
+    vi.spyOn(import("../connectors/gemini/agent_delegate.js"), 'runInvestigation').mockResolvedValue({
+      failed: true,
+      answer: "API Error: connection refused",
+      steps: 3,
+      runId: "run-123",
+      transcript: ["step 1 call", "step 2 call", "step 3 call"],
+      task: "test task"
     });
 
-    const result = await runInvestigation({ task: "test task", max_steps: 1 });
-    // This should produce result.failed = true.
-    expect(result.failed).toBe(true);
-    expect(result.answer).toMatch(/Error: something broke/);
+    const server = { tool: vi.fn() };
+    register(server);
+    const tool = server.tool.mock.calls[0][2];
+    
+    const result = await tool({ task: "test task", show_transcript: false });
+    
+    expect(result.content[0].text).toMatch(/Investigation failed or partial after 3 step\(s\)\./);
+    expect(result.content[0].text).toMatch(/Reason\/Error: API Error: connection refused/);
+    expect(result.content[0].text).toMatch(/Resumable: resume_run_id: "run-123"/);
+    expect(result.content[0].text).not.toMatch(/step 1 call/);
+  });
+
+  it("includes full transcript on failure when show_transcript is true", async () => {
+    vi.spyOn(import("../connectors/gemini/agent_delegate.js"), 'runInvestigation').mockResolvedValue({
+      failed: true,
+      answer: "API Error: connection refused",
+      steps: 3,
+      runId: "run-123",
+      transcript: ["step 1 call", "step 2 call", "step 3 call"],
+      task: "test task"
+    });
+
+    const server = { tool: vi.fn() };
+    register(server);
+    const tool = server.tool.mock.calls[0][2];
+    
+    const result = await tool({ task: "test task", show_transcript: true });
+    
+    expect(result.content[0].text).toMatch(/Tool calls completed before failure:/);
+    expect(result.content[0].text).toMatch(/step 1 call/);
+    expect(result.content[0].text).toMatch(/step 2 call/);
   });
 });
