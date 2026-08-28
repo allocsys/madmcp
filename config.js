@@ -103,7 +103,21 @@ export const CONTEXT7_API     = "https://context7.com/api/v2";
 // any connector tools (GitHub, Notion, Mem0, Fetch) are reachable.
 // If unset, the endpoint remains open (legacy behavior) — set this in
 // production so your tokens/connectors aren't usable by anyone with the URL.
-export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// GEMINI_API_KEYS is plural/comma-separated, same multi-key rotation pattern
+// as EXA_API_KEYS/OPENROUTER_API_KEYS/GROQ_API_KEYS elsewhere in this repo --
+// added because the Gemini connector previously only supported a single key
+// (GEMINI_MODEL/GEMINI_FALLBACK_MODELS' per-model cascade covered rate-limit
+// headroom on ONE account, but not a second account/project's quota, or
+// account-level 401/403 exhaustion). Falls back to the legacy singular
+// GEMINI_API_KEY if GEMINI_API_KEYS is unset, so existing single-key
+// deployments keep working with zero config changes.
+export const GEMINI_API_KEYS = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+// Kept for any call site still expecting a single value (e.g. server.js's
+// status endpoint) -- always the first configured key, or undefined if none.
+export const GEMINI_API_KEY = GEMINI_API_KEYS[0];
 export const GEMINI_API     = "https://generativelanguage.googleapis.com/v1beta";
 // Default model -- override via env var if this drifts out of date; Google
 // renames/retires Gemini model IDs periodically, so don't assume this stays
