@@ -10,11 +10,14 @@
 // Redis key prefix), same stuck-loop/repeat-detection and final-step tool
 // withholding fixes -- but:
 //
-//   - TWO tools only (read_file/write_file), not three: no validate() yet.
-//     Wiring a validate-before-write step is plan.md step 6, a separate
-//     step from this one -- this loop calls write_file directly, same as
-//     designer_delegate.js's write_file tool does today (validate is opt-in
-//     there too, the model chooses whether to call it first).
+//   - THREE tools (read_file/write_file/validate), same shape as
+//     designer_delegate.js's own three-tool loop -- plan.md step 6 wires
+//     validate() in here via editor_tool_functions.js's sibling module
+//     editor_validate.js, capped per-file the same way
+//     FRONTEND_MAX_VALIDATE_CALLS caps designer_delegate.js's validate()
+//     (see EDITOR_MAX_VALIDATE_CALLS below). validate is opt-in, same as
+//     designer_delegate.js: the model chooses whether to call it before a
+//     write, write_file itself doesn't force it.
 //   - Backed by connectors/github/editor_tool_functions.js's general
 //     Contents-API read_file/write_file (guardrails #2/#3/#4 already
 //     enforced AT THAT LAYER -- see that file's own header), not
@@ -46,6 +49,7 @@
 import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { readFile, writeFile, assertNotDefaultBranch } from "./editor_tool_functions.js";
+import { validateByExtension } from "./editor_validate.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./editor_checkpoint.js";
 import { isRedisConfigured } from "../gemini/cooldown.js";
 import {
@@ -55,6 +59,7 @@ import {
   EDITOR_HARD_MAX_STEPS,
   EDITOR_MAX_FILES_PER_RUN,
   EDITOR_MAX_WRITES_PER_FILE,
+  EDITOR_MAX_VALIDATE_CALLS,
 } from "../../config.js";
 
 // Same reasoning as connectors/gemini/agent_delegate.js's
@@ -83,7 +88,7 @@ function buildSystemPreamble({ owner, repo, branch, task }) {
     `This run may touch at most ${EDITOR_MAX_FILES_PER_RUN} distinct file(s), and write to any single file ` +
     `at most ${EDITOR_MAX_WRITES_PER_FILE} time(s) -- plan your edits accordingly rather than writing the ` +
     "same file repeatedly to iterate toward a result.\n\n" +
-    "You have two tools:\n" +
+    "You have three tools:\n" +
     "- read_file(path): reads a file's current content on this branch, together with its blob sha. Always " +
     "read a file before patching it -- write_file's replacements mode benefits from an exact-match sha, " +
     "and either write mode will be rejected as a conflict if the file changed since you last read it.\n" +
@@ -93,8 +98,13 @@ function buildSystemPreamble({ owner, repo, branch, task }) {
     "already read -- replacements mode requires the file to already exist. `base_sha` is optional but " +
     "recommended once you've read a file: if given, the write is rejected as a conflict when it doesn't " +
     "match the file's current sha, which means the file changed since you read it -- re-read and retry " +
-    "rather than assuming your version is still current.\n\n" +
-    "Work iteratively: read what you need, make changes, write, and confirm the result makes sense. This " +
+    "rather than assuming your version is still current.\n" +
+    "- validate(path, content): syntax-checks content against its file type (by extension) before you " +
+    "write it. Not free of limits -- capped per file path, so don't call it more than genuinely useful; " +
+    "a couple of passes per file is normal, looping it dozens of times is not. Some allowed extensions " +
+    "(.md, .txt) have no syntax to check and will always report valid.\n\n" +
+    "Work iteratively: read what you need, make changes, validate before writing when it's cheap to do so, " +
+    "write, and confirm the result makes sense. This " +
     "tool cannot open or merge pull requests -- a human reviews the branch afterward. When the task is " +
     "fully done, respond with a final plain-text summary of what you changed (or didn't, and why) and no " +
     "further function calls.\n\n" +
@@ -106,7 +116,7 @@ function buildSystemPreamble({ owner, repo, branch, task }) {
 // run. owner/repo/branch are captured here, NOT exposed as parameters the
 // model can set -- same fencing rationale as designer_delegate.js's
 // buildFunctions (guardrail #1).
-function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile }) {
+function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, validateCounts }) {
   const FUNCTIONS = [
     {
       name: "read_file",
@@ -184,6 +194,28 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile }) {
         }
       },
     },
+    {
+      name: "validate",
+      description: "Syntax-check content against its file type (by extension) before writing. Capped per file path -- see the system instructions. Some extensions (.md, .txt) have no validator and always report valid.",
+      parameters: {
+        type: "object",
+        properties: {
+          path:    { type: "string", description: "File path (used only to determine which validator to run, by extension)" },
+          content: { type: "string", description: "Content to validate" },
+        },
+        required: ["path", "content"],
+      },
+      execute: async ({ path, content }) => {
+        const count = validateCounts.get(path) || 0;
+        if (count >= EDITOR_MAX_VALIDATE_CALLS) {
+          return `Error: validate() has already been called ${count} time(s) for "${path}", which is this run's per-file cap (${EDITOR_MAX_VALIDATE_CALLS}). Proceed without further validation of this file, or write it and reconsider your approach if it's still not right.`;
+        }
+        validateCounts.set(path, count + 1);
+        const result = await validateByExtension(path, content);
+        if (result.skipped) return `Unvalidated: ${result.skipped}`;
+        return result.valid ? "Valid -- no syntax errors found." : `Invalid:\n${result.errors.join("\n")}`;
+      },
+    },
   ];
 
   const declarations = [{
@@ -213,6 +245,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   let startStep;
   let writtenFiles;
   let writesPerFile;
+  let validateCounts;
   let effectiveOwner = owner;
   let effectiveRepo = repo;
   let effectiveBranch = branch;
@@ -232,6 +265,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     startStep = checkpoint.stepsDone + 1;
     writtenFiles = checkpoint.writtenFiles || [];
     writesPerFile = new Map(Object.entries(checkpoint.writesPerFile || {}));
+    validateCounts = new Map(Object.entries(checkpoint.validateCounts || {}));
     effectiveOwner = checkpoint.owner;
     effectiveRepo = checkpoint.repo;
     effectiveBranch = checkpoint.branch;
@@ -263,10 +297,11 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     startStep = 1;
     writtenFiles = [];
     writesPerFile = new Map();
+    validateCounts = new Map();
   }
 
   const { FUNCTIONS, declarations } = buildFunctions({
-    owner: effectiveOwner, repo: effectiveRepo, branch: effectiveBranch, writtenFiles, writesPerFile,
+    owner: effectiveOwner, repo: effectiveRepo, branch: effectiveBranch, writtenFiles, writesPerFile, validateCounts,
   });
 
   if (checkpoint && startStep > cappedSteps) {
@@ -291,6 +326,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     branch: effectiveBranch,
     writtenFiles,
     writesPerFile: Object.fromEntries(writesPerFile),
+    validateCounts: Object.fromEntries(validateCounts),
     repeatCounts: Object.fromEntries(repeatCounts),
     consecutiveAllRepeatSteps,
   });
@@ -376,7 +412,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
       // of the others' results. write_file is NEVER cache-served (has a
       // real side effect -- a commit); read_file is safe to cache-serve on
       // an exact repeat, same distinction designer_delegate.js draws.
-      const CACHEABLE_TOOLS = new Set(["read_file"]);
+      const CACHEABLE_TOOLS = new Set(["read_file", "validate"]);
 
       const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
