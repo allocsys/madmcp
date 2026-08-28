@@ -1289,6 +1289,27 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   let contentsCheckpointedUpTo = 0;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
+  // Async delegate_agent (plan.md, Scenario A/B groundwork): a checkpoint
+  // whose last save recorded status "done" already has a final answer sitting
+  // in Redis (see the completion path near the end of this function, which
+  // now PERSISTS a done checkpoint instead of deleting it, specifically so
+  // this branch has something to read) -- return it directly rather than
+  // re-entering the loop, which would otherwise treat `contents` as still
+  // mid-conversation and either try to take more (nonsensical, unbounded-cost)
+  // steps or misbehave against startStep/cappedSteps math that was never
+  // designed for an already-finished run. This is also what makes
+  // resume_run_id usable as a poll handle for a background/worker-driven run
+  // (see agent_worker.js): polling a finished run is now a cheap Redis read,
+  // not a re-run.
+  if (checkpoint && checkpoint.status === "done") {
+    return {
+      answer: checkpoint.finalAnswer,
+      steps: checkpoint.stepsDone,
+      transcript: checkpoint.transcript,
+      runId: resume_run_id,
+      task: checkpoint.task,
+    };
+  }
   if (checkpoint) {
     contents = checkpoint.contents;
     transcript = checkpoint.transcript;
@@ -1570,12 +1591,43 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         }
       }
 
-      await deleteCheckpoint(runId);
+      // Async delegate_agent (plan.md groundwork): persist a "done" checkpoint
+      // (status + finalAnswer) here instead of unconditionally deleting the
+      // checkpoint the way this used to. A resume_run_id caller polling a
+      // background/worker-driven run (see the checkpoint.status === "done"
+      // short-circuit near the top of this function) needs SOMETHING to read
+      // once the run finishes -- deleting it the instant it completes meant
+      // there was never a window in which a "done" status could be observed.
+      // `newContents: []` -- the conversation array itself isn't needed once
+      // a run is done (only finalAnswer/steps/transcript/task are read back
+      // by the short-circuit above), so there's no reason to pay the cost of
+      // pushing whatever tail of `contents` hasn't been checkpointed yet.
+      // Still expires via the normal CHECKPOINT_TTL_SECONDS (1 hour) like any
+      // other checkpoint -- this is a bounded-lifetime record for polling,
+      // not a permanent store, same contract as every other checkpoint.
+      const finishRun = async (result) => {
+        await saveCheckpoint(runId, {
+          newContents: [],
+          transcript: result.transcript,
+          stepsDone: result.steps,
+          task: result.task,
+          repeatCounts: Object.fromEntries(repeatCounts),
+          consecutiveAllRepeatSteps,
+          provider: effectiveProvider,
+          model: effectiveModel,
+          maxOutputTokens: effectiveMaxOutputTokens,
+          pendingVerification,
+          structuralRecheckUsed,
+          status: "done",
+          finalAnswer: result.answer,
+        });
+        return result;
+      };
       if (answer) {
         // Strip internal LINE_QUOTE: markers before ever returning an answer
         // to a caller -- they're a parseable artifact for THIS loop's own
         // structural check, not something a caller asked for or should see.
-        return { answer: stripLineQuoteMarkers(answer), steps: step, transcript, runId, task: effectiveTask };
+        return finishRun({ answer: stripLineQuoteMarkers(answer), steps: step, transcript, runId, task: effectiveTask });
       }
       if (!answer) {
         // MALFORMED_FUNCTION_CALL on a no-tools turn specifically means:
@@ -1597,9 +1649,9 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
               ? ` This was the verification pass (no tools offered on purpose -- see VERIFICATION_PROMPT), but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The draft answer from the step before this one was never returned to the caller as a result -- treat this run as having produced no usable answer, and consider retrying with a higher max_steps in case the verification turn simply needed more room.`
               : ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls (same function + arguments already tried this run) -- fix #4's stuck-loop guard forces a text-only answer the same way the final step does, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`)
           : "";
-        return { answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask };
+        return finishRun({ answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask });
       }
-      return { answer, steps: step, transcript, runId, task: effectiveTask };
+      return finishRun({ answer, steps: step, transcript, runId, task: effectiveTask });
     }
 
     // Record the model's turn (including its functionCall parts) before
@@ -1829,6 +1881,42 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     contentsCheckpointedUpTo = contents.length;
   }
 
-  await deleteCheckpoint(runId);
-  return { answer: `(Investigation stopped after reaching the step cap of ${cappedSteps} without a final answer -- the task may need to be narrowed, or more steps requested up to the hard cap of ${HARD_MAX_STEPS}.)`, steps: cappedSteps, transcript, runId, task: effectiveTask };
+  // Async delegate_agent (plan.md groundwork): reaching THIS caller's
+  // max_steps ceiling is not necessarily the end of the run -- a caller
+  // (notably the QStash worker, which deliberately calls with
+  // max_steps: stepsDone + 1 to take exactly one step per invocation, see
+  // agent_worker.js) may come back with a higher ceiling, or resume the
+  // same runId again, and expects the checkpoint to still be there. The
+  // per-step saveCheckpoint call above already left status "running" with a
+  // fresh lastStepAt for this exact case, so there's nothing to write here
+  // -- ONLY delete/finalize when cappedSteps has hit HARD_MAX_STEPS, since
+  // that's a real ceiling no future call can ever raise (max_steps is
+  // clamped to it unconditionally at the top of this function), so nothing
+  // would ever be gained by keeping the checkpoint around for that case.
+  // Previously this unconditionally deleted the checkpoint on EVERY
+  // max_steps exhaustion, silently discarding real progress the moment a
+  // caller happened to under-budget a call -- not just a Scenario B
+  // prerequisite, an existing gap this also fixes.
+  if (cappedSteps >= HARD_MAX_STEPS) {
+    const result = {
+      answer: `(Investigation stopped after reaching the hard step cap of ${HARD_MAX_STEPS} without a final answer -- the task likely needs to be narrowed.)`,
+      steps: cappedSteps, transcript, runId, task: effectiveTask,
+    };
+    // Same finishRun shape as the mid-loop completion path above (that one
+    // is a locally-scoped closure inside the for-loop, out of reach here --
+    // this is a deliberate small duplication rather than hoisting it, since
+    // hoisting would require threading `step`-scoped locals through as
+    // params for a call site used exactly once).
+    await saveCheckpoint(runId, {
+      newContents: [], transcript, stepsDone: cappedSteps, task: effectiveTask,
+      repeatCounts: Object.fromEntries(repeatCounts), consecutiveAllRepeatSteps,
+      provider: effectiveProvider, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens,
+      pendingVerification, structuralRecheckUsed, status: "done", finalAnswer: result.answer,
+    });
+    return result;
+  }
+  return {
+    answer: `(Investigation stopped after reaching the requested max_steps of ${cappedSteps} without a final answer -- the task is not finished. The checkpoint has NOT been discarded: call delegate_agent again with resume_run_id: "${runId}" and a higher max_steps (up to the hard cap of ${HARD_MAX_STEPS}) to continue.)`,
+    steps: cappedSteps, transcript, runId, task: effectiveTask, failed: true,
+  };
 }
