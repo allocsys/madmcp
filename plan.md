@@ -396,6 +396,62 @@ regression test that fails on current code and passes after -- a real
 **Immediate action:** `DELEGATE_AGENT_ASYNC=qstash` is live in Vercel right
 now with this bug present -- revert to `sync` before doing anything else.
 
+**2026-08-28, fix landed -- commits bc79946, 766348d, b5e76e4, plus a
+follow-up regression test in 06bf68c.**
+
+The fix matches the direction sketched above: `runInvestigation` now
+tracks two distinct values instead of conflating them under `cappedSteps`.
+`effectiveOverallMaxSteps` is the run's TRUE overall step ceiling -- set
+from `max_steps` on a fresh run (and now also captured by `seedRun`, which
+previously never recorded a ceiling for async runs at all), or restored
+from the checkpoint's new `overallMaxSteps` field on a resume.
+`cappedSteps` keeps its narrower original job: how many steps THIS call is
+allowed to take (still `startStep` for a one-step resume). `isFinalStep`
+now reads `step === effectiveOverallMaxSteps`, not `cappedSteps`, so it's
+only true on the run's genuine last step regardless of how small a single
+invocation's own step budget is.
+
+A new `singleStep` option on `runInvestigation` is what the worker now
+uses to opt into this correctly: `singleStep: true` restores
+`effectiveOverallMaxSteps` from the checkpoint and sets `cappedSteps =
+startStep` (take exactly one step), instead of overloading `max_steps` to
+mean two different things depending on caller. This needed two supporting
+fixes, both same-session, both found by actually exercising the change
+rather than assumed:
+
+1. `agent_checkpoint.js`'s `saveCheckpoint` never destructured
+   `overallMaxSteps` out of its params, so it was silently dropped on
+   every write -- the same bug class this file's `finalAnswer`-drop fix
+   already documents. Without this, `singleStep` resumes always saw
+   `overallMaxSteps` as `undefined` and the whole mechanism was a no-op.
+2. `agent_worker.js` itself was still calling `runInvestigation` with
+   `max_steps: stepsDone + 1` -- the exact pattern that caused the bug in
+   the first place -- even after `agent_delegate.js` grew the `singleStep`
+   option to fix it. The mechanism existed but this one call site was
+   never switched over, so production behavior was unchanged until this
+   commit landed.
+
+**Test gap closed separately (06bf68c):** none of the three fix commits
+above added a test, and neither existing async test
+(`agent-delegate-async-checkpoint.test.js`, `agent-worker.test.js`) would
+have caught a regression here -- both mock `providerChat` with
+`mockResolvedValueOnce(...)` and never assert on the `tools` argument
+actually passed, which is exactly why the original bug shipped despite
+both files passing. Added
+`test/agent-worker-tool-withholding-regression.test.js`: drives `seedRun`
++ repeated `singleStep: true` resumes (the real `agent_worker.js` call
+shape) and asserts on `providerChat.mock.calls[...][1].tools` directly --
+defined on every step except the run's genuine final one. Verified this
+test fails against the pre-fix commit (8df3f4e) and passes against current
+HEAD. Full suite: 381 -> 392 tests passing (`npx vitest run`), `npx eslint
+.` clean (same one pre-existing unrelated warning as before).
+
+**Status correction: `DELEGATE_AGENT_ASYNC` has NOT yet been confirmed
+reverted to `sync` in Vercel as part of this work** -- that's a dashboard
+action outside this repo's commits and needs separate human confirmation.
+Do not treat the code fix above as having addressed the live-traffic
+exposure; they're independent action items.
+
 ## Open questions
 
 - Does a single Gemini turn that issues multiple parallel function calls
