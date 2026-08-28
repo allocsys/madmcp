@@ -13,6 +13,7 @@
   "dependencies": {
     "@babel/parser": "^8.0.4",
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@upstash/qstash": "^2.11.3",
     "@upstash/redis": "^1.38.2",
     "@vercel/functions": "^3.9.5",
     "express": "^5.2.1",

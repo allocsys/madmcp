@@ -1,6 +1,15 @@
 # Plan: Fire-and-forget delegate_agent (Scenario B — QStash self-chaining)
 
-Status: proposed, not started
+Status: in progress -- steps 1-9 effectively done. Step 4 is now fully
+done: all four required env vars (QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY,
+QSTASH_NEXT_SIGNING_KEY, AGENT_WORKER_URL) are confirmed set in production
+(see progress log for the earlier correction -- AGENT_WORKER_URL was
+missed on the first pass). Step 9 has agent_tools.js branching-logic test
+coverage (test/agent-tools-async.test.js); a live network round trip
+against real QStash remains a manual smoke-test item, not something a unit
+test can cover. Step 10 (flipping DELEGATE_AGENT_ASYNC=qstash in
+production) is the only remaining open item -- recommended only after that
+smoke test, per the "Sequencing note" below.
 Date: 2026-08-28
 
 ## Context
@@ -155,6 +164,188 @@ usage. Confirm actual step-to-message ratio once step 9's tests are running
 against real tasks, since parallel function calls within a single Gemini
 turn may or may not map 1:1 to worker invocations depending on how step 5's
 extraction is shaped.
+
+## Progress log
+
+**2026-08-28, step 5 (with a deviation from the literal instruction) --
+commits b556001, f439668, 4da4728, c104125, 32eb0f0.**
+
+Step 5 as written says to physically extract the per-step body into a
+standalone function shared by the existing loop and the new worker. That
+turned out to be avoidable: the existing loop, called with
+`resume_run_id` + `max_steps: stepsDone + 1`, already takes exactly one
+step and returns -- which is the QStash worker's exact call shape --
+WITHOUT needing the loop body itself pulled apart. Reusing the whole loop
+one call at a time is lower-risk than extracting from it (this file's own
+comments document a long list of hard-won, interacting fixes -- repeat
+detection, verification passes, structural line-quote checks -- that a
+manual extraction could easily disturb).
+
+That reuse only works once two checkpoint-lifecycle bugs are fixed, both
+found by actually trying it and running the real test suite rather than
+assumed:
+
+1. Hitting a caller-supplied `max_steps` below `HARD_MAX_STEPS` used to
+   unconditionally delete the checkpoint -- silently discarding a
+   resumable run the moment a caller under-budgeted a call. This wasn't
+   only a Scenario B blocker; it's a pre-existing gap in today's
+   synchronous resume story too. Fixed: only the genuine `HARD_MAX_STEPS`
+   ceiling now finalizes/deletes-equivalent; anything below that leaves
+   the checkpoint alone (already `status: "running"` with a fresh
+   `lastStepAt` from the per-step save).
+2. Genuine completion also used to delete the checkpoint immediately, so
+   a `status: "done"` could never actually be polled -- there was no
+   window in which it existed. Fixed: completion now persists a
+   `status: "done"` checkpoint with a new `finalAnswer` field instead of
+   deleting, and `runInvestigation` short-circuits on `resume_run_id` +
+   `status === "done"` by returning the stored answer directly rather than
+   re-entering the loop. This is exactly the poll behavior the "Tool
+   behavior change" section below specifies for the done case.
+
+Two supporting bugs surfaced while wiring this up and testing it for real
+(agent_checkpoint.js, commit f439668): `saveCheckpoint`'s destructured
+params didn't include `finalAnswer` at all, so it was silently dropped on
+every save (same class of bug as the pre-existing `structuralRecheckUsed`
+regression this file already documents); and `loadCheckpoint` required a
+non-empty `contents` list to consider a checkpoint valid, which is no
+longer true for a done checkpoint (deliberately skips re-pushing contents)
+or a task answered directly on step 1 with zero tool calls.
+
+Verified via a full local clone + `npx vitest run` (367 -> 374 tests
+passing), including a new test
+(test/agent-delegate-async-checkpoint.test.js) that literally drives a run
+to completion one step at a time via the worker's exact call pattern
+against a real (fake-Redis-backed) checkpoint store, and confirms polling
+a done run doesn't re-invoke the model.
+
+**2026-08-28, steps 4/6/7/8/10 -- commits 6ea2d17, b98412b, 4e43a77,
+fb3cd5d, c766e1d, 5db7af9, 909dfa9, 7e93a60.**
+
+All five remaining code items landed together since they're tightly
+interdependent (the worker needs the tool handler's seed path to have
+something to chain from, and vice versa):
+
+- **Step 4 (worker endpoint + signature verification):**
+  `connectors/gemini/qstash_client.js` (new) wraps `@upstash/qstash`'s
+  `Client` (publish) and `Receiver` (inbound signature verification) --
+  deliberately an ASYMMETRIC fail-open contract, unlike every other
+  optional-infra file in this connector (cooldown.js, agent_checkpoint.js):
+  publishing fails open (caller checks `isQStashConfigured()` and falls
+  back to sync), but `verifyQStashSignature` fails CLOSED, since this
+  endpoint is publicly reachable and an unverifiable request must never be
+  treated as legitimate. `connectors/gemini/agent_worker.js` (new) is the
+  actual `/api/agent-worker` handler, registered in server.js OUTSIDE the
+  `/mcp` middleware stack (no requireMcpKey/requireAllowedIp/mcpLimiter --
+  auth here is entirely the QStash signature). server.js's `express.json()`
+  now also captures `req.rawBody` (a `verify` callback) specifically so the
+  signature can be checked against the exact bytes QStash signed, not a
+  re-serialized (and potentially non-byte-identical) `req.body`.
+  **Genuinely still open:** the env vars this code reads
+  (`QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`,
+  `AGENT_WORKER_URL`) are not yet set anywhere -- step 1's "provision
+  QStash" was a dashboard action, not a commit, and still needs a human
+  with Upstash/Vercel access to (a) create the QStash product, (b) deploy
+  this branch so a real `AGENT_WORKER_URL` exists to point at, then (c) set
+  all four env vars. Until then `isQStashConfigured()` returns false and
+  everything below stays inert regardless of `DELEGATE_AGENT_ASYNC`.
+- **Step 6 (re-chain wiring):** confirmed the deviation noted under step 5
+  above -- `agent_worker.js` calls `runInvestigation({ resume_run_id,
+  max_steps: stepsDone + 1 })` (the existing loop, one call = one step) and
+  `publishAgentStep`s itself again with the fresh `stepsDone` if the
+  checkpoint it reloads afterward is still `status: "running"`. No bespoke
+  single-step function was needed, as anticipated.
+- **Step 7 (tool handler branching):** `agent_delegate.js` gained
+  `seedRun()` -- writes a `status: "running"`, `stepsDone: 0` checkpoint
+  (the initial SYSTEM_PREAMBLE/task turn, zero steps taken) WITHOUT
+  entering the loop at all, specifically so a fresh async call can return a
+  `run_id` immediately rather than blocking on step 1. `agent_tools.js`'s
+  delegate_agent handler now branches on `DELEGATE_AGENT_ASYNC === "qstash"
+  && isQStashConfigured()`: fresh call -> `seedRun` + one `publishAgentStep`
+  + immediate return; resume with a fresh `lastStepAt` -> poll-only (read
+  the checkpoint, touch nothing); resume with a stale `lastStepAt` -> fall
+  through to today's synchronous `runInvestigation` call (the
+  never-silently-stranded guarantee); resume on a `status: "done"` or
+  missing checkpoint -> also falls through, since `runInvestigation`
+  already handles both correctly on its own (cheap stored-answer read, or
+  its existing clear error). A `status: "failed"` checkpoint (step 8's
+  dead-letter outcome) is handled explicitly here rather than falling
+  through, since resuming a deliberately-given-up-on run isn't the same
+  case as a stale-chain fallback.
+- **Step 8 (dead-letter/idempotency):** `agent_worker.js` no-ops (does not
+  re-execute) whenever the live checkpoint's `stepsDone` no longer matches
+  the `afterStep` a message was published with -- the redelivery-safety
+  property QStash's automatic retries need. A `retryCount` travels inside
+  each published message (not stored server-side -- separate QStash-invoked
+  processes share no memory) and increments only when a step completes
+  without advancing `stepsDone`; after `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES`
+  (new config, default 5) such failures in a row, the chain stops
+  re-publishing and finalizes the checkpoint as `status: "failed"` with the
+  last error as `finalAnswer`, instead of retrying indefinitely at QStash's
+  (and Gemini quota's) expense.
+- **Step 10 (rollout flag):** `DELEGATE_AGENT_ASYNC` (new config, default
+  `"sync"`) gates ALL of the above at once in `agent_tools.js` -- unset or
+  any value other than `"qstash"` reproduces today's fully-synchronous
+  behavior with zero code-path change, matching the "disable without a
+  revert" requirement.
+
+Verified via a full local clone + `npx vitest run` (374 -> 381 tests
+passing, no regressions) and `npx eslint .` (clean, one pre-existing
+unrelated warning), including a new `test/agent-worker.test.js` covering:
+signature rejection, missing-runId rejection, no-op on an expired/unknown
+checkpoint, no-op on an `afterStep`/`stepsDone` mismatch (idempotent
+redelivery), a normal re-chain on an unfinished step, no re-chain once a
+run completes, and dead-lettering after 5 consecutive same-step failures.
+
+**Still open (as of the previous entry):** the dashboard-side half of step 4
+(provision QStash, deploy, set the four env vars), step 9's broader test
+coverage (this batch's own tests cover the worker endpoint itself; the
+agent_tools.js branching logic and a true end-to-end QStash round trip
+remain unexercised), and step 10's actual flip (`DELEGATE_AGENT_ASYNC=qstash`
+in production), which should only happen after step 4's provisioning is
+confirmed working and per the "Sequencing note" at the top of this doc --
+this is new infra, not yet observed under any real traffic.
+
+**2026-08-28, step 4 status corrected + step 9 (partial) -- commit 420f9bd.**
+
+- **Step 4, dashboard half -- CORRECTED, still open.** Initially logged
+  here as fully confirmed based on a report that "envs are set up"; a
+  screenshot of the actual Vercel environment-variables screen showed that
+  report covered only what the Upstash marketplace integration
+  auto-provisions when you connect a QStash instance: `QSTASH_TOKEN`,
+  `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`, and `QSTASH_URL`
+  (QStash's own API base URL -- not read anywhere in this codebase;
+  `qstash_client.js`'s `Client` is constructed with only `{ token }` and
+  uses the SDK's own default base URL). **`AGENT_WORKER_URL` was not among
+  them and is still unset.** That variable is fundamentally different from
+  the other three: it's not a QStash-side credential the integration can
+  know about, it's THIS app's own public URL once deployed (e.g.
+  `https://<deployment>.vercel.app/api/agent-worker`) -- something only a
+  human who knows the deployment's actual domain can set, after the fact.
+  `isQStashConfigured()` requires both a working client AND `AGENT_WORKER_URL`
+  (see qstash_client.js), so it still returns `false` in production and the
+  whole async path remains inert regardless of the other three being
+  correct. Lesson for next time: a plain "envs are set up" claim isn't
+  sufficient confirmation for a step this specific -- verify against the
+  actual list of required var NAMES (all four, individually), not against
+  a general impression that setup happened.
+- **Step 9, partial:** added `test/agent-tools-async.test.js`, covering the
+  half of step 9's gap that a unit test actually can cover --
+  `agent_tools.js`'s own branching logic (fresh start seeds+publishes and
+  returns immediately; poll-fresh reports progress without touching the
+  loop; poll-stale falls through to synchronous `runInvestigation`; a
+  `status: "failed"` checkpoint returns the permanent-failure message
+  directly; `status: "done"` and a missing checkpoint both fall through to
+  `runInvestigation` as designed), all against mocked
+  `agent_delegate.js`/`agent_checkpoint.js`/`qstash_client.js` -- a
+  handler-level unit test, same style as `test/github-clone-token.test.js`.
+  **Deliberately NOT attempted:** a true end-to-end round trip against
+  *live* QStash infrastructure (real publish, real signed webhook delivery
+  back to a real worker URL). That needs a reachable deployment and live
+  QStash credentials in the loop, which a unit test (mocked network, no
+  outbound access in this environment) structurally cannot exercise --
+  it's a staging/production smoke test to run once, manually, after a
+  deploy, not something to fake inside `vitest`. Recommend doing that
+  smoke test before flipping step 10's flag.
 
 ## Open questions
 

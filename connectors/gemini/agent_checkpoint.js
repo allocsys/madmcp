@@ -45,8 +45,21 @@ function metaKey(runId) {
 //     know that on its own since it never sees the full array.
 //   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
 //     small stuff, always written in full (cheap regardless of run length).
+//   - status/lastStepAt (added for plan.md's async delegate_agent work,
+//     Scenario A `waitUntil` and Scenario B QStash self-chaining -- both
+//     reuse this same meta shape): `status` is one of "running" | "done" |
+//     "failed", defaulting to "running" when omitted so every existing
+//     synchronous call site keeps working unchanged. `lastStepAt` is an
+//     epoch-ms timestamp of THIS save, always set here (not left to the
+//     caller) so every checkpoint write freshens it -- this is what lets
+//     delegate_agent's poll path in agent_tools.js tell a genuinely-still-
+//     running background worker apart from one whose chain silently died
+//     (stale lastStepAt -> fall back to synchronous resume instead of
+//     polling forever). Do not compute lastStepAt in a caller instead of
+//     here -- a caller-supplied value could be stale by the time the actual
+//     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, status = "running", finalAnswer }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -59,7 +72,17 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
       // list-creation time.
       ops.push(client.expire(contentsKey(runId), CHECKPOINT_TTL_SECONDS));
     }
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed });
+    // finalAnswer (added alongside status/lastStepAt for plan.md's async
+    // delegate_agent work): only ever set by agent_delegate.js's completion
+    // paths, once a run is genuinely done -- this is what lets a
+    // resume_run_id poll of a "done" checkpoint (agent_delegate.js's
+    // short-circuit right after loadCheckpoint) return the actual answer
+    // instead of just a status flag with nothing to show for it. Always
+    // included in the meta blob (even as undefined on every "running" save)
+    // rather than conditionally spread in, so the shape of a saved
+    // checkpoint doesn't vary step-to-step -- consistent with every other
+    // field here.
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
@@ -88,16 +111,29 @@ export async function loadCheckpoint(runId) {
       client.lrange(contentsKey(runId), 0, -1),
       client.get(metaKey(runId)),
     ]);
-    // A live checkpoint always has both a non-empty contents list AND meta
-    // (they're written together every step) -- either being missing means
-    // there's nothing usable to resume (expired, never existed, or a
-    // partial/corrupted write), same as the old single-key "raw == null"
-    // check.
-    if (!rawList || !rawList.length || rawMeta == null) return null;
+    // Meta missing means there's nothing usable here at all (expired, never
+    // existed, or a partial/corrupted write) -- same as the old single-key
+    // "raw == null" check.
+    //
+    // rawList (contents) being EMPTY, on the other hand, is no longer on its
+    // own a sign of "nothing to resume" -- it used to be, back when every
+    // checkpoint write was mid-loop and therefore always had at least one
+    // turn already pushed. Two legitimate cases now produce an empty list
+    // alongside real meta: (a) a "done" checkpoint (see agent_delegate.js's
+    // finishRun/hard-cap-finalize paths, added for plan.md's async
+    // delegate_agent groundwork), which deliberately skips re-pushing
+    // `contents` since nothing reads it once a run is finished -- only
+    // finalAnswer/steps/transcript/task matter for a poll; and (b) a task
+    // that's answered directly on step 1 with zero tool calls, which never
+    // pushes a functionResponse turn at all before finishing. Neither case
+    // is missing/expired/corrupted -- meta alone is the source of truth for
+    // whether a checkpoint exists; `contents` is reconstructed as whatever
+    // was actually saved (possibly empty), not treated as a required field.
+    if (rawMeta == null) return null;
     // Upstash's client auto-parses JSON-looking values in some SDK versions
     // and returns a raw string in others -- guard both, same as the old
     // single-key version did.
-    const contents = rawList.map((entry) => (typeof entry === "string" ? JSON.parse(entry) : entry));
+    const contents = (rawList || []).map((entry) => (typeof entry === "string" ? JSON.parse(entry) : entry));
     const meta = typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta;
     return { contents, ...meta };
   } catch (err) {

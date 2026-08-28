@@ -66,6 +66,31 @@ describe("agent_checkpoint.js — saveCheckpoint/loadCheckpoint round trip", () 
     await deleteCheckpoint(runId);
   });
 
+  it("persists status and finalAnswer through a save/load round trip (async delegate_agent groundwork -- a resume_run_id poll of a done run reads these back)", async () => {
+    const runId = "test-run-done-status";
+    await saveCheckpoint(runId, {
+      newContents: [],
+      transcript: ["[step 1] did a thing"],
+      stepsDone: 2,
+      task: "some task",
+      repeatCounts: {},
+      consecutiveAllRepeatSteps: 0,
+      provider: "gemini",
+      pendingVerification: false,
+      structuralRecheckUsed: false,
+      status: "done",
+      finalAnswer: "the synthesized answer",
+    });
+
+    const loaded = await loadCheckpoint(runId);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded.status).toBe("done");
+    expect(loaded.finalAnswer).toBe("the synthesized answer");
+
+    await deleteCheckpoint(runId);
+  });
+
   it("defaults structuralRecheckUsed to undefined (not an error) when omitted, for pre-existing-checkpoint compatibility", async () => {
     const runId = "test-run-no-structural-field";
     await saveCheckpoint(runId, {
