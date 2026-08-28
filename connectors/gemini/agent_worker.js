@@ -4,12 +4,22 @@
 // (plan.md Scenario B: self-chaining QStash worker).
 //
 // Reuses runInvestigation's EXISTING synchronous loop one call at a time
-// (resume_run_id + max_steps: stepsDone + 1) rather than a bespoke
-// single-step function extracted from it -- see plan.md's "Progress log"
-// entry for step 5 for why the literal per-step extraction the plan
-// originally called for turned out to be unnecessary, and riskier than
-// this reuse, given how much interacting fix history lives inside that
-// loop body.
+// (resume_run_id + singleStep: true) rather than a bespoke single-step
+// function extracted from it -- see plan.md's "Progress log" entry for
+// step 5 for why the literal per-step extraction the plan originally
+// called for turned out to be unnecessary, and riskier than this reuse,
+// given how much interacting fix history lives inside that loop body.
+//
+// IMPORTANT: this MUST be singleStep: true, not max_steps: stepsDone + 1.
+// The latter looks equivalent (both bound this call to exactly one step)
+// but is NOT: runInvestigation derives isFinalStep from the run's real
+// overall step ceiling, which max_steps: stepsDone + 1 would overwrite
+// with this call's own artificially-shrunk bound on every single
+// invocation -- withholding tools from every worker-driven step
+// regardless of how many the run was actually meant to have (see the
+// 2026-08-28 production-bug entry in plan.md's progress log). singleStep
+// instead restores the true ceiling from the checkpoint (set once, at
+// seedRun time) and only bounds THIS call's own loop to one iteration.
 //
 // SECURITY: this endpoint is PUBLICLY reachable (QStash calls it over the
 // open internet to invoke it), unlike the MCP tool surface which sits
@@ -105,7 +115,7 @@ export async function handleAgentWorker(req, res) {
 
   let result;
   try {
-    result = await runInvestigation({ resume_run_id: runId, max_steps: checkpoint.stepsDone + 1 });
+    result = await runInvestigation({ resume_run_id: runId, singleStep: true });
   } catch (err) {
     // Belt-and-suspenders: runInvestigation is designed to catch its own
     // failures internally and return a `{ failed: true }` result rather

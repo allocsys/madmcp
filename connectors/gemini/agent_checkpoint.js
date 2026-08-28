@@ -59,7 +59,7 @@ function metaKey(runId) {
 //     here -- a caller-supplied value could be stale by the time the actual
 //     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, status = "running", finalAnswer, overallMaxSteps }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -82,7 +82,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // rather than conditionally spread in, so the shape of a saved
     // checkpoint doesn't vary step-to-step -- consistent with every other
     // field here.
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, status, finalAnswer, overallMaxSteps, lastStepAt: Date.now() });
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
