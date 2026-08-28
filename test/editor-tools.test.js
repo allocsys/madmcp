@@ -15,6 +15,11 @@
 // process.env, so each block below uses vi.resetModules() + a fresh
 // dynamic import after setting/deleting the env var, rather than trying to
 // mutate an already-evaluated exported const.
+//
+// EDITOR_AGENT_ENABLED defaults ON as of 2026-08-28 (config.js:
+// `!== "false"`, was `=== "true"`) -- unset or any value other than the
+// literal string "false" means ON; only "false" means OFF. The gate tests
+// below assert that semantics, not the old default-off behavior.
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -36,8 +41,20 @@ function fakeServer() {
 }
 
 describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
-  it("registers no tool at all when the flag is unset (default off)", async () => {
+  it("registers the tool when the flag is unset (default on)", async () => {
     delete process.env.EDITOR_AGENT_ENABLED;
+    vi.resetModules();
+    const { register } = await import("../connectors/github/editor_tools.js");
+
+    const server = fakeServer();
+    register(server);
+
+    expect(server.tool).toHaveBeenCalledTimes(1);
+    expect(server.tool.mock.calls[0][0]).toBe("delegate_editor");
+  });
+
+  it("registers no tool at all when the flag is the literal string \"false\"", async () => {
+    process.env.EDITOR_AGENT_ENABLED = "false";
     vi.resetModules();
     const { register } = await import("../connectors/github/editor_tools.js");
 
@@ -47,7 +64,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
     expect(server.tool).not.toHaveBeenCalled();
   });
 
-  it("registers no tool at all when the flag is any value other than the literal string \"true\"", async () => {
+  it("registers the tool when the flag is any value other than the literal string \"false\" (e.g. a truthy-looking typo)", async () => {
     process.env.EDITOR_AGENT_ENABLED = "1";
     vi.resetModules();
     const { register } = await import("../connectors/github/editor_tools.js");
@@ -55,7 +72,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
     const server = fakeServer();
     register(server);
 
-    expect(server.tool).not.toHaveBeenCalled();
+    expect(server.tool).toHaveBeenCalledTimes(1);
   });
 
   it("registers exactly one tool, named delegate_editor, when the flag is \"true\"", async () => {
