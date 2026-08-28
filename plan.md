@@ -162,6 +162,15 @@ write-capable agent loop.
    prompt instructions" posture as designer_delegate.js's file header
    insists on for its own scope. Unit test each independently of the
    agent loop (same order as delegate_designer's step 1).
+
+   Model the write function's shape on the stress-tested, already-working
+   edit_file MCP tool's two-mode design: `content` (full overwrite,
+   creates the file if it doesn't exist) vs. `replacements` (targeted
+   find/replace, each `find` must appear exactly once or the whole call
+   is rejected and nothing is committed), mutually exclusive, with the
+   replacements mode returning a unified diff. For multi-file commits
+   within a single run, mirror overwrite_files' atomic all-or-nothing
+   commit shape rather than inventing a new one.
 4. **Build the checkpoint layer** (new file or extension of
    designer_checkpoint.js -- decide based on how much the schema actually
    needs to differ; prefer reuse per guardrail #7).
