@@ -48,6 +48,7 @@
 
 import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
+import { formatCascadeLogLine } from "../llm/cascade_log.js";
 import { readFile, writeFile, assertNotDefaultBranch } from "./editor_tool_functions.js";
 import { validateByExtension } from "./editor_validate.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./editor_checkpoint.js";
@@ -342,6 +343,8 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     let candidate;
     try {
       candidate = await providerChat(contents, { tools: withholdTools ? undefined : declarations });
+      const cascadeLog = formatCascadeLogLine(candidate, { step });
+      if (cascadeLog) transcript.push(cascadeLog);
     } catch (err) {
       await saveState(step - 1);
       const redisOk = isRedisConfigured();
