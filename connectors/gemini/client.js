@@ -204,5 +204,14 @@ export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolCo
   if (!candidate) {
     throw new Error("Gemini returned no candidates.");
   }
+  // Surface which fallback model/key actually served this call, if any --
+  // callGenerateContent sets these on `data` (see its own comments), but
+  // they'd otherwise be lost here since only `data.candidates[0]` is
+  // returned. Attached directly onto the candidate object (not a separate
+  // return value) so every existing caller that destructures `{ content,
+  // finishReason }` off this return value is unaffected; only a caller that
+  // explicitly checks for these two fields will ever see them.
+  if (data._fallbackModelUsed) candidate._fallbackModelUsed = data._fallbackModelUsed;
+  if (data._fallbackKeyIndex !== undefined) candidate._fallbackKeyIndex = data._fallbackKeyIndex;
   return candidate; // { content: { role, parts }, finishReason, ... }
 }
