@@ -1214,8 +1214,7 @@ const VERIFICATION_PROMPT =
 // (see checkpoint.js) -- if it's unavailable, resumption just isn't
 // possible, same as before this existed; a failure still returns whatever
 // transcript was gathered in-memory this call.
-export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider, model, maxOutputTokens }) {
-  const cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
+export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider, model, maxOutputTokens, singleStep = false }) {
   // The provider actually in effect for this run -- the caller-supplied one
   // on a fresh run, or the one restored from a resumed checkpoint (see
   // `checkpoint.provider || provider` below). A checkpointed `contents`
@@ -1237,6 +1236,19 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   let effectiveModel = model;
   // Same pattern again for the per-turn output-token cap.
   let effectiveMaxOutputTokens = maxOutputTokens;
+  // The run's TRUE overall step ceiling -- distinct from cappedSteps (this
+  // particular invocation's own loop bound). For a normal synchronous
+  // caller (or a fresh run) the two are the same value. They diverge for a
+  // worker-driven singleStep resume (agent_worker.js), which deliberately
+  // passes a shrunk per-call bound (stepsDone + 1, so the shared loop takes
+  // exactly one step) that must NOT be mistaken for "the run's real last
+  // step" when deciding whether to withhold tools -- see isFinalStep below.
+  // Restored from the checkpoint on a singleStep resume; established fresh
+  // (or updated, per the documented "resuming with max_steps sets a new
+  // ceiling" behavior) otherwise. Persisted in every checkpoint write below
+  // so it survives a resume.
+  let effectiveOverallMaxSteps;
+  let cappedSteps;
 
   let runId = resume_run_id;
   let contents;
@@ -1386,6 +1398,34 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     startStep = 1;
   }
 
+  // Establish this call's own loop bound (cappedSteps) and the run's true
+  // ceiling (effectiveOverallMaxSteps) now that startStep/checkpoint are
+  // known. singleStep (agent_worker.js's one-step-per-invocation resume)
+  // deliberately does NOT let this call's own max_steps redefine the run's
+  // real ceiling -- it restores that ceiling from the checkpoint instead,
+  // and bounds only THIS call's loop to a single iteration. Every other
+  // caller (a fresh run, or a manual synchronous resume) keeps the existing,
+  // documented behavior: max_steps sets/updates the real ceiling directly.
+  if (singleStep) {
+    if (!checkpoint) {
+      // Should not happen in practice -- the `resume_run_id && !task` branch
+      // above already throws a clearer error when a resume's checkpoint
+      // fails to load. Guarded here too so a future caller of singleStep
+      // without task/resume_run_id set correctly fails loudly instead of
+      // silently mis-capping an investigation that was never actually
+      // resumed from anything.
+      throw new Error(`singleStep resume requested for runId "${resume_run_id}" but no live checkpoint was found.`);
+    }
+    // Checkpoints seeded/saved before this field existed won't have it --
+    // fall back to the tool's own documented default (20) rather than
+    // erroring or leaving the run's real ceiling undefined.
+    effectiveOverallMaxSteps = checkpoint.overallMaxSteps || Math.min(20, HARD_MAX_STEPS);
+    cappedSteps = startStep;
+  } else {
+    cappedSteps = Math.min(max_steps, HARD_MAX_STEPS);
+    effectiveOverallMaxSteps = cappedSteps;
+  }
+
   // Resuming with a max_steps ceiling that's already been met or exceeded
   // by the checkpoint's own stepsDone (e.g. a checkpoint has 5 completed
   // steps and the caller resumes with max_steps: 2) -- there's no budget
@@ -1417,7 +1457,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // even an incomplete one). Without `tools` in the request body, Gemini
     // structurally cannot return a functionCall part here, so this step is
     // guaranteed to be a real text-answer attempt rather than another read.
-    const isFinalStep = step === cappedSteps;
+    const isFinalStep = step === effectiveOverallMaxSteps;
     // Stuck-loop forced-answer (fix #4): once 3 consecutive steps have
     // consisted ENTIRELY of repeat calls (consecutiveAllRepeatSteps, updated
     // at the end of each step below), withhold tools the same way the final
@@ -1464,6 +1504,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         model: effectiveModel,
         maxOutputTokens: effectiveMaxOutputTokens,
         pendingVerification,
+        overallMaxSteps: effectiveOverallMaxSteps,
       });
       const errMessage = err?.message ?? String(err);
       const redisOk = isRedisConfigured();
@@ -1547,6 +1588,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           maxOutputTokens: effectiveMaxOutputTokens,
           pendingVerification,
           structuralRecheckUsed,
+          overallMaxSteps: effectiveOverallMaxSteps,
         });
         contentsCheckpointedUpTo = contents.length;
         continue;
@@ -1585,6 +1627,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
             maxOutputTokens: effectiveMaxOutputTokens,
             pendingVerification,
             structuralRecheckUsed,
+            overallMaxSteps: effectiveOverallMaxSteps,
           });
           contentsCheckpointedUpTo = contents.length;
           continue;
@@ -1618,6 +1661,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           maxOutputTokens: effectiveMaxOutputTokens,
           pendingVerification,
           structuralRecheckUsed,
+          overallMaxSteps: effectiveOverallMaxSteps,
           status: "done",
           finalAnswer: result.answer,
         });
@@ -1644,7 +1688,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // has no way to infer that from "MALFORMED_FUNCTION_CALL" alone.
         const starvationNote = withholdTools && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
           ? (isFinalStep
-              ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${cappedSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+              ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${effectiveOverallMaxSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
               : pendingVerification
               ? ` This was the verification pass (no tools offered on purpose -- see VERIFICATION_PROMPT), but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The draft answer from the step before this one was never returned to the caller as a result -- treat this run as having produced no usable answer, and consider retrying with a higher max_steps in case the verification turn simply needed more room.`
               : ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls (same function + arguments already tried this run) -- fix #4's stuck-loop guard forces a text-only answer the same way the final step does, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`)
@@ -1809,6 +1853,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         model: effectiveModel,
         maxOutputTokens: effectiveMaxOutputTokens,
         pendingVerification,
+        overallMaxSteps: effectiveOverallMaxSteps,
       });
       const errMessage = err?.message ?? String(err);
       return {
@@ -1830,7 +1875,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // remaining-step count explicitly turns a silent quality regression into
     // an honest one: the model is told to say it couldn't finish, rather
     // than presenting a rushed, incomplete answer as if it were complete.
-    const remainingAfterThisStep = cappedSteps - step;
+    const remainingAfterThisStep = effectiveOverallMaxSteps - step;
     if (remainingAfterThisStep === 2) {
       // Earlier, softer nudge -- gives the model a chance to steer toward
       // synthesis before the hard cutoff two notes down, instead of only
@@ -1877,6 +1922,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // error) -- included explicitly so the persisted checkpoint always
       // states this field rather than silently omitting it on this path.
       pendingVerification,
+      overallMaxSteps: effectiveOverallMaxSteps,
     });
     contentsCheckpointedUpTo = contents.length;
   }
@@ -1911,7 +1957,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       newContents: [], transcript, stepsDone: cappedSteps, task: effectiveTask,
       repeatCounts: Object.fromEntries(repeatCounts), consecutiveAllRepeatSteps,
       provider: effectiveProvider, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens,
-      pendingVerification, structuralRecheckUsed, status: "done", finalAnswer: result.answer,
+      pendingVerification, structuralRecheckUsed, overallMaxSteps: effectiveOverallMaxSteps, status: "done", finalAnswer: result.answer,
     });
     return result;
   }
@@ -1943,9 +1989,15 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
 // restructuring that guard to cover a second, differently-shaped caller. A
 // small, explicit duplication of the ~4-line fresh-run setup here is lower-
 // risk than bending that guard's contract to serve both callers.
-export async function seedRun({ task, provider, model, maxOutputTokens }) {
+export async function seedRun({ task, provider, model, maxOutputTokens, max_steps = 20 }) {
   const runId = randomUUID();
   const contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
+  // Seeds the run's TRUE overall step ceiling (see runInvestigation's
+  // effectiveOverallMaxSteps for the full rationale) -- this is what lets
+  // the QStash worker's later singleStep resumes (agent_worker.js) know
+  // when they've actually reached the run's real last step, instead of
+  // mistaking their own artificially-shrunk per-call max_steps for it.
+  const overallMaxSteps = Math.min(max_steps, HARD_MAX_STEPS);
   await saveCheckpoint(runId, {
     newContents: contents,
     transcript: [],
@@ -1958,6 +2010,7 @@ export async function seedRun({ task, provider, model, maxOutputTokens }) {
     maxOutputTokens,
     pendingVerification: false,
     structuralRecheckUsed: false,
+    overallMaxSteps,
     status: "running",
   });
   return runId;
