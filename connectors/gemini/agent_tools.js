@@ -115,7 +115,7 @@ export function register(server) {
             return {
               content: [{ type: "text", text:
                 `Still running (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed so far. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.` +
-                (checkpoint.transcript?.length && show_transcript ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
+                (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
             };
           }
           // Stale lastStepAt -- the QStash chain likely broke (a failed
