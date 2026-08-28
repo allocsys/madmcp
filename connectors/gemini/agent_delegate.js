@@ -1920,3 +1920,45 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     steps: cappedSteps, transcript, runId, task: effectiveTask, failed: true,
   };
 }
+
+// Seeds a fresh checkpoint (status "running", stepsDone 0, no steps taken
+// yet) WITHOUT running any part of the investigation loop -- used by
+// agent_tools.js's async-start path (plan.md Scenario B) to return a runId
+// immediately and let the QStash worker (agent_worker.js) take step 1 in
+// the background, rather than this call itself blocking on step 1
+// synchronously before returning (which would defeat the "returns almost
+// immediately" goal for a task whose very first step is itself slow).
+//
+// Deliberately duplicates the small fresh-run setup at the top of
+// runInvestigation (a UUID + the initial SYSTEM_PREAMBLE/task turn) rather
+// than calling into runInvestigation with max_steps: 0 -- runInvestigation's
+// loop (`for (step = startStep; step <= cappedSteps; ...)`) does simply
+// never execute when cappedSteps < startStep, which looks like it would
+// work for a zero-step call, but the ONLY existing early-return path that
+// covers cappedSteps < startStep (the `checkpoint && startStep > cappedSteps`
+// guard) assumes a checkpoint ALREADY EXISTS to read runId/contents/
+// transcript back off of -- reaching it on a genuinely fresh call (no
+// resume_run_id, no checkpoint yet) would require either throwing (no task-
+// less-resume fallback path exists for a non-resume, zero-step call) or
+// restructuring that guard to cover a second, differently-shaped caller. A
+// small, explicit duplication of the ~4-line fresh-run setup here is lower-
+// risk than bending that guard's contract to serve both callers.
+export async function seedRun({ task, provider, model, maxOutputTokens }) {
+  const runId = randomUUID();
+  const contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
+  await saveCheckpoint(runId, {
+    newContents: contents,
+    transcript: [],
+    stepsDone: 0,
+    task,
+    repeatCounts: {},
+    consecutiveAllRepeatSteps: 0,
+    provider,
+    model,
+    maxOutputTokens,
+    pendingVerification: false,
+    structuralRecheckUsed: false,
+    status: "running",
+  });
+  return runId;
+}
