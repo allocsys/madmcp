@@ -19,6 +19,7 @@ import * as fetch      from "./connectors/fetch/tools.js";
 import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
 import * as agent      from "./connectors/gemini/agent_tools.js";
+import { handleAgentWorker } from "./connectors/gemini/agent_worker.js";
 import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
@@ -113,7 +114,14 @@ app.set("trust proxy", TRUST_PROXY_HOPS);
 app.use(helmet());
 // Raise body size limit from the 100kb default to 10mb so that push_files
 // and create_or_update_file can handle large source files without truncation.
-app.use(express.json({ limit: "10mb" }));
+// `verify` stashes the raw request body bytes on req.rawBody -- needed by
+// /api/agent-worker (connectors/gemini/agent_worker.js) to verify QStash's
+// request signature against the EXACT bytes QStash signed, since the
+// already-JSON.parsed req.body cannot be re-serialized back to a
+// byte-for-byte match (key order/whitespace aren't preserved). Cheap for
+// every other route (one extra buffer reference, no extra parsing) so it's
+// applied globally rather than only on the one route that needs it.
+app.use(express.json({ limit: "10mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // Gated behind auth: previously exposed which connectors were configured
 // (github/notion/mem0/cloudflare/auth booleans) to anyone with the URL, which
@@ -156,6 +164,17 @@ async function handleMcp(req, res) {
 
 app.post("/mcp", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
+
+// QStash-invoked worker for delegate_agent's Scenario B self-chaining
+// background loop (plan.md) -- deliberately NOT behind requireMcpKey/
+// requireAllowedIp (QStash calls from its own infrastructure, not from the
+// MCP client's network) or mcpLimiter (a long chain of legitimate one-
+// step-per-message calls for a single run would otherwise trip a limiter
+// sized for MCP tool-call bursts). Auth for this endpoint is entirely
+// handleAgentWorker's own QStash signature verification (fails closed --
+// see qstash_client.js's file header), which is why it doesn't reuse any
+// of the /mcp middleware stack above.
+app.post("/api/agent-worker", handleAgentWorker);
 
 const PORT = process.env.PORT || 8080;
 // Gated so importing this module (e.g. from tests via supertest, or the MCP
