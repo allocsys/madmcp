@@ -1,14 +1,17 @@
 # Plan: Fire-and-forget delegate_agent (Scenario B — QStash self-chaining)
 
-Status: in progress -- steps 1-8 done (step 5 with a noted deviation);
-step 4's dashboard-side half (QStash provisioning + the four env vars in
-production) is now CONFIRMED SET (see progress log) -- step 4 is fully
-done. Step 9 is partially done: agent_tools.js's own branching logic now
-has dedicated test coverage (test/agent-tools-async.test.js), but a real
-network round trip against live QStash is still unexercised (see progress
-log for why that's a staging-verification item, not a unit test). Step 10
-(flipping DELEGATE_AGENT_ASYNC=qstash in production) remains open --
-ready to attempt now that step 4 is confirmed, but not yet done.
+Status: in progress -- steps 1-8 done (step 5 with a noted deviation).
+Step 4's dashboard-side half is only PARTIALLY done, corrected after an
+earlier over-eager "confirmed set" note (see progress log): the Upstash
+integration's QSTASH_TOKEN/QSTASH_CURRENT_SIGNING_KEY/QSTASH_NEXT_SIGNING_KEY
+are set, but AGENT_WORKER_URL -- the app's OWN public /api/agent-worker
+URL, which the Upstash integration has no way to know or provide -- is
+still unset, so isQStashConfigured() still returns false in production.
+Step 9 is partially done: agent_tools.js's own branching logic now has
+dedicated test coverage (test/agent-tools-async.test.js), but a real
+network round trip against live QStash is still unexercised. Step 10
+(flipping DELEGATE_AGENT_ASYNC=qstash) cannot meaningfully happen until
+AGENT_WORKER_URL is set.
 Date: 2026-08-28
 
 ## Context
@@ -304,18 +307,29 @@ in production), which should only happen after step 4's provisioning is
 confirmed working and per the "Sequencing note" at the top of this doc --
 this is new infra, not yet observed under any real traffic.
 
-**2026-08-28, step 4 confirmation + step 9 (partial) -- commit 420f9bd.**
+**2026-08-28, step 4 status corrected + step 9 (partial) -- commit 420f9bd.**
 
-- **Step 4, dashboard half:** confirmed by a human with Upstash/Vercel
-  dashboard access that `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`,
-  `QSTASH_NEXT_SIGNING_KEY`, and `AGENT_WORKER_URL` are now all set in
-  production. Not independently verified from inside this environment
-  (no dashboard access, no outbound network here) -- taken on the word of
-  whoever confirmed it, same as any other report of an out-of-band ops
-  action. `isQStashConfigured()` should now return true in production;
-  worth a one-time manual check (e.g. a real `delegate_agent` call with
-  `DELEGATE_AGENT_ASYNC=qstash` set, watching for a `run_id` coming back
-  immediately) before leaning on it.
+- **Step 4, dashboard half -- CORRECTED, still open.** Initially logged
+  here as fully confirmed based on a report that "envs are set up"; a
+  screenshot of the actual Vercel environment-variables screen showed that
+  report covered only what the Upstash marketplace integration
+  auto-provisions when you connect a QStash instance: `QSTASH_TOKEN`,
+  `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`, and `QSTASH_URL`
+  (QStash's own API base URL -- not read anywhere in this codebase;
+  `qstash_client.js`'s `Client` is constructed with only `{ token }` and
+  uses the SDK's own default base URL). **`AGENT_WORKER_URL` was not among
+  them and is still unset.** That variable is fundamentally different from
+  the other three: it's not a QStash-side credential the integration can
+  know about, it's THIS app's own public URL once deployed (e.g.
+  `https://<deployment>.vercel.app/api/agent-worker`) -- something only a
+  human who knows the deployment's actual domain can set, after the fact.
+  `isQStashConfigured()` requires both a working client AND `AGENT_WORKER_URL`
+  (see qstash_client.js), so it still returns `false` in production and the
+  whole async path remains inert regardless of the other three being
+  correct. Lesson for next time: a plain "envs are set up" claim isn't
+  sufficient confirmation for a step this specific -- verify against the
+  actual list of required var NAMES (all four, individually), not against
+  a general impression that setup happened.
 - **Step 9, partial:** added `test/agent-tools-async.test.js`, covering the
   half of step 9's gap that a unit test actually can cover --
   `agent_tools.js`'s own branching logic (fresh start seeds+publishes and
