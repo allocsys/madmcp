@@ -18,6 +18,7 @@ import { register as registerDiff      } from "./diff.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
 import { register as registerCodespaces } from "./codespaces.js";
+import { register as registerEditor     } from "./editor_tools.js";
 
 export function register(server) {
   registerFiles(server);
@@ -34,4 +35,8 @@ export function register(server) {
   registerRepoMgmt(server);
   registerCloneToken(server);
   registerCodespaces(server);
+  // Self-gates on EDITOR_AGENT_ENABLED (plan.md step 10) -- a no-op call
+  // unless the flag is on, so delegate_editor doesn't appear on the MCP
+  // surface until a human flips it on deliberately.
+  registerEditor(server);
 }
