@@ -1,15 +1,15 @@
 # Plan: Fire-and-forget delegate_agent (Scenario B — QStash self-chaining)
 
-Status: in progress -- steps 1-9 effectively done. Step 4 is now fully
-done: all four required env vars (QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY,
-QSTASH_NEXT_SIGNING_KEY, AGENT_WORKER_URL) are confirmed set in production
-(see progress log for the earlier correction -- AGENT_WORKER_URL was
-missed on the first pass). Step 9 has agent_tools.js branching-logic test
-coverage (test/agent-tools-async.test.js); a live network round trip
-against real QStash remains a manual smoke-test item, not something a unit
-test can cover. Step 10 (flipping DELEGATE_AGENT_ASYNC=qstash in
-production) is the only remaining open item -- recommended only after that
-smoke test, per the "Sequencing note" below.
+Status: in progress -- steps 1-9 effectively done, all four QStash env vars
+confirmed set in production. Step 10 was flipped to DELEGATE_AGENT_ASYNC=qstash
+and a live smoke test found a production bug (tools withheld on every
+worker-driven step -- see progress log); that bug is now FIXED and
+regression-tested (commits bc79946/766348d/b5e76e4 + test in 06bf68c).
+**`DELEGATE_AGENT_ASYNC` still needs to be confirmed reverted to `sync` in
+Vercel by a human with dashboard access before anything else** -- the code
+fix does not itself change what's live in production, and that revert has
+not been confirmed done as of this entry. Once reverted, re-flipping to
+"qstash" and re-running the smoke test is the remaining step-10 work.
 Date: 2026-08-28
 
 ## Context
