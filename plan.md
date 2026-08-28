@@ -1,14 +1,14 @@
 # Plan: Fire-and-forget delegate_agent (Scenario B — QStash self-chaining)
 
-Status: in progress -- steps 1-3 done, step 5 done (with a noted deviation),
-steps 4/6/7/8/10 now implemented and unit-tested (see "Progress log"); ONE
-part of step 4 remains genuinely open (see that entry) -- actually
-provisioning QStash in the Upstash/Vercel dashboard and setting the
-resulting env vars in production, which needs a human with dashboard
-access, not something committable. Step 9 (broader test coverage beyond
-what step 4/6/7/8's own commit already added) and step 10's actual rollout
-(flipping DELEGATE_AGENT_ASYNC=qstash in production once step 4's
-provisioning is done) are the remaining open items.
+Status: in progress -- steps 1-8 done (step 5 with a noted deviation);
+step 4's dashboard-side half (QStash provisioning + the four env vars in
+production) is now CONFIRMED SET (see progress log) -- step 4 is fully
+done. Step 9 is partially done: agent_tools.js's own branching logic now
+has dedicated test coverage (test/agent-tools-async.test.js), but a real
+network round trip against live QStash is still unexercised (see progress
+log for why that's a staging-verification item, not a unit test). Step 10
+(flipping DELEGATE_AGENT_ASYNC=qstash in production) remains open --
+ready to attempt now that step 4 is confirmed, but not yet done.
 Date: 2026-08-28
 
 ## Context
