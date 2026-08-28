@@ -551,3 +551,46 @@ write-capable agent loop.
   introducing new "come back later" language for a call that already
   completed. Not yet implemented; this entry records the gap and the
   framing concern, not a shipped fix.
+
+- 2026-08-28: **Fix landed on this branch, then CI-verified and corrected.**
+  connectors/gemini/agent_tools.js's `result.failed` branch (the
+  synchronous failed/partial path) now returns a compact structured
+  summary by default -- step count, reason/error, `resume_run_id`
+  ("not resumable" when there isn't one) -- and only appends the full
+  tool-call transcript when `show_transcript` is explicitly true,
+  replacing the old unconditional transcript dump described above.
+
+  Two problems surfaced getting this green, both now fixed:
+
+  1. **Unintended scope creep.** The same commit that fixed the
+     `result.failed` branch also changed the async poll branch ("Still
+     running (run_id: ...)", the `checkpoint.status === "running"` /
+     fresh-lastStepAt case) to gate its transcript inclusion on
+     `show_transcript` too. That branch was never part of the bug this
+     doc described -- the bug was specifically about failed/partial
+     *completed* runs, not an in-progress poll -- and the change broke
+     test/agent-tools-async.test.js's existing "poll with a fresh
+     checkpoint" case, which asserts (and still asserts, unchanged) that
+     the transcript is included by default while polling. Reverted that
+     one branch back to unconditional inclusion, matching main and
+     leaving the poll path's behavior untouched -- only the
+     `result.failed` branch actually changes as part of this fix.
+  2. **Broken test mocks.** test/agent-delegate-loop.test.js (added
+     alongside the fix) used `vi.spyOn(import("...agent_delegate.js"),
+     "runInvestigation")` to stub the dependency -- this doesn't work
+     under Vitest's ESM handling (each `import()` call returns a fresh
+     Promise/namespace object with non-configurable exports, so spyOn
+     can't attach), and CI failed both cases with "The property
+     'runInvestigation' is not defined on the object." Replaced with
+     `vi.mock("../connectors/gemini/agent_delegate.js", ...)` (plus
+     mocking agent_checkpoint.js/qstash_client.js/notion/tools.js, the
+     rest of agent_tools.js's dependencies), matching the pattern
+     test/agent-tools-async.test.js already established. Also fixed the
+     handler lookup itself -- `server.tool(name, description, schema,
+     handler)` puts the handler at argument index 3, not 2 (index 2 is
+     the non-callable zod schema) -- by switching to the same
+     tools-by-name fake-server helper agent-tools-async.test.js uses,
+     rather than hardcoding an index.
+
+  CI (`verify` workflow) is green on this branch as of run 33203532631.
+  Not yet done: opening/merging the PR to main.
