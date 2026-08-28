@@ -16,9 +16,11 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { runInvestigation } from "./agent_delegate.js";
+import { runInvestigation, seedRun } from "./agent_delegate.js";
+import { loadCheckpoint } from "./agent_checkpoint.js";
+import { publishAgentStep, isQStashConfigured } from "./qstash_client.js";
 import { doCreatePage } from "../notion/tools.js";
-import { GEMINI_NOTION_ROOT_PAGE_ID } from "../../config.js";
+import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS } from "../../config.js";
 
 export function register(server) {
 
@@ -81,6 +83,67 @@ export function register(server) {
           content: [{ type: "text", text: `Invalid maxOutputTokens: ${maxOutputTokens}. Must be a positive integer (at least 1).` }],
           isError: true,
         };
+      }
+
+      // Async delegate_agent (plan.md Scenario B, "Tool behavior change"):
+      // gated behind BOTH the rollout flag and QStash actually being
+      // reachable -- if either is off/unconfigured, every branch below is
+      // skipped and this falls straight through to today's fully-
+      // synchronous runInvestigation call further down, unchanged.
+      const asyncEnabled = DELEGATE_AGENT_ASYNC === "qstash" && isQStashConfigured();
+
+      if (asyncEnabled && !resume_run_id) {
+        // Fresh async start: seed a checkpoint (zero steps taken) and hand
+        // step 1 onward off to the QStash worker, returning almost
+        // immediately instead of blocking on the whole investigation --
+        // this is the entire point of Scenario B.
+        let runId;
+        try {
+          runId = await seedRun({ task, provider, model, maxOutputTokens });
+          await publishAgentStep({ runId, afterStep: 0 });
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to start async investigation: ${err?.message ?? String(err)}` }], isError: true };
+        }
+        return {
+          content: [{ type: "text", text:
+            `Investigation started in the background (run_id: ${runId}). It will keep stepping on its own -- call delegate_agent again with resume_run_id: "${runId}" (task not needed) to poll for progress or the final answer.` }],
+        };
+      }
+
+      if (asyncEnabled && resume_run_id) {
+        const checkpoint = await loadCheckpoint(resume_run_id);
+        if (checkpoint && checkpoint.status === "failed") {
+          // Dead-lettered by agent_worker.js (plan.md step 8) after repeated
+          // same-step failures -- a definitive, non-resumable outcome.
+          // Return it directly rather than letting runInvestigation try to
+          // resume a run that was deliberately given up on.
+          return {
+            content: [{ type: "text", text: `Investigation failed permanently (run_id: ${resume_run_id}) after repeated errors on the same step: ${checkpoint.finalAnswer || "(no error detail saved)"}` }],
+            isError: true,
+          };
+        }
+        if (checkpoint && checkpoint.status === "running") {
+          const ageMs = Date.now() - (checkpoint.lastStepAt || 0);
+          if (ageMs < AGENT_ASYNC_POLL_FRESH_SECONDS * 1000) {
+            // Fresh lastStepAt -- the background worker chain is still
+            // actively stepping. Poll-only: report progress WITHOUT taking
+            // a step ourselves, so a poll can never race the worker.
+            return {
+              content: [{ type: "text", text:
+                `Still running (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed so far. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.` +
+                (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
+            };
+          }
+          // Stale lastStepAt -- the QStash chain likely broke (a failed
+          // publish, a dropped/undelivered message). Fall through to the
+          // ordinary synchronous runInvestigation call below, which resumes
+          // the loop IN THIS CALL -- this is what guarantees a run can never
+          // be silently stranded, per plan.md's "Tool behavior change".
+        }
+        // checkpoint missing (expired/never existed), or status "done" --
+        // fall through to runInvestigation below, which already handles
+        // both correctly: "done" is a cheap stored-answer read (no re-
+        // execution), and "missing" produces its existing clear error.
       }
 
       let result;
