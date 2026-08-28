@@ -53,63 +53,92 @@ async function callGenerateContentOnce(body, model, apiKey) {
   return data;
 }
 
-// Cascades through GEMINI_MODEL + GEMINI_FALLBACK_MODELS on a 429 (rate
-// limit exceeded) OR a 503 (overloaded/high demand). Free-tier Gemini
-// quotas are tracked per model, so a fresh model has its own separate RPM
-// bucket on a 429, making cascade a legitimate way to keep going rather
-// than a blind retry. A 503 isn't a quota signal, but each model is still a
-// separate backend deployment, so one being overloaded doesn't mean the
-// next is -- worth trying before failing the whole call. Any other status
-// (400, 500, etc.) is a real failure and surfaces immediately without
-// trying other models, since those aren't problems a different model would fix.
+// Cascades through (GEMINI_API_KEYS x [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]),
+// same two-axis shape as connectors/groq/client.js's callChatCompletion --
+// see that file's header for the general reasoning. Model-first ordering:
+// for a GIVEN key, exhaust every fallback model before rotating to the next
+// key. Rationale: a 429/503 is usually a per-model, per-key quota signal
+// (free-tier Gemini quotas are tracked per model), so cascading models
+// within the SAME key/account is the cheap, free lever -- no second
+// account/project's quota gets touched until that lever is fully spent.
+// Key rotation is the more expensive fallback (a second key likely means a
+// second billing account/project), so it's reserved for when the whole
+// model list is exhausted on the current key, OR the key itself is bad/
+// revoked (401/403, which breaks out of the model loop immediately -- no
+// point cycling models on a dead key).
+//
+// Cooldown is namespaced per (model, key-index) via "gemini:<keyIndex>",
+// mirroring Groq's client.js -- a 429 on model X under key 0 must not cool
+// down model X under key 1, since that's a completely separate quota
+// bucket. Key 0 keeps the bare "gemini" default namespace (cooldown.js's
+// DEFAULT_NAMESPACE) so any cooldown recorded before this multi-key change
+// shipped is still honored for the first/only key on upgrade.
 //
 // If the caller passed an explicit `model` that differs from the configured
-// default (GEMINI_MODEL), that choice is honored exactly with no cascade --
-// they asked for that specific model, so silently substituting another one
-// on a 429 would violate that request.
+// default (GEMINI_MODEL), that choice is honored exactly with no MODEL
+// cascade -- they asked for that specific model, so silently substituting
+// another one on a 429 would violate that request. Key rotation still
+// applies in that case, same as Groq: a bad/exhausted key isn't a model
+// choice.
 async function callGenerateContent(body, requestedModel) {
+  if (!GEMINI_API_KEYS.length) {
+    throw new Error("No Gemini API key configured. Set GEMINI_API_KEYS (or the legacy GEMINI_API_KEY) as an environment variable on the madmcp server.");
+  }
   const models = requestedModel && requestedModel !== GEMINI_MODEL
     ? [requestedModel]
     : [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
 
   let lastErr;
-  for (let i = 0; i < models.length; i++) {
-    const model = models[i];
-    // Best-effort cross-call memory (see cooldown.js): if this model was 429'd
-    // recently -- possibly in a prior invocation, since Vercel doesn't
-    // guarantee a warm/reused instance between calls -- skip it without
-    // spending a request, same as if it had just failed with a fresh 429.
-    if (await isModelCoolingDown(model)) {
-      lastErr = lastErr || new Error(`Gemini API error (429): model "${model}" is in a recorded cooldown from a recent rate limit.`);
-      continue;
-    }
-    try {
-      const data = await callGenerateContentOnce(body, model);
-      if (i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
-      return data;
-    } catch (err) {
-      lastErr = err;
-      const isLast = i === models.length - 1;
-      const isRateLimited = err.status === 429;
-      const isOverloaded  = err.status === 503;
-      const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
-      if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
-      if (isRateLimited) {
-        // Rate-limited on this model -- record a cooldown (best-effort; never
-        // blocks or throws on its own) so future calls -- including a
-        // resumed/retried one -- can skip straight past it. Recorded even
-        // when this is the LAST model in the chain (isLast below): a 429 on
-        // the last model still means it's exhausted for the window, and
-        // skipping the setModelCooldown call in that case (as this used to)
-        // meant a resume would skip the earlier cooling-down models but walk
-        // straight back into this same exhausted one and fail identically.
-        // No equivalent recording for 503: there's no per-model quota hint to
-        // parse, and an overload isn't reliably tied to this model
-        // specifically the way a 429 is.
-        await setModelCooldown(model, parseRetryDelaySeconds(err.message));
+  for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
+    const apiKey = GEMINI_API_KEYS[keyIndex];
+    const namespace = keyIndex === 0 ? undefined : `gemini:${keyIndex}`;
+    const isLastKey = keyIndex === GEMINI_API_KEYS.length - 1;
+
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+      const isLastModelForKey = i === models.length - 1;
+      // Best-effort cross-call memory (see cooldown.js): if this (model, key)
+      // pair was 429'd recently -- possibly in a prior invocation, since
+      // Vercel doesn't guarantee a warm/reused instance between calls --
+      // skip it without spending a request, same as if it had just failed
+      // with a fresh 429.
+      if (await isModelCoolingDown(model, namespace)) {
+        lastErr = lastErr || new Error(`Gemini API error (429): model "${model}" on key #${keyIndex} is in a recorded cooldown from a recent rate limit.`);
+        continue;
       }
-      if (isLast) throw err;
-      // Fall through to try the next model either way.
+      try {
+        const data = await callGenerateContentOnce(body, model, apiKey);
+        if (keyIndex > 0 || i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
+        return data;
+      } catch (err) {
+        lastErr = err;
+        const isBadKey = err.status === 401 || err.status === 403;
+        const isRateLimited = err.status === 429;
+        const isOverloaded  = err.status === 503;
+        const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
+        // A bad/exhausted key (401/403) isn't a model problem -- no point
+        // cascading through the rest of this key's model list, jump
+        // straight to the next key instead.
+        if (isBadKey) break;
+        if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
+        if (isRateLimited) {
+          // Rate-limited on this (model, key) pair -- record a cooldown
+          // (best-effort; never blocks or throws on its own) so future calls
+          // -- including a resumed/retried one -- can skip straight past it.
+          // Recorded even on the very last model of the very last key: a 429
+          // there still means it's exhausted for the window, and skipping
+          // the call in that case would mean a resume walks straight back
+          // into this same exhausted (model, key) pair and fails identically.
+          // No equivalent recording for 503: there's no per-model quota hint
+          // to parse, and an overload isn't reliably tied to this model
+          // specifically the way a 429 is.
+          await setModelCooldown(model, parseRetryDelaySeconds(err.message), namespace);
+        }
+        if (isLastModelForKey && isLastKey) throw err;
+        // Otherwise fall through -- either to the next model on this key,
+        // or (via the outer loop, once this key's models are exhausted) to
+        // the next key.
+      }
     }
   }
   throw lastErr;
