@@ -593,4 +593,30 @@ write-capable agent loop.
      rather than hardcoding an index.
 
   CI (`verify` workflow) is green on this branch as of run 33203532631.
-  Not yet done: opening/merging the PR to main.
+
+- 2026-08-28: **Added regression/edge-case test coverage**, still on this
+  branch, before opening the PR. test/agent-delegate-loop.test.js gained
+  three cases:
+  1. A failed result with no `runId` renders "Resumable: not resumable"
+     (the compact summary's other branch, previously untested).
+  2. Two poll-branch regression tests pin the async "still running" poll
+     response's transcript to stay unconditional (included regardless of
+     `show_transcript`) -- direct coverage against the exact scope-creep
+     mistake found and reverted earlier in this doc's log (gating that
+     unrelated branch on `show_transcript`), so it can't silently
+     reappear. Required mocking config.js per-test (`DELEGATE_AGENT_ASYNC:
+     "qstash"`) via vi.doMock + vi.resetModules, since the file's other
+     describe block relies on real config.js's "sync" default and never
+     reaches the async poll branch at all.
+  Refactored the file's qstash/checkpoint mocks from inline arrow
+  functions into named top-level vi.fn()s (mockIsQStashConfigured,
+  mockLoadCheckpoint) so both describe blocks configure them
+  independently without redeclaring the mock factories. CI green as of
+  run 33206840740.
+
+- 2026-08-28: **Merged to main.** Opened and merged the PR for this
+  branch's compact-failure-response fix (result.failed branch of
+  delegate_agent now returns a compact structured summary by default,
+  full transcript only on explicit show_transcript:true), the poll-branch
+  revert, and the test coverage logged above. Not yet done: none --
+  this branch's scope is complete.
