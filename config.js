@@ -164,6 +164,57 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // rate-limit memory, but never breaks a real Gemini call) -- safe to leave
 // both unset until an integration is activated.
 
+// ---------------------------------------------------------------------------
+// QStash (Upstash) -- backs plan.md Scenario B: delegate_agent's
+// self-chaining background worker (connectors/gemini/agent_worker.js +
+// connectors/gemini/qstash_client.js). Same Upstash account/dashboard as
+// the Redis checkpoint store above (agent_checkpoint.js/cooldown.js), a new
+// product under it, not a new vendor.
+//
+// QSTASH_TOKEN / QSTASH_CURRENT_SIGNING_KEY / QSTASH_NEXT_SIGNING_KEY are
+// read directly from process.env inside qstash_client.js (same
+// not-exported-as-a-named-constant pattern as UPSTASH_REDIS_REST_URL/TOKEN
+// above) -- listed here only so every QStash-related env var is
+// discoverable in one place, not because config.js exports them.
+
+// PUBLIC, absolute URL QStash will POST to (e.g.
+// "https://<your-deployment>.vercel.app/api/agent-worker") -- QStash calls
+// this server from the open internet, so it cannot be a relative path or
+// localhost. Required for the async path to work at all; if unset,
+// qstash_client.js's isQStashConfigured() reports false and delegate_agent
+// silently stays on today's fully-synchronous behavior regardless of
+// DELEGATE_AGENT_ASYNC below.
+export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
+
+// Rollout flag (plan.md step 10): "qstash" opts into Scenario B end to end
+// (async start + poll/stale-fallback branching in agent_tools.js); any
+// other value (including unset, the default) keeps delegate_agent on
+// today's fully-synchronous behavior with no code path change at all --
+// flip back to disable Scenario B instantly without a revert if the chain
+// misbehaves in production. See plan.md's "Sequencing note".
+export const DELEGATE_AGENT_ASYNC = process.env.DELEGATE_AGENT_ASYNC || "sync";
+
+// How fresh a checkpoint's lastStepAt must be for a resume_run_id poll to
+// be treated as "the background worker chain is still actively stepping"
+// (poll-only, don't touch the loop) rather than "the chain likely broke"
+// (fall back to resuming synchronously in this call) -- see plan.md's
+// "Tool behavior change". 25s default: comfortably longer than one Gemini
+// turn plus a QStash publish round-trip normally takes, short enough that a
+// genuinely-broken chain is detected and recovered from within a couple of
+// poll calls rather than minutes.
+export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POLL_FRESH_SECONDS) || 25;
+
+// Dead-letter threshold (plan.md step 8): how many consecutive times the
+// SAME step can fail (a worker invocation that completes without
+// advancing stepsDone) before agent_worker.js stops re-chaining and
+// finalizes the checkpoint as "failed" instead of retrying forever. A
+// genuinely transient 429/503 succeeds well before this many attempts
+// (QStash's own delivery retries already space attempts out in practice);
+// this bounds the cost of a permanently broken run (bad config, a
+// non-transient error) rather than burning QStash messages/Gemini quota on
+// it indefinitely.
+export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
+
 // Exa /answer API (docs.exa.ai/reference/answer) -- backs delegate_research's
 // wide mode as the sole implementation (a single search+synthesis call),
 // not a fallback for anything; see connectors/exa/client.js's file header
