@@ -1,6 +1,7 @@
 # Plan: Fire-and-forget delegate_agent (Scenario B — QStash self-chaining)
 
-Status: proposed, not started
+Status: in progress -- steps 1-3 done, step 5 done (with a noted deviation),
+steps 4/6/7/8/10 still open (see "Progress log" at the bottom).
 Date: 2026-08-28
 
 ## Context
@@ -155,6 +156,71 @@ usage. Confirm actual step-to-message ratio once step 9's tests are running
 against real tasks, since parallel function calls within a single Gemini
 turn may or may not map 1:1 to worker invocations depending on how step 5's
 extraction is shaped.
+
+## Progress log
+
+**2026-08-28, step 5 (with a deviation from the literal instruction) --
+commits b556001, f439668, 4da4728, c104125, 32eb0f0.**
+
+Step 5 as written says to physically extract the per-step body into a
+standalone function shared by the existing loop and the new worker. That
+turned out to be avoidable: the existing loop, called with
+`resume_run_id` + `max_steps: stepsDone + 1`, already takes exactly one
+step and returns -- which is the QStash worker's exact call shape --
+WITHOUT needing the loop body itself pulled apart. Reusing the whole loop
+one call at a time is lower-risk than extracting from it (this file's own
+comments document a long list of hard-won, interacting fixes -- repeat
+detection, verification passes, structural line-quote checks -- that a
+manual extraction could easily disturb).
+
+That reuse only works once two checkpoint-lifecycle bugs are fixed, both
+found by actually trying it and running the real test suite rather than
+assumed:
+
+1. Hitting a caller-supplied `max_steps` below `HARD_MAX_STEPS` used to
+   unconditionally delete the checkpoint -- silently discarding a
+   resumable run the moment a caller under-budgeted a call. This wasn't
+   only a Scenario B blocker; it's a pre-existing gap in today's
+   synchronous resume story too. Fixed: only the genuine `HARD_MAX_STEPS`
+   ceiling now finalizes/deletes-equivalent; anything below that leaves
+   the checkpoint alone (already `status: "running"` with a fresh
+   `lastStepAt` from the per-step save).
+2. Genuine completion also used to delete the checkpoint immediately, so
+   a `status: "done"` could never actually be polled -- there was no
+   window in which it existed. Fixed: completion now persists a
+   `status: "done"` checkpoint with a new `finalAnswer` field instead of
+   deleting, and `runInvestigation` short-circuits on `resume_run_id` +
+   `status === "done"` by returning the stored answer directly rather than
+   re-entering the loop. This is exactly the poll behavior the "Tool
+   behavior change" section below specifies for the done case.
+
+Two supporting bugs surfaced while wiring this up and testing it for real
+(agent_checkpoint.js, commit f439668): `saveCheckpoint`'s destructured
+params didn't include `finalAnswer` at all, so it was silently dropped on
+every save (same class of bug as the pre-existing `structuralRecheckUsed`
+regression this file already documents); and `loadCheckpoint` required a
+non-empty `contents` list to consider a checkpoint valid, which is no
+longer true for a done checkpoint (deliberately skips re-pushing contents)
+or a task answered directly on step 1 with zero tool calls.
+
+Verified via a full local clone + `npx vitest run` (367 -> 374 tests
+passing), including a new test
+(test/agent-delegate-async-checkpoint.test.js) that literally drives a run
+to completion one step at a time via the worker's exact call pattern
+against a real (fake-Redis-backed) checkpoint store, and confirms polling
+a done run doesn't re-invoke the model.
+
+**Still open:** step 4 (provision QStash + new worker endpoint +
+signature verification), step 6 (wire the actual re-chain `publishJSON`
+call -- step 5's reuse-the-loop approach means this is now "the worker
+calls `runInvestigation` with `max_steps: stepsDone + 1`, then
+`publishJSON`s itself again if the returned checkpoint isn't done yet"
+rather than a bespoke single-step function, but the endpoint/publish
+wiring itself doesn't exist yet), step 7 (delegate_agent tool handler's
+start/poll/stale-fallback branching in agent_tools.js -- the "start" case
+in particular needs a way to seed a checkpoint and return a runId WITHOUT
+necessarily taking step 1 synchronously first, which nothing above
+provides yet), step 8 (dead-letter/idempotency), step 10 (rollout flag).
 
 ## Open questions
 
