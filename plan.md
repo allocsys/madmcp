@@ -1,17 +1,15 @@
 # Plan: Fire-and-forget delegate_agent (Scenario B — QStash self-chaining)
 
-Status: in progress -- steps 1-8 done (step 5 with a noted deviation).
-Step 4's dashboard-side half is only PARTIALLY done, corrected after an
-earlier over-eager "confirmed set" note (see progress log): the Upstash
-integration's QSTASH_TOKEN/QSTASH_CURRENT_SIGNING_KEY/QSTASH_NEXT_SIGNING_KEY
-are set, but AGENT_WORKER_URL -- the app's OWN public /api/agent-worker
-URL, which the Upstash integration has no way to know or provide -- is
-still unset, so isQStashConfigured() still returns false in production.
-Step 9 is partially done: agent_tools.js's own branching logic now has
-dedicated test coverage (test/agent-tools-async.test.js), but a real
-network round trip against live QStash is still unexercised. Step 10
-(flipping DELEGATE_AGENT_ASYNC=qstash) cannot meaningfully happen until
-AGENT_WORKER_URL is set.
+Status: in progress -- steps 1-9 effectively done. Step 4 is now fully
+done: all four required env vars (QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY,
+QSTASH_NEXT_SIGNING_KEY, AGENT_WORKER_URL) are confirmed set in production
+(see progress log for the earlier correction -- AGENT_WORKER_URL was
+missed on the first pass). Step 9 has agent_tools.js branching-logic test
+coverage (test/agent-tools-async.test.js); a live network round trip
+against real QStash remains a manual smoke-test item, not something a unit
+test can cover. Step 10 (flipping DELEGATE_AGENT_ASYNC=qstash in
+production) is the only remaining open item -- recommended only after that
+smoke test, per the "Sequencing note" below.
 Date: 2026-08-28
 
 ## Context
