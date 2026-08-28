@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Define hoisted configuration mock
 const mockConfig = vi.hoisted(() => ({
-  GEMINI_API_KEY: "dummy-api-key",
+  GEMINI_API_KEYS: ["dummy-api-key"],
   GEMINI_API: "https://generativelanguage.googleapis.com/v1beta",
   GEMINI_MODEL: "gemini-flash-latest",
   GEMINI_FALLBACK_MODELS: ["fallback-lite-1", "fallback-lite-2"],
@@ -144,7 +144,7 @@ describe("Gemini Connector - Client and Cascading Cascade (client.js)", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    mockConfig.GEMINI_API_KEY = "dummy-api-key";
+    mockConfig.GEMINI_API_KEYS = ["dummy-api-key"];
     mockConfig.GEMINI_MODEL = "gemini-flash-latest";
     mockConfig.GEMINI_FALLBACK_MODELS = ["fallback-lite-1", "fallback-lite-2"];
     process.env = { ...originalEnv };
@@ -157,9 +157,9 @@ describe("Gemini Connector - Client and Cascading Cascade (client.js)", () => {
     global.fetch = originalFetch;
   });
 
-  it("throws error if GEMINI_API_KEY is missing", async () => {
-    mockConfig.GEMINI_API_KEY = "";
-    await expect(clientModule.geminiGenerate("hello")).rejects.toThrow("GEMINI_API_KEY is not set");
+  it("throws error if GEMINI_API_KEYS is empty", async () => {
+    mockConfig.GEMINI_API_KEYS = [];
+    await expect(clientModule.geminiGenerate("hello")).rejects.toThrow("No Gemini API key configured");
   });
 
   it("succeeds when fetch returns candidate content", async () => {
@@ -293,6 +293,54 @@ describe("Gemini Connector - Client and Cascading Cascade (client.js)", () => {
     // it should not cascade to fallback-lite-2 on 429.
     await expect(clientModule.geminiGenerate("explicit model", { model: "fallback-lite-1" })).rejects.toThrow("Gemini API error (429): Exhausted");
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  describe("multi-key cascade (GEMINI_API_KEYS)", () => {
+    beforeEach(() => {
+      mockConfig.GEMINI_API_KEYS = ["key-0", "key-1"];
+    });
+
+    it("exhausts every fallback model on key 0 before rotating to key 1", async () => {
+      global.fetch = vi.fn()
+        // key-0, gemini-flash-latest -> 429
+        .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Exhausted" } }) })
+        // key-0, fallback-lite-1 -> 429
+        .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Exhausted" } }) })
+        // key-0, fallback-lite-2 -> 429 (key 0's model list now fully exhausted)
+        .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Exhausted" } }) })
+        // key-1, gemini-flash-latest -> succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "key 1 success" }] } }] }),
+        });
+
+      const res = await clientModule.geminiGenerate("trigger key rotation");
+      expect(res).toBe("key 1 success");
+      expect(global.fetch).toHaveBeenCalledTimes(4);
+
+      // 4th call (key-1's first attempt) should use key-1's header and go
+      // back to the PRIMARY model, not continue down key-0's fallback list --
+      // model-first-per-key, not "keep the same model index across keys".
+      const [url, init] = global.fetch.mock.calls[3];
+      expect(url).toContain("gemini-flash-latest:generateContent");
+      expect(init.headers["x-goog-api-key"]).toBe("key-1");
+    });
+
+    it("jumps straight to the next key on 401/403 without cascading remaining models", async () => {
+      global.fetch = vi.fn()
+        // key-0, gemini-flash-latest -> 403 (bad/revoked key)
+        .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden", text: async () => JSON.stringify({ error: { message: "Invalid API key" } }) })
+        // key-1, gemini-flash-latest -> succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "key 1 rescued it" }] } }] }),
+        });
+
+      const res = await clientModule.geminiGenerate("bad key on key 0");
+      expect(res).toBe("key 1 rescued it");
+      // Only 2 calls -- fallback-lite-1/fallback-lite-2 on key-0 were never tried.
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("geminiChat (multi-turn function-calling support)", () => {
