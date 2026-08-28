@@ -1,11 +1,12 @@
 # Plan: Limited GitHub write access for delegate_agent (non-default-branch only)
 
-Status: in progress -- steps 1-7 done (see progress log; steps 3-6 were
-actually built before this header was updated to say so -- see the
-2026-08-28 "steps 3-6" entry below for why). Step 8 (audit trail) is
-largely already satisfied by the existing transcript/writtenFiles
-return shape; step 9 (full guardrail test suite) is partial. Step 10
-(rollout) not started -- EDITOR_AGENT_ENABLED stays false.
+Status: LIVE as of 2026-08-28 -- EDITOR_AGENT_ENABLED now defaults to true
+(step 10), so delegate_editor is registered and callable by default. This
+shipped ahead of step 9's full test list (checkpoint/validate-specific unit
+tests and a live end-to-end smoke test were still outstanding at flip time
+-- see the step 9 and step 10 progress-log entries below) at explicit
+operator request, not because those gaps were closed first. Opt out via
+EDITOR_AGENT_ENABLED=false if a guardrail gap surfaces.
 Date: 2026-08-28
 
 ## Context
@@ -419,7 +420,20 @@ write-capable agent loop.
   editor-validate.test.js, and no live end-to-end smoke test against a real
   (non-default) branch -- step 9's list also calls for checkpoint/resume
   coverage specifically, which this pass only partially addresses via the
-  loop tests. Step 10 (rollout) has not been touched -- EDITOR_AGENT_ENABLED
-  is still "false" by default, so delegate_editor is not reachable by any
-  caller yet even though it's now registered in code when explicitly
-  enabled.
+  loop tests.
+
+- 2026-08-28: **Step 10 done, ahead of the rest of step 9.** Flipped
+  EDITOR_AGENT_ENABLED's default from off to on (config.js: was
+  `=== "true"`, now `!== "false"`) at explicit operator request made
+  directly in conversation, not because the outstanding step 9 gaps above
+  were closed first -- they were not. delegate_editor is now registered on
+  every server start unless an operator explicitly sets
+  EDITOR_AGENT_ENABLED=false, which remains the fast "disable without a
+  revert" path (same as DELEGATE_AGENT_ASYNC's rollout posture elsewhere in
+  this repo) if a guardrail gap surfaces in practice. Every guardrail #1-#9
+  in this doc is still enforced in code exactly as before -- this flip only
+  changes whether the tool is reachable at all, not what it's allowed to do
+  once reached. No new tests were added as part of this flip itself; the
+  step 9 gaps noted above (checkpoint/validate unit tests, live end-to-end
+  smoke test) are now outstanding against a LIVE tool rather than a
+  registered-but-disabled one.
