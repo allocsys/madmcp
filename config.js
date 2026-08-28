@@ -406,6 +406,85 @@ export const FRONTEND_HARD_MAX_STEPS = Number(process.env.FRONTEND_HARD_MAX_STEP
 export const FRONTEND_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_MAX_VALIDATE_CALLS) || 5;
 
 // ---------------------------------------------------------------------------
+// delegate_editor (plan.md, "Limited GitHub write access for delegate_agent
+// (non-default-branch only)") -- NOT YET WIRED UP to any tool; this is
+// step 2 of the plan's sequenced implementation ("Define the
+// allowlist/deny-list config surface") only. The agent loop, tools layer,
+// and MCP registration (steps 3/5/7) don't exist yet.
+//
+// Deliberately a SEPARATE config surface from FRONTEND_ALLOWED_EXTENSIONS
+// above, not a superset/reuse of it -- delegate_designer's scope is
+// intentionally narrower (frontend file types only) and this plan's
+// Non-goals section says explicitly that tool's fencing isn't being
+// loosened. EDITOR_* below is for the new, broader-scope tool only.
+
+// Guardrail #3 (path/extension allowlist, "configurable per run rather than
+// hardcoded to frontend types"): unlike FRONTEND_ALLOWED_EXTENSIONS,
+// general-purpose repo edits need BOTH an extension check AND a path-prefix
+// check -- an extension-only check doesn't stop a write to e.g.
+// .github/workflows/deploy.yml or server.js just because .yml/.js is
+// allowed. Both lists below are permissive defaults (broad file types /
+// "anywhere in the repo"); EDITOR_DENY_PATH_PATTERNS is what actually keeps
+// this narrow in practice, as an independent second layer (guardrail #4),
+// and a caller-supplied run can narrow further but never widen past these.
+export const EDITOR_ALLOWED_EXTENSIONS = (process.env.EDITOR_ALLOWED_EXTENSIONS || ".js,.jsx,.ts,.tsx,.json,.md,.yml,.yaml,.html,.css,.scss,.vue,.txt")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+// Path PREFIXES (not globs -- kept simple/explicit for v1) this tool is
+// allowed to write under. Empty list means "no path restriction beyond the
+// deny list" -- callers narrow this per-run via their own argument, not by
+// widening it here.
+export const EDITOR_ALLOWED_PATH_PREFIXES = (process.env.EDITOR_ALLOWED_PATH_PREFIXES || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Guardrail #4: hard deny list, independent of and layered ON TOP OF the
+// allowlist above -- checked regardless of what the allowlist permits.
+// Matched as a path-prefix/glob-lite (simple leading-segment or trailing
+// "**" match, see editor_policy.js), not a full glob engine, to keep the
+// matching logic itself easy to audit.
+//   - .github/workflows/**   -- CI definitions; a write here is a
+//     privilege-escalation vector, since CI often runs with more trust
+//     than a branch push does.
+//   - connectors/security.js, connectors/github/app_auth.js,
+//     connectors/github/clone_token.js -- auth-adjacent code.
+//   - package.json is NOT fully denied (docs/version bumps etc. are
+//     legitimate edits) -- its `scripts`/`dependencies`/`devDependencies`
+//     fields specifically are what guardrail #4 flags as supply-chain
+//     risk; that's a content-level check (see editor_policy.js), not
+//     expressible as a path pattern, so it's enforced separately rather
+//     than by denying the whole file here.
+export const EDITOR_DENY_PATH_PATTERNS = (process.env.EDITOR_DENY_PATH_PATTERNS || ".github/workflows/**,connectors/security.js,connectors/github/app_auth.js,connectors/github/clone_token.js")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Guardrail #6: per-run and per-file write caps, same reasoning/shape as
+// FRONTEND_MAX_VALIDATE_CALLS -- bound the blast radius of a stuck or
+// misbehaving loop before a human ever looks at the branch. Also covers
+// the "long sequential chain" exposure noted in plan.md's parallel-
+// orchestration resolution (a chain of many small edits over time can
+// touch as much surface as a simultaneous batch would have).
+export const EDITOR_MAX_FILES_PER_RUN    = Number(process.env.EDITOR_MAX_FILES_PER_RUN) || 15;
+export const EDITOR_MAX_WRITES_PER_FILE  = Number(process.env.EDITOR_MAX_WRITES_PER_FILE) || 5;
+
+// Step budget -- same shape/reasoning as FRONTEND_DEFAULT_STEPS/
+// FRONTEND_HARD_MAX_STEPS. Left slightly higher than delegate_designer's
+// since general-purpose edits (reading more context files before writing)
+// are less narrowly scoped than frontend-only files, but still well below
+// delegate_agent's open-ended investigation budget.
+export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) || 15;
+export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 24;
+
+// Rollout flag (plan.md step 10), same "disable without a revert" reasoning
+// as DELEGATE_AGENT_ASYNC above. Stays "false" until the tool is actually
+// registered (plan.md step 7) -- setting this today has no effect yet.
+export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED === "true";
+
+// ---------------------------------------------------------------------------
 // GitHub App -- scoped, short-lived clone tokens for PRIVATE repos (2026-07-28
 // plan, see Notion entity_id madmcp-github-app-scoped-clone-token-plan).
 // Deliberately a SEPARATE credential from GITHUB_TOKEN above: GITHUB_TOKEN is
