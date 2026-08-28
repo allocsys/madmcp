@@ -109,6 +109,7 @@ async function callGenerateContent(body, requestedModel) {
       try {
         const data = await callGenerateContentOnce(body, model, apiKey);
         if (keyIndex > 0 || i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
+        if (keyIndex > 0) data._fallbackKeyIndex = keyIndex; // ditto -- which key (0-indexed) actually served this call
         return data;
       } catch (err) {
         lastErr = err;
