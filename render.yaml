@@ -25,6 +25,11 @@ services:
         sync: false
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
+      # Comma-separated for multiple keys (rate-limit headroom + account
+      # isolation). Legacy singular GEMINI_API_KEY (below) still works if
+      # you only have one key.
+      - key: GEMINI_API_KEYS
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
 
