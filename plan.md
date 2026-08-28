@@ -509,18 +509,24 @@ write-capable agent loop.
   infra-config cases like the two fixtures above, not just the
   currently-covered CI-workflow and named-auth-file cases.
 
-- 2026-08-28: **Known bug: failed/errored delegate_agent-family calls
-  (delegate_agent, delegate_editor, delegate_designer, delegate_research)
-  always dump the full step-by-step transcript on failure/partial runs,
-  regardless of `show_transcript` (per each tool's own description: "On a
-  failed/partial run the transcript is always shown regardless of this
-  flag"). For a caller making several of these calls in a row (e.g. this
-  doc's own "Parallel orchestration & verification" section, or just a
-  chain of sequential delegate_editor calls per the v1 sequential-only
-  resolution above), a failed or erroring call currently costs full
-  transcript-sized context every time, not just on success -- the opposite
-  of what that section's return-contract guidance intended for the
-  success path ("compact and verifiable, not a full transcript").
+- 2026-08-28: **Known bug: failed/errored delegate_agent calls (the
+  read-only investigation tool, connectors/gemini/agent_delegate.js --
+  NOT delegate_editor/delegate_designer/delegate_research, which are a
+  separate concern even though they share the same show_transcript-on-
+  failure pattern and could plausibly get the same fix later) always dump
+  the full step-by-step transcript on failure/partial runs, regardless of
+  `show_transcript` (per the tool's own description: "On a failed/partial
+  run the transcript is always shown regardless of this flag"). For a
+  caller making several delegate_agent investigation calls in a row (e.g.
+  this doc's own "Parallel orchestration & verification" section's
+  point 2, which specifically calls for delegate_agent investigation
+  calls to "return a short, structured findings summary (not the full
+  transcript) as the default response shape, with the full transcript
+  available on request/for debugging rather than returned
+  unconditionally"), a failed or erroring call currently costs full
+  transcript-sized context every time, not just on success -- the exact
+  gap that section already anticipated but didn't close for the failure
+  path specifically.
 
   Raised fix (2026-08-28 conversation): on failure/error, respond with
   something like "check back a little later" instead of the transcript,
