@@ -347,6 +347,55 @@ this is new infra, not yet observed under any real traffic.
   deploy, not something to fake inside `vitest`. Recommend doing that
   smoke test before flipping step 10's flag.
 
+**2026-08-28, production smoke test -- BUG FOUND, DELEGATE_AGENT_ASYNC currently LIVE as "qstash" in production with real traffic routed into a broken path. Recommend reverting to "sync" in Vercel immediately.**
+
+A live smoke test (`delegate_agent` with a real task) correctly returned a
+`run_id` immediately, confirming the async/QStash path engages end-to-end
+(publish, signed webhook delivery, worker invocation all work). But
+polling the run showed it terminated after exactly 1 step with:
+
+```
+(Gemini stopped without a final answer -- finishReason: MALFORMED_FUNCTION_CALL)
+This was the final allowed step, which never includes tools ... but the
+model attempted a function call anyway.
+```
+
+**Root cause** (connectors/gemini/agent_delegate.js, inside
+`runInvestigation`'s loop):
+
+```js
+const isFinalStep = step === cappedSteps;   // withholds tools when true
+```
+
+Correct for a synchronous caller, where `cappedSteps` is the real overall
+step budget. But agent_worker.js invokes each worker-driven step as a
+separate `runInvestigation` call with `max_steps: stepsDone + 1` (the step
+5 "deviation" above). That makes `cappedSteps` equal the current step
+number on *every* worker invocation, so `isFinalStep` is true every time,
+so tools are withheld on every worker step. The async path can therefore
+never make a real tool call -- only a same-step final-text attempt, or
+this malformed-call error if the model tries to call a tool anyway (which
+it will for anything non-trivial). This was not caught by step 9's tests
+(`test/agent-delegate-async-checkpoint.test.js`,
+`test/agent-worker.test.js`) because both mock `providerChat` with
+`vi.fn().mockResolvedValueOnce(...)`, which returns its canned value
+regardless of the `tools` argument actually passed, and neither test
+asserts on that argument.
+
+**Fix direction (not attempted yet, needs design):** `isFinalStep` needs
+to distinguish "the run's true last step" from "the last step of *this*
+`runInvestigation` invocation" -- currently conflated. Likely needs the
+run's real overall ceiling (original caller's `max_steps`, capped by
+`HARD_MAX_STEPS`) persisted in the checkpoint and threaded through to
+worker-driven resume calls, replacing/supplementing `stepsDone + 1` as
+what's passed for `max_steps`, while preserving the one-step-per-QStash-
+message chaining that steps 3/5/6/8 depend on. Whatever the fix, add a
+regression test that fails on current code and passes after -- a real
+(unmocked or `tools`-asserting) test, not another `mockResolvedValueOnce`.
+
+**Immediate action:** `DELEGATE_AGENT_ASYNC=qstash` is live in Vercel right
+now with this bug present -- revert to `sync` before doing anything else.
+
 ## Open questions
 
 - Does a single Gemini turn that issues multiple parallel function calls
