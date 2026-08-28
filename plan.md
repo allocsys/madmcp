@@ -176,55 +176,50 @@ scoped:
      still exist for audit purposes, it just shouldn't be the thing
      returned to the orchestrator by default.
 
-### Open questions raised on the parallel orchestration section (2026-08-28)
+### Resolution (2026-08-28): v1 goes sequential-only
 
-None of these are resolved yet -- flagging before any code is written,
-same posture as the top-level Open questions section.
+Decision: drop parallel dispatch from v1. delegate_editor calls are issued
+one at a time, in order, by the orchestrator -- no simultaneous-batch
+case to guard against. This directly trades away the original token-
+reduction-via-parallelism motivation that opened this section; that
+motivation is not abandoned, just deferred past v1 (see below). Per-item
+resolution:
 
-- **Same-branch concurrent writes are not addressed.** Guardrail #1 fences
-  each delegate_editor run to one repo/branch/task, but says nothing
-  about two parallel calls targeting the SAME branch (e.g. "fix imports"
-  and "update tests" dispatched as separate tasks). Second commit could
-  land against a stale tree, or a clean merge could silently drop one
-  change. Needs either: (a) a rule that parallel calls in one orchestrator
-  turn must target distinct branches, or (b) a new guardrail specifically
-  for detecting/serializing same-branch concurrent writes (e.g. a
-  pre-commit check that the branch head hasn't moved since the run
-  started, mirroring optimistic-concurrency patterns).
-- **Pass/fail in the compact return contract is self-reported by the tool
-  being verified, not independently confirmed.** The orchestrator reading
-  a diff + pass/fail that delegate_editor itself produced is a trust
-  boundary, not independent verification -- "Claude verifies the results"
-  overstates what's actually happening unless there's a separate check
-  (e.g. a lightweight read-only re-check via delegate_agent, or CI status
-  on the branch) in the loop. Needs a decision on whether any
-  independent verification step is worth the token cost it reintroduces,
-  or whether self-reported pass/fail is accepted as good-enough for v1
-  with that limitation documented rather than hidden.
-- **Guardrail #6's write caps are per-run, not per-turn.** Ten parallel
-  delegate_editor calls in one orchestration turn each stay under their
-  own individual file/write cap, but nothing bounds the aggregate surface
-  area touched across a simultaneous batch. Needs either an orchestrator-
-  side aggregate cap (tracked outside any single tool call) or an
-  explicit decision that per-run caps are sufficient and aggregate
-  exposure is an accepted tradeoff.
-- **Interdependent tasks split across parallel calls can land out of
-  order or against stale context.** The "precise, independent tasks"
-  framing only holds when tasks genuinely don't depend on each other
-  (e.g. rename a function in one call, update its callers in another --
-  these are NOT independent). Needs an explicit statement of when
-  parallel dispatch is and isn't safe, and what the orchestrator should
-  do instead for interdependent work (likely: sequential delegate_editor
-  calls on the same branch, one waiting on the prior commit, rather than
-  parallel dispatch).
-- **Scope-creep check.** This session has grown the plan from
-  delegate_editor's core guardrails to a two-mode write design to a full
-  parallel-orchestration contract, all still at the design-doc stage with
-  zero code written. Worth deciding whether v1 ships narrower --
-  single delegate_editor call at a time, no parallel dispatch -- and
-  whether the orchestration contract above is added once the base tool
-  is built and proven, consistent with the "start narrow, widen
-  deliberately" posture already applied to file-type scope in Non-goals.
+- **Same-branch writes.** No longer a race (nothing runs concurrently),
+  but sequential is not automatically safe either: GitHub's API can have
+  brief read-after-write lag right after a commit, so the orchestrator
+  must re-read a file's state fresh after each commit before planning the
+  next edit against it, rather than reusing pre-commit content it already
+  has in context. This is a rule for the orchestrator, not a new tool-
+  layer guardrail.
+- **CI-gated verification: rejected.** Considered and dropped as
+  unnecessary -- CI runs take real minutes, and gating each sequential
+  step on CI would mean blocking/polling with a timeout/give-up path
+  between every single edit, which is a lot of added latency for a
+  benefit guardrail #5's validate-before-write step already covers at
+  the per-file level. Self-reported pass/fail from delegate_editor,
+  backed by validate(), is accepted as the v1 trust boundary. If this
+  proves insufficient in practice, CI-gating can be revisited later --
+  same "start narrow, widen deliberately" posture as file-type scope.
+- **Write caps.** Sequential removes simultaneous-batch exposure, but a
+  long sequential chain (e.g. 10 edits in a row) can still touch just as
+  much total surface area, spread over time instead of at once. The
+  per-turn total-files/total-writes ceiling from the earlier aggregate-
+  cap question still applies -- enforced across the whole sequential
+  chain, not dropped just because nothing runs concurrently.
+- **Interdependent tasks.** Sequential ordering resolves this cleanly --
+  no race, guaranteed order. Tradeoff: dependent edits lose any chance of
+  batched/parallel token savings and pay full sequential cost (one
+  commit + one verification round-trip at a time), same as independent
+  tasks under this v1 design.
+- **Scope.** v1 = single delegate_editor call at a time, called
+  repeatedly in sequence by the orchestrator as needed. No new
+  concurrency-handling code, no aggregate-batch cap mechanism, no CI
+  polling. The original goal (reduce orchestrator token usage via
+  simultaneous dispatch) is explicitly deferred, not solved, by this
+  decision -- revisit parallel dispatch as a v2 once the sequential tool
+  is built and proven, consistent with Non-goals' "start narrow, widen
+  deliberately" posture.
 
 ## Sequenced implementation steps
 
