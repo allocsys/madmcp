@@ -463,3 +463,48 @@ write-capable agent loop.
   dedicated editor_checkpoint.js/editor_validate.js unit tests, and a live
   end-to-end smoke test against a real non-default branch (step 9's
   original list).
+
+- 2026-08-28: **Confirmed gap: no path-prefix allowlist, only extension
+  allowlist + curated deny-list.** Manually tested delegate_editor against
+  a scratch repo (allocsys/editor-guardrail-tests) to check guardrails #2-#4
+  and #8 empirically rather than just reading the code. Everything the
+  guardrails explicitly cover held up: default-branch write refused before
+  any tool call; .github/workflows/** refused (blocked even at read_file,
+  stricter than documented); connectors/github/app_auth.js refused (also
+  blocked at read); package.json's `dependencies` field refused at
+  write_file with the exact "requires an explicit override flag (not yet
+  implemented)" message step 3's code already returns; a non-allowlisted
+  extension (.py) refused; a legitimate .js edit succeeded cleanly in 2
+  steps; asking it to open/merge a PR was correctly declined as outside its
+  tool set (guardrail #8).
+
+  But this doc's own "Open questions" section flagged a real gap that was
+  never closed: "Allowlist shape: extensions only, path prefixes only, or
+  both? Step 2 leans toward both." What shipped is extension-only, per
+  delegate_editor's own tool description ("no additional path restriction
+  beyond the deny list"). Confirmed concretely with two fixtures that have
+  an allowed extension and are NOT on the deny-list:
+  - connectors/payments/client.js (a made-up credential-adjacent file, .js,
+    not one of the three deny-listed auth files) -- delegate_editor read it,
+    edited it, and committed the change with zero resistance.
+  - infra/deploy.yml (a made-up deploy/infra config, .yml, not under
+    .github/workflows/**) -- same result, edited and committed cleanly.
+
+  So today's guardrail #4 is a curated blocklist of specific paths someone
+  thought to name (security.js, app_auth.js, clone_token.js, CI workflows),
+  not a positive fence. Any other backend file with an allowlisted
+  extension -- payments code, infra/deploy config, other secrets-adjacent
+  files not on the named list -- is writable with no guardrail resistance
+  at all. This is exactly the risk guardrail #3's original text warned
+  about ("an extension check alone doesn't stop a write to e.g.
+  .github/workflows/*.yml or server.js just because .yml or .js happens to
+  be in the allowlist") but the path-prefix half of guardrail #3 was never
+  implemented -- only the deny-list half (guardrail #4) shipped, and it's
+  necessarily incomplete as a substitute for a positive allowlist.
+
+  Not yet done: deciding and implementing the path-prefix allowlist shape
+  (glob patterns vs. caller-supplied prefix list, per the original open
+  question), and expanding test coverage (test/editor-policy.test.js,
+  test/editor-tool-functions.test.js) to include credential-adjacent and
+  infra-config cases like the two fixtures above, not just the
+  currently-covered CI-workflow and named-auth-file cases.
