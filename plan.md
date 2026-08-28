@@ -135,6 +135,47 @@ loosening existing ones.
    Mandatory Notion logging was considered and dropped -- redundant with
    the transcript/writtenFiles reporting this guardrail already relies on.
 
+## Parallel orchestration & verification
+
+Goal (raised 2026-08-28): let the orchestrating model (Claude) fan out
+several precise, independent edit or investigation tasks at once --
+delegate_editor for writes, delegate_agent for read-only investigation --
+and cheaply verify each result, instead of doing the work inline and
+paying full token cost for it.
+
+This does NOT mean merging the two tools or adding a new orchestration
+layer/tool. It means two things, both compatible with the plan as already
+scoped:
+
+1. **Parallel dispatch is a calling-pattern, not an architecture change.**
+   Because each delegate_editor run is already fenced to a single
+   repo/branch/task (guardrail #1) and each delegate_agent call is
+   already independently scoped, the orchestrator can issue multiple
+   calls to either tool -- or both -- in the same turn, each for a
+   distinct task, with no new tool or shared-state coordination needed.
+   Keeping delegate_agent read-only and delegate_editor write-capable as
+   two separate tools (per the Non-goals section above) is what makes
+   this safe to parallelize in the first place: each call's blast radius
+   stays bounded to the one tool/repo/branch/task it was invoked for.
+
+2. **Return contract must be compact and verifiable, not a full
+   transcript, or parallelizing multiplies orchestrator token cost
+   instead of reducing it.** Concretely:
+   - delegate_editor calls should return a unified diff (edit_file's
+     replacements mode already does this) plus an explicit pass/fail on
+     guardrail #5's validate-before-write step, rather than the full
+     agent transcript by default. The orchestrator can verify
+     correctness from the diff + pass/fail without re-reading full file
+     contents.
+   - delegate_agent investigation calls should return a short, structured
+     findings summary (not the full transcript) as the default response
+     shape, with the full transcript available on request/for debugging
+     rather than returned unconditionally.
+   - This is a refinement of guardrail #9's audit-trail reporting, not a
+     replacement for it: the full transcript/writtenFiles record should
+     still exist for audit purposes, it just shouldn't be the thing
+     returned to the orchestrator by default.
+
 ## Sequenced implementation steps
 
 These are ordered -- later steps depend on earlier ones being in place and
