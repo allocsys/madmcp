@@ -407,10 +407,15 @@ export const FRONTEND_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_MAX_VALID
 
 // ---------------------------------------------------------------------------
 // delegate_editor (plan.md, "Limited GitHub write access for delegate_agent
-// (non-default-branch only)") -- NOT YET WIRED UP to any tool; this is
-// step 2 of the plan's sequenced implementation ("Define the
-// allowlist/deny-list config surface") only. The agent loop, tools layer,
-// and MCP registration (steps 3/5/7) don't exist yet.
+// (non-default-branch only)") -- config surface for steps 2-6 (allow/deny
+// lists, write caps, step budget, validate-call cap). The tools layer
+// (editor_tool_functions.js, step 3), checkpoint layer (editor_checkpoint.js,
+// step 4), agent loop (editor_delegate.js, step 5), and validate wiring
+// (editor_validate.js, step 6) are all built and unit-testable as of this
+// comment. MCP registration (step 7, editor_tools.js) is what actually
+// exposes this to a caller -- see EDITOR_AGENT_ENABLED below, which gates
+// that registration and stays "false" by default per plan.md step 10's
+// rollout posture until a human flips it on deliberately.
 //
 // Deliberately a SEPARATE config surface from FRONTEND_ALLOWED_EXTENSIONS
 // above, not a superset/reuse of it -- delegate_designer's scope is
@@ -470,6 +475,14 @@ export const EDITOR_DENY_PATH_PATTERNS = (process.env.EDITOR_DENY_PATH_PATTERNS 
 // touch as much surface as a simultaneous batch would have).
 export const EDITOR_MAX_FILES_PER_RUN    = Number(process.env.EDITOR_MAX_FILES_PER_RUN) || 15;
 export const EDITOR_MAX_WRITES_PER_FILE  = Number(process.env.EDITOR_MAX_WRITES_PER_FILE) || 5;
+
+// Guardrail #5 (step 6): validate() calls do NOT count against the step
+// budget below (same reasoning as FRONTEND_MAX_VALIDATE_CALLS -- a cheap
+// local syntax check, no LLM/network round trip beyond the agent's own
+// turn), but are capped independently, per file path, so a model can't
+// thrash a validate/tweak/validate loop on one file without ever burning a
+// step. Same default as FRONTEND_MAX_VALIDATE_CALLS for consistency.
+export const EDITOR_MAX_VALIDATE_CALLS   = Number(process.env.EDITOR_MAX_VALIDATE_CALLS) || 5;
 
 // Step budget -- same shape/reasoning as FRONTEND_DEFAULT_STEPS/
 // FRONTEND_HARD_MAX_STEPS. Left slightly higher than delegate_designer's
