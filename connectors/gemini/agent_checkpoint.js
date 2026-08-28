@@ -45,8 +45,21 @@ function metaKey(runId) {
 //     know that on its own since it never sees the full array.
 //   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
 //     small stuff, always written in full (cheap regardless of run length).
+//   - status/lastStepAt (added for plan.md's async delegate_agent work,
+//     Scenario A `waitUntil` and Scenario B QStash self-chaining -- both
+//     reuse this same meta shape): `status` is one of "running" | "done" |
+//     "failed", defaulting to "running" when omitted so every existing
+//     synchronous call site keeps working unchanged. `lastStepAt` is an
+//     epoch-ms timestamp of THIS save, always set here (not left to the
+//     caller) so every checkpoint write freshens it -- this is what lets
+//     delegate_agent's poll path in agent_tools.js tell a genuinely-still-
+//     running background worker apart from one whose chain silently died
+//     (stale lastStepAt -> fall back to synchronous resume instead of
+//     polling forever). Do not compute lastStepAt in a caller instead of
+//     here -- a caller-supplied value could be stale by the time the actual
+//     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, status = "running" }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -59,7 +72,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
       // list-creation time.
       ops.push(client.expire(contentsKey(runId), CHECKPOINT_TTL_SECONDS));
     }
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed });
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, status, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
