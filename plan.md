@@ -508,3 +508,40 @@ write-capable agent loop.
   test/editor-tool-functions.test.js) to include credential-adjacent and
   infra-config cases like the two fixtures above, not just the
   currently-covered CI-workflow and named-auth-file cases.
+
+- 2026-08-28: **Known bug: failed/errored delegate_agent-family calls
+  (delegate_agent, delegate_editor, delegate_designer, delegate_research)
+  always dump the full step-by-step transcript on failure/partial runs,
+  regardless of `show_transcript` (per each tool's own description: "On a
+  failed/partial run the transcript is always shown regardless of this
+  flag"). For a caller making several of these calls in a row (e.g. this
+  doc's own "Parallel orchestration & verification" section, or just a
+  chain of sequential delegate_editor calls per the v1 sequential-only
+  resolution above), a failed or erroring call currently costs full
+  transcript-sized context every time, not just on success -- the opposite
+  of what that section's return-contract guidance intended for the
+  success path ("compact and verifiable, not a full transcript").
+
+  Raised fix (2026-08-28 conversation): on failure/error, respond with
+  something like "check back a little later" instead of the transcript,
+  to cut the context bloat.
+
+  Concern with that specific framing, flagged before implementing: these
+  calls are synchronous -- by the time a response comes back, the run has
+  already finished or failed, there is no background job still in flight
+  to "check back" on. "Check back a little later" implies an async/
+  pollable job model this tool doesn't have (resume_run_id exists, but it
+  requires the orchestrator to explicitly re-invoke with that id, not
+  passively wait and re-check). Shipping that literal phrasing risks
+  misleading a future caller (human or the orchestrating model) into
+  believing there's a poll-for-completion pattern to use.
+
+  Better-fitting fix, consistent with this doc's existing compact-
+  response posture for the success path: make the failure/error response
+  compact by default too -- a short structured error/status summary
+  (what step it got to, what failed, resume_run_id if resumable) -- and
+  make `show_transcript` (or an equivalent) actually honored on the
+  failure path instead of being unconditionally overridden, rather than
+  introducing new "come back later" language for a call that already
+  completed. Not yet implemented; this entry records the gap and the
+  framing concern, not a shipped fix.
