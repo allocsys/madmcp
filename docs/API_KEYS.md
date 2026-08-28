@@ -23,8 +23,9 @@ None of these providers support auto-injecting the key back into our env — you
 ### Mem0 — `MEM0_API_KEY`
 [![Create Mem0 API Key](https://img.shields.io/badge/Create-Mem0_API_Key-6E56CF?style=for-the-badge)](https://app.mem0.ai/dashboard/api-keys)
 
-### Gemini — `GEMINI_API_KEY`
+### Gemini — `GEMINI_API_KEYS`
 [![Create Gemini API Key](https://img.shields.io/badge/Create-Gemini_API_Key-4285F4?style=for-the-badge&logo=googlegemini)](https://aistudio.google.com/apikey)
+> Comma-separated list — same reasoning as `EXA_API_KEYS`/`OPENROUTER_API_KEYS`/`GROQ_API_KEYS` above (rate-limit headroom + account isolation). The connector cascades through `GEMINI_MODEL` + `GEMINI_FALLBACK_MODELS` on the current key first, and only rotates to the next key once every model on the current one is exhausted or the key itself is rejected (401/403). The legacy singular `GEMINI_API_KEY` still works if you only have one key — `GEMINI_API_KEYS` just wasn't set yet.
 
 ### Exa — `EXA_API_KEYS`
 [![Create Exa API Key](https://img.shields.io/badge/Create-Exa_API_Key-000000?style=for-the-badge)](https://dashboard.exa.ai/api-keys)
