@@ -368,7 +368,7 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
     expect(mockProviderChat).toHaveBeenCalledTimes(5);
   });
 
-  it("stops after the hard step cap without a final answer", async () => {
+  it("stops after a caller-supplied max_steps without a final answer, and says the run is still resumable (checkpoint preserved, not discarded)", async () => {
     mockProviderChat.mockResolvedValue({
       content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_never_ends" } }] },
       finishReason: "STOP",
@@ -376,8 +376,30 @@ describe.each(["gemini", "glm", "groq"])("agent_delegate.js — runInvestigation
 
     const result = await runInvestigation({ task: "never finishes", max_steps: 2, provider });
 
-    expect(result.answer).toMatch(/reaching the step cap of 2/);
+    // Async delegate_agent groundwork: hitting the CALLER's max_steps (below
+    // HARD_MAX_STEPS) is no longer treated as a dead end -- the checkpoint is
+    // deliberately left resumable (see agent_delegate.js's finishRun/
+    // cap-exhausted branch), so this now says so and is marked `failed` (same
+    // "not done yet, but not lost" shape as a transient-error resume) rather
+    // than the old "stopped after reaching the step cap" wording, which
+    // implied the run was over.
+    expect(result.answer).toMatch(/reaching the requested max_steps of 2/);
+    expect(result.answer).toMatch(/checkpoint has NOT been discarded/);
     expect(result.steps).toBe(2);
+    expect(result.failed).toBe(true);
+  });
+
+  it("stops after the hard step cap (30) without a final answer, and does NOT offer resume (no ceiling left to raise)", async () => {
+    mockProviderChat.mockResolvedValue({
+      content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_never_ends" } }] },
+      finishReason: "STOP",
+    });
+
+    const result = await runInvestigation({ task: "never finishes", max_steps: 30, provider });
+
+    expect(result.answer).toMatch(/reaching the hard step cap of 30/);
+    expect(result.steps).toBe(30);
+    expect(result.failed).toBeUndefined();
   });
 
   it("returns a resumable failure (with runId) when providerChat throws a transient error", async () => {
