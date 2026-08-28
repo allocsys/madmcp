@@ -1,6 +1,6 @@
 # Plan: Limited GitHub write access for delegate_agent (non-default-branch only)
 
-Status: not started -- design doc only, no code written yet.
+Status: in progress -- step 2 done, steps 3+ not started.
 Date: 2026-08-28
 
 ## Context
@@ -320,4 +320,27 @@ write-capable agent loop.
 
 ## Progress log
 
-(none yet -- this plan has not been implemented)
+- 2026-08-28: **Step 2 done.** Added the EDITOR_* config surface to
+  config.js (allowed extensions, allowed path prefixes, deny-list
+  patterns, per-run/per-file write caps, step budget, EDITOR_AGENT_ENABLED
+  rollout flag -- currently false/no-op, since nothing reads it yet).
+  Added connectors/github/editor_policy.js implementing guardrails #3 and
+  #4 as plain, dependency-free functions (isPathAllowed, isPathDenied,
+  touchesPackageJsonRiskyFields, and the combined isWriteAllowed callers
+  should actually use), built and unit-tested in isolation with no tool or
+  agent-loop wiring yet, per this doc's own step ordering. test/
+  editor-policy.test.js covers both allow/deny layers, including the
+  .github/workflows/** and auth-file deny cases plan.md's step 9 calls out
+  specifically, plus the package.json scripts/dependencies content check.
+  23/23 new tests pass; full suite (415 tests) still green.
+
+  Deliberately NOT done yet: the actual read_file/write_file tool layer
+  (step 3) doesn't call isWriteAllowed() anywhere yet -- it doesn't exist.
+  No agent loop, no checkpoint, no MCP registration, no tool description.
+  Next step is 3 ("Build the tools layer"), which should be the first
+  thing to actually use editor_policy.js's isWriteAllowed().
+
+  Open questions from the design doc are still open -- this step didn't
+  resolve tool naming, the branch-creation question, or the write-cap
+  argument-shape question, since none of those affect the policy-module
+  shape.
