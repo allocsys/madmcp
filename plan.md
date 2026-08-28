@@ -1,6 +1,12 @@
 # Plan: Limited GitHub write access for delegate_agent (non-default-branch only)
 
-Status: not started -- design doc only, no code written yet.
+Status: LIVE as of 2026-08-28 -- EDITOR_AGENT_ENABLED now defaults to true
+(step 10), so delegate_editor is registered and callable by default. This
+shipped ahead of step 9's full test list (checkpoint/validate-specific unit
+tests and a live end-to-end smoke test were still outstanding at flip time
+-- see the step 9 and step 10 progress-log entries below) at explicit
+operator request, not because those gaps were closed first. Opt out via
+EDITOR_AGENT_ENABLED=false if a guardrail gap surfaces.
 Date: 2026-08-28
 
 ## Context
@@ -320,4 +326,114 @@ write-capable agent loop.
 
 ## Progress log
 
-(none yet -- this plan has not been implemented)
+- 2026-08-28: **Step 2 done.** Added the EDITOR_* config surface to
+  config.js (allowed extensions, allowed path prefixes, deny-list
+  patterns, per-run/per-file write caps, step budget, EDITOR_AGENT_ENABLED
+  rollout flag -- currently false/no-op, since nothing reads it yet).
+  Added connectors/github/editor_policy.js implementing guardrails #3 and
+  #4 as plain, dependency-free functions (isPathAllowed, isPathDenied,
+  touchesPackageJsonRiskyFields, and the combined isWriteAllowed callers
+  should actually use), built and unit-tested in isolation with no tool or
+  agent-loop wiring yet, per this doc's own step ordering. test/
+  editor-policy.test.js covers both allow/deny layers, including the
+  .github/workflows/** and auth-file deny cases plan.md's step 9 calls out
+  specifically, plus the package.json scripts/dependencies content check.
+  23/23 new tests pass; full suite (415 tests) still green.
+
+  Deliberately NOT done yet: the actual read_file/write_file tool layer
+  (step 3) doesn't call isWriteAllowed() anywhere yet -- it doesn't exist.
+  No agent loop, no checkpoint, no MCP registration, no tool description.
+  Next step is 3 ("Build the tools layer"), which should be the first
+  thing to actually use editor_policy.js's isWriteAllowed().
+
+  Open questions from the design doc are still open -- this step didn't
+  resolve tool naming, the branch-creation question, or the write-cap
+  argument-shape question, since none of those affect the policy-module
+  shape.
+
+- 2026-08-28: **Steps 3-6 done** (found already committed on this branch
+  when resuming work -- this progress log just hadn't been updated to
+  say so until now, which is why the status header above previously
+  understated things; the code itself was never actually behind). Step 3:
+  connectors/github/editor_tool_functions.js (read_file/write_file against
+  the general Contents API, guardrails #2/#3/#4 enforced at this layer,
+  edit_file-style content/replacements modes, unified diff builder). Step
+  4: connectors/github/editor_checkpoint.js (designer_checkpoint.js's
+  shape, own Redis key prefix, per guardrail #7). Step 5:
+  connectors/github/editor_delegate.js (the agent loop itself --
+  read_file/write_file/validate, guardrail #6 write caps enforced inside
+  write_file's execute() before writeFile() is called, guardrail #8's
+  FUNCTIONS array structurally omitting create_pull_request/
+  merge_pull_request, stuck-loop/repeat detection and checkpoint/resume
+  carried over from designer_delegate.js). Step 6:
+  connectors/github/editor_validate.js (JSON/YAML/JS/TS validators + reuse
+  of the frontend HTML/CSS/JSX/TSX/Vue validators) wired into
+  editor_delegate.js as the loop's third tool, capped per file via
+  EDITOR_MAX_VALIDATE_CALLS. Tool tests for steps 3 and 2 already existed
+  (test/editor-tool-functions.test.js, test/editor-policy.test.js); steps
+  4-6 had no dedicated tests yet at this point (see step 9 below).
+
+  Still NOT done as of this entry: MCP registration (step 7) -- no
+  connectors/github/editor_tools.js existed yet, and connectors/github/
+  tools.js's orchestrator had no registerEditor call.
+
+- 2026-08-28: **Step 7 done.** Added connectors/github/editor_tools.js
+  (delegate_editor's MCP registration, modeled on
+  connectors/frontend/designer_tools.js's wrapper shape -- same
+  resume_run_id/max_steps/show_transcript conventions, same
+  writtenFiles/transcript response shaping). register() self-gates on
+  EDITOR_AGENT_ENABLED and is a genuine no-op (server.tool() never called)
+  when the flag is off, per step 10's rollout posture -- so this commit
+  does NOT make delegate_editor callable yet. Wired registerEditor(server)
+  into connectors/github/tools.js's orchestrator. Tool description states
+  the non-default-branch and no-PR-merge scope limits explicitly, per this
+  doc's own step 7 requirement.
+
+- 2026-08-28: **Step 9 partial.** Added test/editor-delegate.test.js
+  (loop-level guardrails #2/#6/#8 -- default-branch refusal checked before
+  any providerChat call on a fresh run; per-run and per-file write caps
+  rejected inside write_file's execute() before writeFile() is ever
+  invoked, and confirmed NOT charged against the cap when the write itself
+  is rejected as a policy/conflict error; a verified, not assumed, test
+  that the loop's own FUNCTIONS/declarations never include
+  create_pull_request or merge_pull_request, per this doc's step 9 note
+  that "a fencing claim not backed by a test that would fail without the
+  fence is not a verified fence") and test/editor-tools.test.js
+  (EDITOR_AGENT_ENABLED gate -- register() calls server.tool() zero times
+  when the flag is unset or any non-"true" value, exactly once named
+  "delegate_editor" when it's "true"; basic handler arg validation).
+  While running the full suite to confirm nothing regressed, found and
+  fixed one pre-existing bug: test/editor-tool-functions.test.js's
+  "rejects a missing branch" case asserted against /branch is required/i,
+  but editor_tool_functions.js's actual message wraps the word in
+  backticks (`` `branch` is required ``), so the assertion never matched
+  what it thought it was checking -- fixed the regex, not the source
+  message (the source message was correct; the test's pattern was stale).
+  Full suite: 33 files, 457 tests, all green; `npx eslint` clean on every
+  new/changed non-test file (test/ is eslint-ignored in this repo, matching
+  the pattern for every other test/*.test.js file).
+
+  Still NOT done: checkpoint/resume-specific tests for editor_checkpoint.js
+  itself (step 5/6's loop tests exercise checkpointing incidentally via the
+  fakeCheckpoints mock, but there's no dedicated editor-checkpoint.test.js
+  mirroring test/agent-checkpoint.test.js), no dedicated
+  editor-validate.test.js, and no live end-to-end smoke test against a real
+  (non-default) branch -- step 9's list also calls for checkpoint/resume
+  coverage specifically, which this pass only partially addresses via the
+  loop tests.
+
+- 2026-08-28: **Step 10 done, ahead of the rest of step 9.** Flipped
+  EDITOR_AGENT_ENABLED's default from off to on (config.js: was
+  `=== "true"`, now `!== "false"`) at explicit operator request made
+  directly in conversation, not because the outstanding step 9 gaps above
+  were closed first -- they were not. delegate_editor is now registered on
+  every server start unless an operator explicitly sets
+  EDITOR_AGENT_ENABLED=false, which remains the fast "disable without a
+  revert" path (same as DELEGATE_AGENT_ASYNC's rollout posture elsewhere in
+  this repo) if a guardrail gap surfaces in practice. Every guardrail #1-#9
+  in this doc is still enforced in code exactly as before -- this flip only
+  changes whether the tool is reachable at all, not what it's allowed to do
+  once reached. No new tests were added as part of this flip itself; the
+  step 9 gaps noted above (checkpoint/validate unit tests, live end-to-end
+  smoke test) are now outstanding against a LIVE tool rather than a
+  registered-but-disabled one.
