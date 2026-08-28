@@ -131,12 +131,9 @@ loosening existing ones.
    omission. A human (or a separate, explicitly-invoked MCP call) opens
    the PR once the branch looks right.
 9. **Every write attributable and auditable.** Reuse delegate_designer's
-   transcript/writtenFiles reporting; consider also requiring
-   log_to_notion-equivalent logging by default (not opt-in) for this
-   tool specifically, since write actions warrant a stronger audit trail
-   than read-only investigations do. (Open question below -- default-on
-   logging has cost/rate-limit implications per the existing Notion
-   throttle comment in config.js.)
+   transcript/writtenFiles reporting as the audit trail for this tool.
+   Mandatory Notion logging was considered and dropped -- redundant with
+   the transcript/writtenFiles reporting this guardrail already relies on.
 
 ## Sequenced implementation steps
 
@@ -187,8 +184,8 @@ write-capable agent loop.
    the calling model needs to know from the description alone that this
    tool can only write to a non-default branch it doesn't get to choose
    past what guardrails #1/#2 allow, before it ever calls it.
-8. **Audit logging wiring** (guardrail #9) -- resolve the default-on vs.
-   opt-in open question first (step 1), then implement accordingly.
+8. **Audit trail wiring** (guardrail #9) -- wire up transcript/writtenFiles
+   reporting per guardrail #9.
 9. **Test.** End-to-end test suite covering: default-branch refusal;
    allowlist/deny-list enforcement (including the CI-workflow and
    auth-file deny cases specifically, since those are the highest-value
@@ -214,12 +211,6 @@ write-capable agent loop.
   enforcement logic, since retrofitting a path-prefix check onto an
   extension-only design later is more invasive than including both from
   the start.
-- **Default-on audit logging (guardrail #9): is per-run Notion logging
-  cheap enough to make mandatory,** or does config.js's existing Notion
-  rate-limit concern (see the old plan.md's "keep it final-only" reasoning
-  for delegate_agent's own log_to_notion) mean this should stay opt-in
-  with a strong recommendation instead? Leaning mandatory given this tool
-  writes real commits, but needs a decision before step 8.
 - **Should this tool require an existing branch (caller creates it via
   create_branch first) or be allowed to create one itself?** Letting the
   agent create its own feature branch is more convenient but is itself a
