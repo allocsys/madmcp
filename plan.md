@@ -480,10 +480,37 @@ across multiple real steps). No further step-10 action identified.
 
 ## Open questions
 
-- Does a single Gemini turn that issues multiple parallel function calls
+- ~~Does a single Gemini turn that issues multiple parallel function calls
   become one worker invocation (all calls resolved before re-chaining) or
-  one per call? Affects both latency and the cost math above. Resolve during
-  step 5.
+  one per call?~~ **RESOLVED, 2026-08-28, via direct code read (no code
+  change needed -- already correct):** one worker invocation per step,
+  regardless of how many parallel calls are in it. `runInvestigation`'s
+  loop dispatches every `functionCall` part in a single Gemini turn
+  together via `Promise.all(...)` (see agent_delegate.js's "PARALLELIZED
+  (2026-07-26)" comment -- confirmed live that Gemini routinely batches
+  independent calls into one turn), collects all results, and pushes ONE
+  combined `functionResponse` turn back before the step is considered done.
+  Because `singleStep` mode (what agent_worker.js uses) advances
+  `stepsDone` by one step, not one call, a batch of N parallel calls
+  resolves entirely within one worker invocation/one QStash message --
+  confirming the cost math above (~1 message/step) holds under heavy
+  parallel-call batching, not just the single-call-per-step case actually
+  exercised by the 2026-08-28 smoke test.
+  **New caveat surfaced by this same read:** since the parallel calls in a
+  step are `Promise.all`'d rather than chained, a worker invocation's
+  wall-clock time is bounded by the SLOWEST call in that batch, not the
+  average. Concretely: GitHub calls go through client.js's own burst-safe
+  throttle queue, but Notion (notion/client.js) and Mem0 (mem/client.js)
+  have no equivalent throttle/retry/backoff -- a step that happens to batch
+  a slow/rate-limited Notion or Mem0 call alongside fast GitHub calls could
+  make that one worker invocation slower than expected. Not a correctness
+  risk (each call is independently try/caught into an error string either
+  way), and the worker itself isn't bound by Vercel's old synchronous-MCP-
+  call duration limit the way the pre-Scenario-B code was -- but the
+  underlying Gemini API call for that step still has to return before the
+  step can checkpoint and re-chain, so an unusually slow batched call still
+  shows up as added latency on that one step. Worth watching in practice,
+  not something to fix preemptively.
 - `HARD_MAX_STEPS` (30) was originally sized around a single request's
   duration budget. Once B removes that constraint, is 30 still the right
   ceiling, or should it be revisited now that step count no longer trades
