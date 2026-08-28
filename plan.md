@@ -437,3 +437,29 @@ write-capable agent loop.
   step 9 gaps noted above (checkpoint/validate unit tests, live end-to-end
   smoke test) are now outstanding against a LIVE tool rather than a
   registered-but-disabled one.
+
+- 2026-08-28: **Merged to main.** CI (`verify` workflow) was red on the
+  first push after the EDITOR_AGENT_ENABLED default flip above --
+  test/editor-tools.test.js still asserted the OLD default-off gate
+  behavior ("registers no tool when unset"), which broke the moment the
+  default became on. Fixed the gate tests to match the new `!== "false"`
+  semantics (unset or any non-"false" value -> registered; only the
+  literal string "false" -> not registered), confirmed 458/458 tests green
+  locally, waited for CI to go green on the fix (run 33198146495), then
+  opened PR #111 and merged it (squash-free merge commit e9da514). This
+  doc (plan.md) is now on main at this path.
+
+  **Post-merge verification (via delegate_agent):** confirmed this
+  branch's 24 commits + the merge commit never touched any
+  codespaces-related file -- connectors/github/codespaces.js and
+  test/github-codespaces.test.js do not appear in any commit's diff or in
+  PR #111's file-change list. The branch's entire footprint was the new
+  delegate_editor files (config.js, connectors/github/editor_*.js,
+  connectors/github/tools.js, plan.md, test/editor-*.test.js) plus the one
+  test-regex fix in test/editor-tool-functions.test.js noted above --
+  nothing outside that scope, codespaces tooling included, was modified.
+
+  Still NOT done, now tracked against main rather than the feature branch:
+  dedicated editor_checkpoint.js/editor_validate.js unit tests, and a live
+  end-to-end smoke test against a real non-default branch (step 9's
+  original list).
