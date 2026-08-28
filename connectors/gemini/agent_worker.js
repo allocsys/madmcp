@@ -1,0 +1,183 @@
+// ---------------------------------------------------------------------------
+// connectors/gemini/agent_worker.js — QStash-invoked HTTP endpoint that
+// advances a delegate_agent run one step at a time in the background
+// (plan.md Scenario B: self-chaining QStash worker).
+//
+// Reuses runInvestigation's EXISTING synchronous loop one call at a time
+// (resume_run_id + max_steps: stepsDone + 1) rather than a bespoke
+// single-step function extracted from it -- see plan.md's "Progress log"
+// entry for step 5 for why the literal per-step extraction the plan
+// originally called for turned out to be unnecessary, and riskier than
+// this reuse, given how much interacting fix history lives inside that
+// loop body.
+//
+// SECURITY: this endpoint is PUBLICLY reachable (QStash calls it over the
+// open internet to invoke it), unlike the MCP tool surface which sits
+// behind requireMcpKey/requireAllowedIp in server.js. Every request's
+// signature is verified via qstash_client.js's verifyQStashSignature
+// BEFORE any checkpoint is touched -- an unsigned or invalid request is
+// rejected outright and never reaches runInvestigation.
+//
+// IDEMPOTENCY: QStash retries failed deliveries automatically, so the SAME
+// {runId, afterStep} message can arrive more than once. `afterStep` records
+// the checkpoint's stepsDone at the moment THIS message was published -- if
+// the live checkpoint has already moved past that (another invocation of
+// the same message already advanced it), this invocation no-ops instead of
+// double-executing a Gemini turn for a step that's already done.
+//
+// DEAD-LETTER / RETRY BOUND (plan.md step 8): `retryCount` bounds
+// consecutive same-step failures (a step that completes without advancing
+// stepsDone -- e.g. a transient 429/503 that runInvestigation's own
+// per-step try/catch already turned into a `{ failed: true }` result rather
+// than a thrown error) so a permanently-broken run (bad config, a
+// non-transient error) can't re-chain into itself forever. After
+// AGENT_WORKER_MAX_CONSECUTIVE_FAILURES consecutive failures on the same
+// step, the chain stops and the checkpoint is finalized as "failed" with
+// the last error as its stored answer, rather than silently retrying at
+// QStash's (and this account's Gemini quota's) expense indefinitely.
+// ---------------------------------------------------------------------------
+
+import { runInvestigation } from "./agent_delegate.js";
+import { loadCheckpoint, saveCheckpoint } from "./agent_checkpoint.js";
+import { publishAgentStep, verifyQStashSignature } from "./qstash_client.js";
+import { AGENT_WORKER_MAX_CONSECUTIVE_FAILURES } from "../../config.js";
+
+// Express handler for POST /api/agent-worker (registered in server.js).
+// Always responds 200 for a request that was validly signed and reached a
+// definite outcome (no-op, chained, dead-lettered, rechain-failed) -- QStash
+// treats any non-2xx as a delivery failure and retries, which is only what
+// we want for genuine transient failures INSIDE runInvestigation (already
+// handled by the re-chain-with-same-afterStep path below, not by asking
+// QStash's own retry to redeliver this HTTP call). Only signature failures
+// and a missing runId return non-2xx, since those are the two cases where
+// nothing meaningful was done and re-delivery (or rejection) is the
+// correct QStash-level behavior.
+export async function handleAgentWorker(req, res) {
+  const signature = req.get("Upstash-Signature");
+  // server.js's express.json() is configured with a `verify` callback that
+  // stashes the raw request body buffer on req.rawBody specifically so this
+  // handler can verify QStash's signature against the EXACT bytes QStash
+  // signed -- re-serializing req.body (already JSON.parsed by express.json)
+  // is not guaranteed to byte-for-byte match what QStash originally sent
+  // (key order, whitespace) and would make signature verification flaky in
+  // a way that's hard to reproduce. Falling back to a re-stringified body
+  // only protects against req.rawBody being unexpectedly absent (e.g. a
+  // future change to server.js's body-parser config); it will simply fail
+  // verification (fail closed) rather than silently accept in that case.
+  const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
+
+  const verified = await verifyQStashSignature({ signature, body: rawBody });
+  if (!verified) {
+    console.warn("agent-worker: rejected request with missing/invalid QStash signature");
+    return res.status(401).json({ error: "invalid or missing QStash signature" });
+  }
+
+  const { runId, afterStep = 0, retryCount = 0 } = req.body || {};
+  if (!runId) {
+    return res.status(400).json({ error: "missing runId" });
+  }
+
+  const checkpoint = await loadCheckpoint(runId);
+  if (!checkpoint) {
+    // Expired past the 1-hour TTL, never existed, or Redis is unreachable
+    // (agent_checkpoint.js fails open on reads) -- nothing to advance. Not
+    // an error from QStash's point of view (it did its job delivering the
+    // message); the run itself is just gone.
+    console.warn(`agent-worker: no live checkpoint for runId ${runId} -- dropping message`);
+    return res.status(200).json({ status: "no-op", reason: "checkpoint missing or expired" });
+  }
+
+  if (checkpoint.status !== "running") {
+    // Already finished ("done" via a genuine answer or the hard-cap
+    // finalize path, or "failed" via this same file's dead-letter path
+    // below) by a prior invocation -- do not touch it again. Also covers a
+    // duplicate/late redelivery of a message whose run has since completed.
+    return res.status(200).json({ status: "no-op", reason: `checkpoint status is "${checkpoint.status}", not "running"` });
+  }
+
+  if (checkpoint.stepsDone !== afterStep) {
+    // Idempotency guard: this message's view of the world (afterStep) no
+    // longer matches the live checkpoint -- another invocation (a QStash
+    // redelivery racing this one, most likely) already advanced it.
+    // Re-executing here would double-take a step Gemini already took.
+    return res.status(200).json({ status: "no-op", reason: `stepsDone (${checkpoint.stepsDone}) != afterStep (${afterStep}) -- already advanced by another invocation` });
+  }
+
+  let result;
+  try {
+    result = await runInvestigation({ resume_run_id: runId, max_steps: checkpoint.stepsDone + 1 });
+  } catch (err) {
+    // Belt-and-suspenders: runInvestigation is designed to catch its own
+    // failures internally and return a `{ failed: true }` result rather
+    // than throw (see its own file header) -- but if something still
+    // escapes it (a bug, an exotic error shape), treat it exactly like an
+    // ordinary same-step failure below instead of letting it crash this
+    // endpoint, which would strand the chain with no re-chain AND no
+    // dead-letter finalization either.
+    result = { steps: checkpoint.stepsDone, failed: true, answer: `(agent-worker: unexpected error advancing runId ${runId}: ${err?.message ?? String(err)})` };
+  }
+
+  const advanced = result.steps > afterStep;
+  const newRetryCount = advanced ? 0 : retryCount + 1;
+
+  const latest = await loadCheckpoint(runId);
+  if (!latest || latest.status !== "running") {
+    // Finished this step (a genuine final answer, or the hard-cap finalize
+    // path inside runInvestigation) -- both already persist status "done"
+    // themselves. Nothing more to chain.
+    return res.status(200).json({ status: latest?.status || "gone", steps: result.steps });
+  }
+
+  if (!advanced && newRetryCount >= AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) {
+    // Dead-letter (plan.md step 8): this exact step has now failed
+    // AGENT_WORKER_MAX_CONSECUTIVE_FAILURES times in a row without ever
+    // advancing stepsDone. A genuinely transient 429/503 succeeds well
+    // before this many attempts -- QStash's own delivery-retry backoff
+    // already spaces re-chain publishes out in practice -- so this is
+    // treated as a permanent failure. Finalize the checkpoint as "failed"
+    // so a poller (agent_tools.js's resume_run_id path) gets a definitive
+    // answer instead of a chain that silently stopped re-publishing with
+    // no record of why.
+    await saveCheckpoint(runId, {
+      newContents: [],
+      transcript: latest.transcript,
+      stepsDone: latest.stepsDone,
+      task: latest.task,
+      repeatCounts: latest.repeatCounts,
+      consecutiveAllRepeatSteps: latest.consecutiveAllRepeatSteps,
+      provider: latest.provider,
+      model: latest.model,
+      maxOutputTokens: latest.maxOutputTokens,
+      pendingVerification: latest.pendingVerification,
+      structuralRecheckUsed: latest.structuralRecheckUsed,
+      status: "failed",
+      finalAnswer: `Investigation stopped after ${AGENT_WORKER_MAX_CONSECUTIVE_FAILURES} consecutive failures on step ${latest.stepsDone + 1}: ${result.answer}`,
+    });
+    console.error(`agent-worker: runId ${runId} dead-lettered after ${newRetryCount} consecutive failures on step ${latest.stepsDone + 1}`);
+    return res.status(200).json({ status: "dead-lettered", steps: latest.stepsDone });
+  }
+
+  // Still running and under the retry cap (whether this step succeeded and
+  // there's more work to do, or it failed but hasn't hit the dead-letter
+  // threshold yet) -- re-chain: publish the next worker invocation with the
+  // FRESH stepsDone/retryCount so the next message's idempotency/dead-letter
+  // checks are accurate.
+  try {
+    await publishAgentStep({ runId, afterStep: latest.stepsDone, retryCount: newRetryCount });
+  } catch (err) {
+    // The step itself either succeeded or failed-but-still-under-the-cap --
+    // only the re-chain PUBLISH failed here. The checkpoint is left in a
+    // perfectly valid "running" state with a fresh lastStepAt (saved by
+    // runInvestigation's own per-step checkpoint write, not by this file),
+    // so agent_tools.js's stale-lastStepAt fallback (see its "Tool behavior
+    // change" branching) will correctly detect this as a broken chain once
+    // lastStepAt goes stale and resume the loop synchronously on the next
+    // poll -- this is exactly the scenario that fallback exists for, so a
+    // failed publish here is not a silent stranding, just a slower recovery
+    // path than the chain continuing on its own.
+    console.error(`agent-worker: failed to re-chain runId ${runId} after step ${latest.stepsDone}: ${err?.message ?? String(err)}`);
+    return res.status(200).json({ status: "step-ok-rechain-failed", steps: latest.stepsDone });
+  }
+
+  return res.status(200).json({ status: "chained", steps: latest.stepsDone });
+}
