@@ -295,14 +295,45 @@ checkpoint, no-op on an `afterStep`/`stepsDone` mismatch (idempotent
 redelivery), a normal re-chain on an unfinished step, no re-chain once a
 run completes, and dead-lettering after 5 consecutive same-step failures.
 
-**Still open:** the dashboard-side half of step 4 (see above -- provision
-QStash, deploy, set the four env vars), step 9's broader test coverage
-(this batch's own tests cover the worker endpoint itself; the
+**Still open (as of the previous entry):** the dashboard-side half of step 4
+(provision QStash, deploy, set the four env vars), step 9's broader test
+coverage (this batch's own tests cover the worker endpoint itself; the
 agent_tools.js branching logic and a true end-to-end QStash round trip
 remain unexercised), and step 10's actual flip (`DELEGATE_AGENT_ASYNC=qstash`
 in production), which should only happen after step 4's provisioning is
 confirmed working and per the "Sequencing note" at the top of this doc --
 this is new infra, not yet observed under any real traffic.
+
+**2026-08-28, step 4 confirmation + step 9 (partial) -- commit 420f9bd.**
+
+- **Step 4, dashboard half:** confirmed by a human with Upstash/Vercel
+  dashboard access that `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`,
+  `QSTASH_NEXT_SIGNING_KEY`, and `AGENT_WORKER_URL` are now all set in
+  production. Not independently verified from inside this environment
+  (no dashboard access, no outbound network here) -- taken on the word of
+  whoever confirmed it, same as any other report of an out-of-band ops
+  action. `isQStashConfigured()` should now return true in production;
+  worth a one-time manual check (e.g. a real `delegate_agent` call with
+  `DELEGATE_AGENT_ASYNC=qstash` set, watching for a `run_id` coming back
+  immediately) before leaning on it.
+- **Step 9, partial:** added `test/agent-tools-async.test.js`, covering the
+  half of step 9's gap that a unit test actually can cover --
+  `agent_tools.js`'s own branching logic (fresh start seeds+publishes and
+  returns immediately; poll-fresh reports progress without touching the
+  loop; poll-stale falls through to synchronous `runInvestigation`; a
+  `status: "failed"` checkpoint returns the permanent-failure message
+  directly; `status: "done"` and a missing checkpoint both fall through to
+  `runInvestigation` as designed), all against mocked
+  `agent_delegate.js`/`agent_checkpoint.js`/`qstash_client.js` -- a
+  handler-level unit test, same style as `test/github-clone-token.test.js`.
+  **Deliberately NOT attempted:** a true end-to-end round trip against
+  *live* QStash infrastructure (real publish, real signed webhook delivery
+  back to a real worker URL). That needs a reachable deployment and live
+  QStash credentials in the loop, which a unit test (mocked network, no
+  outbound access in this environment) structurally cannot exercise --
+  it's a staging/production smoke test to run once, manually, after a
+  deploy, not something to fake inside `vitest`. Recommend doing that
+  smoke test before flipping step 10's flag.
 
 ## Open questions
 
