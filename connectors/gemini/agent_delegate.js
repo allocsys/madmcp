@@ -1484,6 +1484,15 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     let candidate;
     try {
       candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens });
+      // Multi-key/multi-model cascade visibility (2026-08-29): geminiChat
+      // surfaces which fallback model/key actually served this call, if any
+      // -- only ever set when the PRIMARY model+key failed first, so this
+      // entry existing at all is itself proof the cascade engaged, not just
+      // a routine per-step log line.
+      if (candidate._fallbackModelUsed || candidate._fallbackKeyIndex !== undefined) {
+        const keyNote = candidate._fallbackKeyIndex !== undefined ? `, key #${candidate._fallbackKeyIndex}` : "";
+        transcript.push(`[step ${step}] [CASCADE] served by fallback model "${candidate._fallbackModelUsed || effectiveModel}"${keyNote} -- primary model/key was unavailable (rate-limited, overloaded, or rejected).`);
+      }
     } catch (err) {
       // The step-1..N-1 work already happened and is real -- don't throw it
       // away. Persist it (redundant with the save at the end of the prior
