@@ -4,11 +4,11 @@
 // Auth header: "x-goog-api-key: <api_key>"
 // ---------------------------------------------------------------------------
 
-import { GEMINI_API_KEY, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, GEMINI_REQUEST_TIMEOUT_MS } from "../../config.js";
+import { GEMINI_API_KEYS, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, GEMINI_REQUEST_TIMEOUT_MS } from "../../config.js";
 import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "./cooldown.js";
 
-async function callGenerateContentOnce(body, model) {
-  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set. Add it as an environment variable on the madmcp server.");
+async function callGenerateContentOnce(body, model, apiKey) {
+  if (!apiKey) throw new Error("No Gemini API key available. Set GEMINI_API_KEYS (or the legacy GEMINI_API_KEY) as an environment variable on the madmcp server.");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
@@ -18,7 +18,7 @@ async function callGenerateContentOnce(body, model) {
     res = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
       method: "POST",
       headers: {
-        "x-goog-api-key": GEMINI_API_KEY,
+        "x-goog-api-key": apiKey,
         "Content-Type":   "application/json",
       },
       body: JSON.stringify(body),
