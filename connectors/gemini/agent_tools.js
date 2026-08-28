@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// connectors/gemini/agent_tools.js
-//
-// Registers delegate_agent: open-ended, multi-step READ-ONLY investigation
-// across GitHub/Notion/Cloudflare/Context7/Mem0, backed by agent_delegate.js's
-// server-side Gemini function-calling loop.
-//
-// delegate_research (web research, Exa-backed) used to be co-located in
-// this file alongside delegate_agent -- both were "the Gemini connector's
-// tools" at the time. As of the exa/gemini naming pass (2026-08-01),
-// delegate_research now has its own file, connectors/exa/research_tools.js,
-// so each MCP tool's registration lives next to the connector that actually
-// backs it (agent_tools.js here for Gemini/delegate_agent, research_tools.js
-// for Exa/delegate_research). See the delegation-naming-convention Notion
-// plan for the full history of this split.
-// ---------------------------------------------------------------------------
-
 import { z } from "zod";
 import { runInvestigation, seedRun } from "./agent_delegate.js";
 import { loadCheckpoint } from "./agent_checkpoint.js";
@@ -37,7 +20,7 @@ export function register(server) {
       max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 20, hard cap 30 regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done."),
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
-      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is always shown regardless of this flag."),
+      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is only included if this flag is explicitly true."),
       provider: z.enum(["gemini"]).optional()
         .describe(`Only "gemini" is currently supported (and is the default).`),
       model: z.string().optional()
@@ -132,14 +115,14 @@ export function register(server) {
             return {
               content: [{ type: "text", text:
                 `Still running (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed so far. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.` +
-                (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
+                (checkpoint.transcript?.length && show_transcript ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
             };
           }
           // Stale lastStepAt -- the QStash chain likely broke (a failed
           // publish, a dropped/undelivered message). Fall through to the
           // ordinary synchronous runInvestigation call below, which resumes
           // the loop IN THIS CALL -- this is what guarantees a run can never
-          // be silently stranded, per plan.md's "Tool behavior change".
+          // be stranded, per plan.md's "Tool behavior change".
         }
         // checkpoint missing (expired/never existed), or status "done" --
         // fall through to runInvestigation below, which already handles
@@ -176,17 +159,29 @@ export function register(server) {
         }
       }
 
-      // On a failed/partial run, the tool calls already completed are real
-      // work (and already checkpointed to Redis -- see runInvestigation's
-      // comment) that shouldn't be thrown away. Print them here instead of
-      // just a step count, so the caller can see what was actually found
-      // before the failure without needing a resume_run_id round-trip or
-      // log_to_notion just to inspect them.
-      const transcriptBlock = result.transcript?.length && (result.failed || show_transcript)
-        ? `\n\n${result.failed ? "Tool calls completed before the failure" : "Tool call transcript"}:\n${result.transcript.join("\n")}`
+      // Fix: when a run fails/is partial, if show_transcript is not explicitly true,
+      // return a COMPACT structured summary instead of the full transcript:
+      // - step count reached
+      // - short description of what failed (error message / reason)
+      // - resume_run_id if resumable
+      // - omit full transcript unless show_transcript is explicitly true.
+      if (result.failed) {
+        const resumeLine = result.runId ? `resume_run_id: "${result.runId}"` : "not resumable";
+        const transcriptBlock = show_transcript && result.transcript?.length
+          ? `\n\nTool calls completed before failure:\n${result.transcript.join("\n")}`
+          : "";
+        const compactText =
+          `Investigation failed or partial after ${result.steps} step(s).\n` +
+          `Reason/Error: ${result.answer}\n` +
+          `Resumable: ${resumeLine}${transcriptBlock}${notionNote}`;
+        return { content: [{ type: "text", text: compactText }], isError: true };
+      }
+
+      const transcriptBlock = result.transcript?.length && show_transcript
+        ? `\n\nTool call transcript:\n${result.transcript.join("\n")}`
         : "";
 
-      return { content: [{ type: "text", text: `${result.answer}${transcriptBlock}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: !!result.failed };
+      return { content: [{ type: "text", text: `${result.answer}${transcriptBlock}\n\n(${result.steps} step(s) taken)${notionNote}` }], isError: false };
     }
   );
 }
