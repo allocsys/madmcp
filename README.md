@@ -297,7 +297,7 @@ All tokens are optional independently — a connector's tools fail at call time
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare tools |
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
 | `JULES_API_KEY` | Jules tools (`jules_*`) — required, no unauthenticated tier |
-| `GEMINI_API_KEY` | Gemini tools (`delegate_agent`, `delegate_research`) — required, throws if unset |
+| `GEMINI_API_KEYS` | Gemini tools (`delegate_agent`, `delegate_research`) — comma-separated, multi-key cascade; required (or legacy singular `GEMINI_API_KEY`), throws if unset |
 | `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
