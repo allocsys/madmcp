@@ -146,7 +146,7 @@ describe("writeFile", () => {
   });
 
   it("rejects a missing branch before touching the network", async () => {
-    await expect(writeFile(OWNER, REPO, "a.js", { content: "x" })).rejects.toThrow(/branch is required/i);
+    await expect(writeFile(OWNER, REPO, "a.js", { content: "x" })).rejects.toThrow(/`branch` is required/i);
     expect(githubRequest).not.toHaveBeenCalled();
   });
 
