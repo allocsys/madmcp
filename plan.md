@@ -6,13 +6,23 @@ code before being recorded here — several were confirmed, some were already
 solved elsewhere in the codebase, and one was not implementable at all. Only
 verified, still-open items should be treated as real backlog.
 
+**Status: items 1–4 and 8 implemented on branch `feat/tool-improvements`
+(commits through 492fc38), delegated to `delegate_editor` and then manually
+verified/corrected against the diff.** One correction made during
+verification: item 1 originally mis-cited the `notion/tools.js` offender as
+`notion_query_database` (which was already at default 20) — the actual
+default-10 tool was `notion_list`; fixed directly after the delegated pass
+missed it (since it wasn't in the original task description).
+
 ## Confirmed, still open
 
-### 1. Pagination defaults are genuinely inconsistent
+### 1. Pagination defaults are genuinely inconsistent — ✅ fixed
 `per_page`/`limit` defaults vary with no documented reason:
 - `default: 10` — `github/actions.js` (`list_workflow_runs`), `github/releases.js`
   (`list_releases`), `github/search.js` (`search_code`), `mem/tools.js`
-  (`mem0_search`), `notion/tools.js` (`notion_query_database`, `page_size`).
+  (`mem0_search`), `notion/tools.js` (`notion_list`, `page_size` — corrected
+  from an earlier mis-citation of `notion_query_database`, which was already
+  20).
 - `default: 20` — `github/branches.js` (`list_commits`), `github/issues.js`
   (`list_issues`), `github/prs.js` (`get_pull_requests`), `github/releases.js`
   (`list_tags`), `github/repo.js` (`list_contributors`), `github/search.js`
@@ -20,7 +30,7 @@ verified, still-open items should be treated as real backlog.
 - **Action:** pick one default (20 is already the majority) and one hard cap
   (100, already consistent) and align the outliers. Low risk, mechanical change.
 
-### 2. `read_file`'s `ref` vs `get_file_at_commit`'s `commit` naming
+### 2. `read_file`'s `ref` vs `get_file_at_commit`'s `commit` naming — ✅ fixed (cross-reference notes added)
 `connectors/github/files.js` (`read_file`) takes an optional `ref` (branch, tag,
 or SHA). `connectors/github/repo_mgmt.js` (`get_file_at_commit`) takes a
 required `commit` (SHA only). This is a real naming split for an overlapping
@@ -34,7 +44,7 @@ Claude/other callers see.
   descriptions that they're the same concept under different names/constraints
   so a calling model doesn't have to infer it. Small, but real.
 
-### 3. `mem0_list`'s `include_relations` caps full traversal to the top 5 results
+### 3. `mem0_list`'s `include_relations` caps full traversal to the top 5 results — ✅ fixed (`mem0_get_relations` added)
 Confirmed in `connectors/mem/tools.js`: relation resolution (up to 3 hops) is
 deliberately limited to the top 5 ranked results per call, to avoid a full
 multi-hop resolution cost across an entire page. This is a reasonable
@@ -45,7 +55,7 @@ needed.
   the full 3-hop resolution for exactly one entity, bypassing the top-5 cap.
   Opt-in and rare enough to not need to be the default path.
 
-### 4. Internal Gemini-side line diff silently gives up above 2000 lines
+### 4. Internal Gemini-side line diff silently gives up above 2000 lines — ✅ fixed (chunked `start_line`/`end_line` support added)
 Confirmed in `connectors/gemini/agent_delegate.js`, `simpleLineDiff()`: if
 either file exceeds 2000 lines, it returns only "(files differ — too large
 for line diff, showing lengths only: X vs Y lines)" with no way to see any
@@ -91,7 +101,8 @@ complexity (partial copy, archived-too-early, etc.) and no real API-level
 atomicity gain. Not worth building unless Notion's API changes.
 
 ### 8. "Destructive tools (delete_repo, etc.) lack any safety rail" — **real,
-but softer than framed.**
+but softer than framed.** ✅ fixed for `delete_repo` (`confirm: true` required
+via `z.literal(true)`, enforced at the schema layer).
 `delete_repo` (`connectors/github/repo_mgmt.js`) does execute immediately with
 only a plain-language "irreversible — use with caution" description and no
 `dry_run`/confirmation parameter. This part is accurate. However, several
