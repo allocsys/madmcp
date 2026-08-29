@@ -15,24 +15,20 @@ Owner supervises all runs; no command allowlist/denylist by request.
      the codespace's `connection.sessionToken` / port-forwarding info).
    - Decide: shell out to `gh cli` under the hood, or hit the Codespaces
      REST/SSH endpoints directly from the MCP server process.
+     *Implemented approach:* Used `gh codespace ssh` wrapped via Node's `child_process.exec`, combining `githubRequest` for lifecycle state verification/auto-start and `gh codespace ssh` for secure shell execution with `GITHUB_TOKEN` passed via `GH_TOKEN`.
 
-2. **Add tool definition**
-   - New tool, e.g. `exec_in_codespace(codespace_name, command, cwd?, timeout_seconds?)`.
+2. **Add tool definition** [x] (Done)
+   - New tool: `exec_in_codespace(codespace_name, command, cwd?, timeout_seconds?)`.
    - No path/command restrictions per owner's instruction.
-   - Default timeout only for hygiene (not a permission control) — e.g. 300s,
-     overridable.
+   - Default timeout 300s (overridable).
 
-3. **Server-side implementation**
-   - Establish SSH/exec session to the target codespace.
-   - Stream stdout/stderr back, capture exit code.
-   - Handle codespace not running (auto `start_codespace` first?) —
-     decide default behavior.
+3. **Server-side implementation** [x] (Done)
+   - Established SSH/exec session to the target codespace via `gh codespace ssh`.
+   - Captured stdout, stderr, and exit code.
+   - Added auto-start logic for stopped codespaces using `githubRequest` to poll until available.
 
-4. **Wire into MCP tool registry**
-   - Add to the same file/module where `create_codespace`,
-     `start_codespace`, etc. are defined.
-   - Update tool description so the calling model knows this is a real
-     shell, not a sandboxed one.
+4. **Wire into MCP tool registry** [x] (Done)
+   - Added to `connectors/github/codespaces.js` and registered alongside other tools.
 
 5. **Auth/credentials**
    - Confirm the existing GitHub token used by other Codespace tools has
