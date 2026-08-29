@@ -3,8 +3,12 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { githubRequest } from "./client.js";
-import { DEFAULT_OWNER } from "../../config.js";
+import { DEFAULT_OWNER, GITHUB_TOKEN } from "../../config.js";
+
+const execAsync = promisify(exec);
 
 export function register(server) {
 
@@ -170,6 +174,85 @@ export function register(server) {
       await githubRequest(`/user/codespaces/${codespace_name}`, { method: "DELETE" });
       return {
         content: [{ type: "text", text: `🗑️ Deleted codespace ${codespace_name} permanently.` }],
+      };
+    }
+  );
+
+  // ── Execute command in codespace ─────────────────────────────────────────
+
+  server.tool(
+    "exec_in_codespace",
+    "Execute a shell command inside a running GitHub Codespace. Captures stdout, stderr, and exit code. No command restrictions — owner supervises all runs. Automatically starts the codespace if stopped.",
+    {
+      codespace_name:  z.string().describe("The codespace's name (e.g. from list_codespaces)"),
+      command:         z.string().describe("The shell command to execute"),
+      cwd:             z.string().optional().describe("Optional working directory path relative to repository root inside the codespace"),
+      timeout_seconds: z.number().optional().describe("Command execution timeout in seconds (default: 300)"),
+    },
+    async ({ codespace_name, command, cwd, timeout_seconds = 300 }) => {
+      const cs = await githubRequest(`/user/codespaces/${codespace_name}`);
+      if (!cs) {
+        throw new Error(`Codespace ${codespace_name} not found.`);
+      }
+
+      if (cs.state !== "Available") {
+        await githubRequest(`/user/codespaces/${codespace_name}/start`, { method: "POST" });
+        let currentCs = cs;
+        for (let attempt = 0; attempt < 30 && currentCs.state !== "Available"; attempt++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          currentCs = await githubRequest(`/user/codespaces/${codespace_name}`);
+        }
+        if (currentCs.state !== "Available") {
+          throw new Error(`Codespace ${codespace_name} is in state '${currentCs.state}' and failed to become Available.`);
+        }
+      }
+
+      const timeoutMs = timeout_seconds * 1000;
+      let fullCommand = command;
+      if (cwd) {
+        fullCommand = `cd ${cwd} && ${command}`;
+      }
+
+      const env = { ...process.env };
+      if (GITHUB_TOKEN) {
+        env.GH_TOKEN = GITHUB_TOKEN;
+        env.GITHUB_TOKEN = GITHUB_TOKEN;
+      }
+
+      let stdout = "";
+      let stderr = "";
+      let exitCode = 0;
+
+      try {
+        const { stdout: out, stderr: err } = await execAsync(
+          `gh codespace ssh -c ${JSON.stringify(codespace_name)} -- sh -c ${JSON.stringify(fullCommand)}`,
+          {
+            timeout: timeoutMs,
+            maxBuffer: 10 * 1024 * 1024,
+            env,
+          }
+        );
+        stdout = out;
+        stderr = err;
+      } catch (error) {
+        stdout = error.stdout || "";
+        stderr = error.stderr || error.message || "";
+        exitCode = error.code !== undefined ? error.code : 1;
+        if (error.killed) {
+          stderr += `\n[Command timed out after ${timeout_seconds}s]`;
+          exitCode = 124;
+        }
+      }
+
+      const text = [
+        `Exit code: ${exitCode}`,
+        stdout ? `Stdout:\n${stdout}` : null,
+        stderr ? `Stderr:\n${stderr}` : null,
+      ].filter(Boolean).join("\n\n");
+
+      return {
+        content: [{ type: "text", text }],
+        isError: exitCode !== 0,
       };
     }
   );
