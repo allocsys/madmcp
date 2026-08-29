@@ -209,11 +209,24 @@ function normalizedSignature(name, args) {
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
 // summaries, not a full unified-diff implementation. Capped so a huge file
 // pair can't blow up the O(n*m) table.
-function simpleLineDiff(aText, bText) {
-  const a = aText.split("\n");
-  const b = bText.split("\n");
+// Minimal line-based diff (LCS backtrace) -- good enough for investigation
+// summaries, not a full unified-diff implementation. Capped at 2000 lines
+// unless a specific range is requested via start_line/end_line (1-indexed).
+function simpleLineDiff(aText, bText, { start_line, end_line } = {}) {
+  let a = aText.split("\n");
+  let b = bText.split("\n");
+
+  if (start_line !== undefined || end_line !== undefined) {
+    const start = (start_line ?? 1) - 1;
+    const end = (end_line ?? Math.max(a.length, b.length));
+    a = a.slice(start, end);
+    b = b.slice(start, end);
+  }
+
   if (a.length > 2000 || b.length > 2000) {
-    return a.join("\n") === b.join("\n") ? "(files identical)" : "(files differ -- too large for line diff, showing lengths only: " + a.length + " vs " + b.length + " lines)";
+    if (a.join("\n") === b.join("\n")) return "(files identical)";
+    return `(files differ — too large for line diff (${a.length} vs ${b.length} lines). ` +
+           `Use start_line/end_line to request a diff of a specific range.)`;
   }
   const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
   for (let i = a.length - 1; i >= 0; i--) {
