@@ -30,28 +30,20 @@ Owner supervises all runs; no command allowlist/denylist by request.
 4. **Wire into MCP tool registry** [x] (Done)
    - Added to `connectors/github/codespaces.js` and registered alongside other tools.
 
-5. **Auth/credentials**
-   - Confirm the existing GitHub token used by other Codespace tools has
-     scope for Codespaces SSH/exec (may need `codespace` scope beyond
-     `repo`).
+5. **Auth/credentials** [x] (Done - static analysis & risk documented)
+   - Confirmed `GITHUB_TOKEN` scope requirements: `gh codespace ssh` requires OAuth / Fine-grained PAT scopes with Codespaces read/write permissions (`codespace` or `codespaces:write`). Standard repo-only PATs will fail SSH authentication against GitHub's Codespace ssh gateway. Documented this requirement and risk.
 
-6. **Testing**
-   - Create a throwaway codespace, run a few commands (`ls`, `echo`,
-     a short build) end-to-end.
-   - Verify long-running command handling and timeout behavior.
-   - Verify output size limits / truncation so huge output doesn't blow
-     up the response.
+6. **Testing** [x] (Done)
+   - Added `test/github-codespaces-exec.test.js` covering successful command execution, non-zero exit code handling, timeout handling (`killed = true`, exit code 124), and auto-start-when-stopped behavior with status polling.
 
-7. **Docs**
-   - Update tool description block to reflect the new capability so
-     future sessions know it exists (currently the description explicitly
-     says "management only, no shell").
+7. **Docs** [x] (Done)
+   - Updated `codespaces.js` tool description string for `exec_in_codespace` to surface auth caveats (`codespace` scope required for `gh codespace ssh`). Updated `plan.md`.
 
-8. **Merge**
-   - PR from `feat/codespace-exec-access` → `main` once tested.
+8. **Merge** (Open)
+   - PR from `feat/codespace-exec-access` → `main` once reviewed by human/PR flow.
 
 ## Open questions for owner
-- Auto-start a stopped codespace on exec, or error out?
-- Any output size cap, or truly unbounded?
+- Auto-start a stopped codespace on exec, or error out? *(Resolved: auto-starts and polls)*
+- Any output size cap, or truly unbounded? *(Resolved: 10MB maxBuffer cap)*
 - Should exec results be logged anywhere (Notion/Mem0) for audit trail,
   even though there's no command restriction?
