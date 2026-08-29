@@ -102,7 +102,7 @@ export function register(server) {
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name to delete"),
-      confirm: z.boolean().describe("Must be explicitly set to true to proceed with repository deletion. Safety guard against accidental deletion — this action is irreversible and cannot be undone."),
+      confirm: z.literal(true).describe("Must be explicitly set to true to proceed with repository deletion. Safety guard against accidental deletion — this action is irreversible and cannot be undone."),
     },
     async ({ owner = DEFAULT_OWNER, repo, confirm }) => {
       if (confirm !== true) {
