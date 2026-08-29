@@ -14,28 +14,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { promisify } from "node:util";
 
-const mockExec = vi.fn();
-// Attach [util.promisify.custom] to mockExec so promisify(exec) correctly uses it,
-// exercising the exact same code path as Node's built-in child_process.exec.
-mockExec[promisify.custom] = (cmd, options) => {
-  return new Promise((resolve, reject) => {
-    mockExec._lastCmd = cmd;
-    mockExec._lastOptions = options;
-    mockExec(cmd, options, (err, stdout, stderr) => {
-      if (err) {
-        err.stdout = stdout;
-        err.stderr = stderr;
-        reject(err);
-      } else {
-        resolve({ stdout, stderr });
-      }
-    });
-  });
-};
+// vi.mock() factories are hoisted above all other top-level code (including
+// imports and const declarations), so a plain `const mockExec = vi.fn()`
+// referenced inside the factory below would throw "Cannot access 'mockExec'
+// before initialization". vi.hoisted() runs its callback at the same hoisted
+// point vi.mock() does, so mockExec is guaranteed to exist by the time the
+// factory needs it.
+const mockExec = vi.hoisted(() => {
+  const fn = () => {};
+  fn._isMock = true;
+  return fn;
+});
 
-vi.mock("node:child_process", () => ({
-  exec: mockExec,
-}));
+vi.mock("node:child_process", () => {
+  const { vi: viLocal } = require("vitest");
+  return { exec: mockExec };
+});
 
 vi.mock("../connectors/github/client.js", () => ({
   githubRequest: vi.fn(),
