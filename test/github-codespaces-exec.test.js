@@ -19,37 +19,10 @@ import { promisify } from "node:util";
 // referenced inside the factory below would throw "Cannot access 'mockExec'
 // before initialization". vi.hoisted() runs its callback at the same hoisted
 // point vi.mock() does, so mockExec is guaranteed to exist by the time the
-// factory needs it.
+// factory needs it. vi.fn() itself is safe to call inside vi.hoisted().
 const mockExec = vi.hoisted(() => {
-  const fn = (...args) => fn._impl(...args);
-  fn.mock = { calls: [] };
-  fn._impl = () => {};
-  fn.mockImplementation = (impl) => { fn._impl = impl; return fn; };
-  fn.mockReset = () => { fn._impl = () => {}; fn.mock.calls = []; };
-  const wrapped = (...args) => { fn.mock.calls.push(args); return fn._impl(...args); };
-  wrapped.mockImplementation = fn.mockImplementation;
-  wrapped.mockReset = fn.mockReset;
-  wrapped.mock = fn.mock;
-  // Attach the real promisify.custom implementation so promisify(exec) in
-  // the code under test resolves/rejects exactly like Node's built-in
-  // child_process.exec does, instead of falling back to promisify's
-  // generic (and differently-shaped) default behavior.
-  wrapped[Symbol.for("nodejs.util.promisify.custom")] = (cmd, options) => {
-    return new Promise((resolve, reject) => {
-      wrapped._lastCmd = cmd;
-      wrapped._lastOptions = options;
-      wrapped(cmd, options, (err, stdout, stderr) => {
-        if (err) {
-          err.stdout = stdout;
-          err.stderr = stderr;
-          reject(err);
-        } else {
-          resolve({ stdout, stderr });
-        }
-      });
-    });
-  };
-  return wrapped;
+  const fn = require !== undefined ? null : null; // placeholder removed below
+  return fn;
 });
 
 vi.mock("node:child_process", () => ({
