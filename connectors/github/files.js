@@ -73,7 +73,7 @@ export function register(server) {
     "RULE: >2 files needed, OR request = understand/review/summarize a repo or directory (any phrasing: 'read the repo', 'dig into it', 'get up to speed') -> delegate_agent instead. Never loop read_file manually for that.\n" +
     "RULE: repo is PUBLIC and goal = run/test/lint code (not just read it) -> git clone via bash_tool instead (github.com/codeload.github.com/raw.githubusercontent.com allowlisted; zero context cost; can execute code). PUBLIC REPOS ONLY -- no GitHub creds in sandbox.\n" +
     "DOES: reads a file's contents from a GitHub repository. Called with no char_offset/char_limit, auto-chunks if >100,000 chars and tells you the offset to pass next. Pass char_offset/char_limit yourself at any time to jump straight to or page through a specific window (e.g. after a search hit tells you roughly where in the file to look) instead of always starting from the top.\n" +
-    "Equivalent concept to get_file_at_commit's `commit` param (SHA-only, required there).",
+    "Equivalent concept to get_file_at_commit's `commit` param (SHA-only, required here; `ref` is branch/tag/SHA, optional).",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
