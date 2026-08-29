@@ -14,9 +14,9 @@ export function register(server) {
     {
       owner:    z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:     z.string().describe("Repository name"),
-      per_page: z.number().optional().describe("Number of releases to return, max 100 (default: 10)"),
+      per_page: z.number().optional().describe("Number of releases to return, max 100 (default: 20)"),
     },
-    async ({ owner = DEFAULT_OWNER, repo, per_page = 10 }) => {
+    async ({ owner = DEFAULT_OWNER, repo, per_page = 20 }) => {
       const data = await githubRequest(`/repos/${owner}/${repo}/releases?per_page=${per_page}`);
       if (!data.length) return { content: [{ type: "text", text: "No releases found." }] };
       const lines = data.map((r) =>

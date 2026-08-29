@@ -251,10 +251,10 @@ export function register(server) {
     "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually.",
     {
       query:    z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
-      per_page: z.number().optional().describe("Number of results to return, max 100 (default: 10)"),
+      per_page: z.number().optional().describe("Number of results to return, max 100 (default: 20)"),
       ref:      z.string().optional().describe("Branch, tag, or commit SHA to search instead of the default branch. Requires a repo:owner/name qualifier in `query`. GitHub's search index only covers the default branch, so setting this always uses the local content-search fallback rather than the real API."),
     },
-    async ({ query, per_page = 10, ref }) => {
+    async ({ query, per_page = 20, ref }) => {
       const scoped = extractRepoQualifier(query);
 
       if (ref) {

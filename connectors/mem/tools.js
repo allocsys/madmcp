@@ -834,6 +834,31 @@ export function register(server) {
     }
   );
 
+  // ── Get entity relations (full traversal) ───────────────────────────────
+  server.tool(
+    "mem0_get_relations",
+    "Perform a full relation resolution (up to 3 hops, both outgoing and incoming) for a single entity_id — bypassing the top-5 results cap that mem0_list's include_relations has. Use this when you need the complete relationship graph around one specific entity.",
+    {
+      entity_id: z.string().describe("The entity_id to resolve relations for (required)"),
+      user_id:   z.string().optional().describe(`Mem0 user ID scoping (default: ${MEM0_USER_ID})`),
+      agent_id:  z.string().optional().describe("Optional agent ID scoping"),
+      run_id:    z.string().optional().describe("Optional run/session ID scoping"),
+    },
+    async ({ entity_id, user_id = MEM0_USER_ID, agent_id, run_id }) => {
+      const memory = await findByEntityId({ user_id, agent_id, run_id, entity_id });
+      const edges = await traverseRelations(entity_id, { user_id, agent_id, run_id });
+      if (!edges.length && !memory) {
+        return { content: [{ type: "text", text: `No entity found with entity_id "${entity_id}" and no relations recorded.` }] };
+      }
+      const rendered = formatRelatedEntities(edges);
+      const memoryHeader = memory
+        ? `Entity: ${entity_id} (memory ID: ${memory.id})\nContent preview: ${(memory.memory || memory.text || "").slice(0, 120)}\n\n`
+        : `Entity: ${entity_id} (no memory record currently found in scope, but relations reference it)\n\n`;
+      const text = memoryHeader + (rendered || "No relations found (up to 3 hops).");
+      return { content: [{ type: "text", text }] };
+    }
+  );
+
   // ── Search memories ──────────────────────────────────────────────────────
   server.tool(
     "mem0_search",
@@ -843,13 +868,13 @@ export function register(server) {
       user_id:        z.string().optional().describe(`Mem0 user ID to scope search (default: ${MEM0_USER_ID})`),
       agent_id:       z.string().optional().describe("Optional agent ID to scope search (e.g. per-project), in addition to user_id. Scoping at query time — not just at write time — meaningfully improves precision by excluding irrelevant projects/entities from the candidate pool before ranking even starts."),
       run_id:         z.string().optional().describe("Optional run/session ID to scope search, in addition to user_id."),
-      limit:          z.number().optional().describe("Number of results to return (default: 10)"),
+      limit:          z.number().optional().describe("Number of results to return (default: 20)"),
       categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
       status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories."),
       rerank:         z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval. Default: true — reranking meaningfully improves precision and is now the connector default rather than opt-in; pass false to skip it if latency matters more than precision for a given call."),
       threshold:      z.number().optional().describe("Minimum relevance score (0-1) — results below this are dropped. Default: 0.35 (raised from Mem0 v3's own default of 0.1, which let through too much low-relevance noise). Pass 0 explicitly to disable filtering and see everything Mem0 returns."),
     },
-    async ({ query, user_id = MEM0_USER_ID, agent_id, run_id, limit = 10, categories, status_filter, rerank = true, threshold = 0.35 }) => {
+    async ({ query, user_id = MEM0_USER_ID, agent_id, run_id, limit = 20, categories, status_filter, rerank = true, threshold = 0.35 }) => {
       const filters = { user_id };
       if (agent_id) filters.agent_id = agent_id;
       if (run_id) filters.run_id = run_id;

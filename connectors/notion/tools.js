@@ -513,9 +513,9 @@ export function register(server) {
     "List recent pages and/or databases in your Notion workspace, sorted by most recently edited first -- no search query needed. Use this (not notion_search) when the ask is 'get the latest entry/page' or 'what's new in Notion', since notion_search requires a keyword and doesn't guarantee recency ordering.",
     {
       filter_type: z.enum(["page", "database"]).optional().describe("Restrict results to only pages or only databases (default: both)"),
-      page_size:   z.number().optional().describe("Number of results to return (default 10, max 100). Pass 1 to get just the single latest entry."),
+      page_size:   z.number().optional().describe("Number of results to return (default 20, max 100). Pass 1 to get just the single latest entry."),
     },
-    async ({ filter_type, page_size = 10 }) => {
+    async ({ filter_type, page_size = 20 }) => {
       const body = { query: "", sort: { direction: "descending", timestamp: "last_edited_time" }, page_size };
       if (filter_type) body.filter = { value: filter_type, property: "object" };
       const data = await notionRequest("/search", { method: "POST", body });

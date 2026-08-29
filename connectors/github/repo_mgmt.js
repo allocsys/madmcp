@@ -98,12 +98,22 @@ export function register(server) {
 
   server.tool(
     "delete_repo",
-    "Permanently delete a GitHub repository. This is irreversible — use with caution.",
+    "Permanently delete a GitHub repository. This is irreversible — use with caution. Requires confirm: true to execute.",
     {
-      owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:  z.string().describe("Repository name to delete"),
+      owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:    z.string().describe("Repository name to delete"),
+      confirm: z.literal(true).describe("Must be explicitly set to true to proceed with repository deletion. Safety guard against accidental deletion — this action is irreversible and cannot be undone."),
     },
-    async ({ owner = DEFAULT_OWNER, repo }) => {
+    async ({ owner = DEFAULT_OWNER, repo, confirm }) => {
+      if (confirm !== true) {
+        return {
+          content: [{
+            type: "text",
+            text: `Refused: "${owner}/${repo}" was NOT deleted. Deleting a repository is irreversible and permanently destroys all code, issues, PRs, and history. Re-call with confirm: true to proceed.`,
+          }],
+          isError: true,
+        };
+      }
       await githubRequest(`/repos/${owner}/${repo}`, { method: "DELETE" });
       return {
         content: [{
@@ -118,7 +128,7 @@ export function register(server) {
 
   server.tool(
     "get_file_at_commit",
-    "Read a file's contents as it existed at a specific commit SHA.",
+    "Read a file's contents as it existed at a specific commit SHA. Equivalent concept to read_file's `ref` param, but here it's required and must be a commit SHA (not a branch/tag).",
     {
       owner:  z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:   z.string().describe("Repository name"),

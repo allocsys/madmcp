@@ -207,14 +207,35 @@ function normalizedSignature(name, args) {
 }
 
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
-// summaries, not a full unified-diff implementation. Capped so a huge file
-// pair can't blow up the O(n*m) table.
-function simpleLineDiff(aText, bText) {
-  const a = aText.split("\n");
-  const b = bText.split("\n");
-  if (a.length > 2000 || b.length > 2000) {
-    return a.join("\n") === b.join("\n") ? "(files identical)" : "(files differ -- too large for line diff, showing lengths only: " + a.length + " vs " + b.length + " lines)";
+// summaries, not a full unified-diff implementation. Capped at 2000 lines
+// (so a huge file pair can't blow up the O(n*m) table) unless a specific
+// range is requested via start_line/end_line (1-indexed).
+function simpleLineDiff(aText, bText, { start_line, end_line } = {}) {
+  const aFull = aText.split("\n");
+  const bFull = bText.split("\n");
+
+  const hasRange = start_line !== undefined || end_line !== undefined;
+
+  if (!hasRange && (aFull.length > 2000 || bFull.length > 2000)) {
+    if (aText === bText) return "(files identical)";
+    return `(files differ — too large for full line diff: file A has ${aFull.length} lines, file B has ${bFull.length} lines. Pass start_line and end_line parameters to request a diff of a specific slice.)`;
   }
+
+  let a = aFull;
+  let b = bFull;
+
+  if (hasRange) {
+    const start = (start_line ?? 1) - 1;
+    const end = (end_line ?? Math.max(a.length, b.length));
+    a = a.slice(start, end);
+    b = b.slice(start, end);
+  }
+
+  if (a.length > 2000 || b.length > 2000) {
+    if (a.join("\n") === b.join("\n")) return "(files identical)";
+    return `(selected slice too large for line diff — slice has ${a.length} vs ${b.length} lines. Use a narrower start_line/end_line range.)`;
+  }
+
   const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
   for (let i = a.length - 1; i >= 0; i--) {
     for (let j = b.length - 1; j >= 0; j--) {
@@ -702,17 +723,19 @@ const FUNCTIONS = [
   },
   {
     name: "github_diff_files",
-    description: "Compare the same file (or two different files) between two refs/branches/commits and return a line-based diff.",
+    description: "Compare the same file (or two different files) between two refs/branches/commits and return a line-based diff. If files exceed 2000 lines, pass start_line and end_line to diff a specific slice.",
     parameters: { type: "object", properties: {
       owner: { type: "string" }, repo: { type: "string" }, path: { type: "string", description: "File path (used for both sides unless base_path/head_path given)" },
       base_ref: { type: "string" }, head_ref: { type: "string" }, base_path: { type: "string" }, head_path: { type: "string" },
+      start_line: { type: "number", description: "Optional 1-indexed start line for ranged diffs when files are large" },
+      end_line: { type: "number", description: "Optional 1-indexed end line for ranged diffs when files are large" },
     }, required: ["repo", "path", "base_ref", "head_ref"] },
-    execute: async ({ owner = DEFAULT_OWNER, repo, path, base_ref, head_ref, base_path, head_path }) => {
+    execute: async ({ owner = DEFAULT_OWNER, repo, path, base_ref, head_ref, base_path, head_path, start_line, end_line }) => {
       const [a, b] = await Promise.all([
         readFileViaBlob(owner, repo, base_path || path, base_ref),
         readFileViaBlob(owner, repo, head_path || path, head_ref),
       ]);
-      const diff = simpleLineDiff(a, b);
+      const diff = simpleLineDiff(a, b, { start_line, end_line });
       return diff.length > 20000 ? diff.slice(0, 20000) + "\n...[truncated]" : diff;
     },
   },
