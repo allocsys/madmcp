@@ -210,7 +210,7 @@ export function register(server) {
       const timeoutMs = timeout_seconds * 1000;
       let fullCommand = command;
       if (cwd) {
-        fullCommand = `cd ${cwd} && ${command}`;
+        fullCommand = `cd ${JSON.stringify(cwd)} && ${command}`;
       }
 
       const env = { ...process.env };
@@ -219,8 +219,8 @@ export function register(server) {
         env.GITHUB_TOKEN = GITHUB_TOKEN;
       }
 
-      let stdout = "";
-      let stderr = "";
+      let stdout;
+      let stderr;
       let exitCode = 0;
 
       try {
