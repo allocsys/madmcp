@@ -1,117 +1,109 @@
-# madmcp tool-improvement plan
+# Codespace Exec Access — Implementation Plan
 
-Source: a `delegate_agent` investigation into ways to improve the MCP tools this
-server exposes. Its raw findings were then manually verified against the actual
-code before being recorded here — several were confirmed, some were already
-solved elsewhere in the codebase, and one was not implementable at all. Only
-verified, still-open items should be treated as real backlog.
+Goal: give the agent full, unrestrained access to run commands inside a
+GitHub Codespace it manages (create/start/stop/delete already exist —
+this adds actual execution).
 
-**Status: items 1–4 and 8 implemented on branch `feat/tool-improvements`
-(commits through 492fc38), delegated to `delegate_editor` and then manually
-verified/corrected against the diff.** One correction made during
-verification: item 1 originally mis-cited the `notion/tools.js` offender as
-`notion_query_database` (which was already at default 20) — the actual
-default-10 tool was `notion_list`; fixed directly after the delegated pass
-missed it (since it wasn't in the original task description).
+Owner supervises all runs; no command allowlist/denylist by request.
 
-## Confirmed, still open
+## Steps
 
-### 1. Pagination defaults are genuinely inconsistent — ✅ fixed
-`per_page`/`limit` defaults vary with no documented reason:
-- `default: 10` — `github/actions.js` (`list_workflow_runs`), `github/releases.js`
-  (`list_releases`), `github/search.js` (`search_code`), `mem/tools.js`
-  (`mem0_search`), `notion/tools.js` (`notion_list`, `page_size` — corrected
-  from an earlier mis-citation of `notion_query_database`, which was already
-  20).
-- `default: 20` — `github/branches.js` (`list_commits`), `github/issues.js`
-  (`list_issues`), `github/prs.js` (`get_pull_requests`), `github/releases.js`
-  (`list_tags`), `github/repo.js` (`list_contributors`), `github/search.js`
-  (`search_issues`), `mem/tools.js` (`mem0_list`).
-- **Action:** pick one default (20 is already the majority) and one hard cap
-  (100, already consistent) and align the outliers. Low risk, mechanical change.
+1. **Transport research**
+   - Confirm how to open a shell channel into a running Codespace.
+     GitHub Codespaces expose SSH via the `gh codespace ssh` flow and a
+     REST-issued connection token (`/user/codespaces/{name}/machines` +
+     the codespace's `connection.sessionToken` / port-forwarding info).
+   - Decide: shell out to `gh cli` under the hood, or hit the Codespaces
+     REST/SSH endpoints directly from the MCP server process.
+     *Implemented approach:* Used `gh codespace ssh` wrapped via Node's `child_process.exec`, combining `githubRequest` for lifecycle state verification/auto-start and `gh codespace ssh` for secure shell execution with `GITHUB_TOKEN` passed via `GH_TOKEN`.
 
-### 2. `read_file`'s `ref` vs `get_file_at_commit`'s `commit` naming — ✅ fixed (cross-reference notes added)
-`connectors/github/files.js` (`read_file`) takes an optional `ref` (branch, tag,
-or SHA). `connectors/github/repo_mgmt.js` (`get_file_at_commit`) takes a
-required `commit` (SHA only). This is a real naming split for an overlapping
-concept, and it's already known internally — `agent_delegate.js` (around the
-`READ_FILE_SIGNATURE_FAMILY` block) has a comment describing exactly this gap
-and a partial, deliberately lightweight workaround for Gemini's *internal*
-dedup logic only. That workaround does not touch the MCP-facing tool schemas
-Claude/other callers see.
-- **Action:** either rename `get_file_at_commit`'s param to `ref` for
-  consistency (keeping it required), or explicitly document in both tools'
-  descriptions that they're the same concept under different names/constraints
-  so a calling model doesn't have to infer it. Small, but real.
+2. **Add tool definition** [x] (Done)
+   - New tool: `exec_in_codespace(codespace_name, command, cwd?, timeout_seconds?)`.
+   - No path/command restrictions per owner's instruction.
+   - Default timeout 300s (overridable).
 
-### 3. `mem0_list`'s `include_relations` caps full traversal to the top 5 results — ✅ fixed (`mem0_get_relations` added)
-Confirmed in `connectors/mem/tools.js`: relation resolution (up to 3 hops) is
-deliberately limited to the top 5 ranked results per call, to avoid a full
-multi-hop resolution cost across an entire page. This is a reasonable
-tradeoff for `mem0_list`/`mem0_search`, but there's no way to explicitly ask
-for the full graph around one specific `entity_id` when that's actually what's
-needed.
-- **Action:** consider a narrow `mem0_get_relations(entity_id)` tool that does
-  the full 3-hop resolution for exactly one entity, bypassing the top-5 cap.
-  Opt-in and rare enough to not need to be the default path.
+3. **Server-side implementation** [x] (Done)
+   - Established SSH/exec session to the target codespace via `gh codespace ssh`.
+   - Captured stdout, stderr, and exit code.
+   - Added auto-start logic for stopped codespaces using `githubRequest` to poll until available.
 
-### 4. Internal Gemini-side line diff silently gives up above 2000 lines — ✅ fixed (chunked `start_line`/`end_line` support added)
-Confirmed in `connectors/gemini/agent_delegate.js`, `simpleLineDiff()`: if
-either file exceeds 2000 lines, it returns only "(files differ — too large
-for line diff, showing lengths only: X vs Y lines)" with no way to see any
-actual diff content. This is Gemini's own internal helper (not an MCP-facing
-tool), used during `delegate_agent` investigations.
-- **Action:** support a chunked/ranged diff (e.g. diffing lines 1–2000, then
-  2001–4000 on request) instead of an all-or-nothing cutoff.
+4. **Wire into MCP tool registry** [x] (Done)
+   - Added to `connectors/github/codespaces.js` and registered alongside other tools.
 
-## Partially valid — smaller than first reported
+5. **Auth/credentials** [x] (Done - static analysis & risk documented)
+   - Confirmed `GITHUB_TOKEN` scope requirements: `gh codespace ssh` requires OAuth / Fine-grained PAT scopes with Codespaces read/write permissions (`codespace` or `codespaces:write`). Standard repo-only PATs will fail SSH authentication against GitHub's Codespace ssh gateway. Documented this requirement and risk.
 
-### 5. `delegate_agent` observability
-The original claim was "no way to see what a long-running investigation is
-doing mid-flight." This overstates it: `delegate_agent` already supports
-`show_transcript: true`, which returns the full step-by-step tool-call
-transcript on completion. What's *actually* missing is a lighter-weight,
-plan-level view (what Gemini intends to do next) rather than a full raw
-transcript — useful mid-run, not just after the fact. Lower priority than
-originally framed.
+6. **Testing** [~] (Done, but NOT verified passing -- see "Bugs found in review" below)
+   - Added `test/github-codespaces-exec.test.js` covering successful command execution, non-zero exit code handling, timeout handling (`killed = true`, exit code 124), and auto-start-when-stopped behavior with status polling.
+   - CAVEAT: CI never got far enough to run these tests (blocked by lint failure), so "added" is not the same as "passing."
 
-## Investigated and found invalid — do not action
+7. **Docs** [x] (Done)
+   - Updated `codespaces.js` tool description string for `exec_in_codespace` to surface auth caveats (`codespace` scope required for `gh codespace ssh`). Updated `plan.md`.
 
-### 6. "Notion page creation can fail and leave an orphaned page with no
-recovery path" — **false, already handled.**
-`connectors/notion/tools.js` (`notion_create_page`'s batch-append path) was
-checked directly. It already:
-- creates the page with the first ≤100 blocks,
-- PATCHes remaining blocks in further ≤100 batches,
-- on a batch failure, still records the entity_id dedup index entry (so a
-  retry won't create a duplicate page),
-- returns the partially-created page's id/url and explicit instructions to
-  finish it via `notion_update_page` (`append_content`).
+## Bugs found in review (2026-08-30) -- BLOCK MERGE until resolved
 
-This is a deliberate, documented design (with a comment referencing a real
-2026-07-25 production failure that motivated it), not a gap.
+Found via two independent verification passes (one direct read of live CI logs/diff, one via delegate_agent's static review). Do not proceed to step 8 until all five items below are addressed.
 
-### 7. "Add a `notion_move_page` tool" — **not implementable as scoped.**
-The Notion public API has no endpoint to change an existing page's parent.
-There is no first-class "move" operation to wrap. This would need to be
-faked as create-in-new-location + copy content + archive-old, which is the
-same multi-step process an agent already has to do manually — a wrapper tool
-would just hide the same steps behind one name, with added failure-mode
-complexity (partial copy, archived-too-early, etc.) and no real API-level
-atomicity gain. Not worth building unless Notion's API changes.
+1. **CI is currently red.** `list_workflow_runs` on this branch shows the
+   latest pushes failing. ESLint fails on `connectors/github/codespaces.js`
+   lines 222-223: `no-useless-assignment` -- `stdout`/`stderr` are
+   pre-initialized to `""` but that initial value is never read before
+   being overwritten in both the try and catch branches. Trivial fix (drop
+   the dead initializers), but it currently blocks the pipeline entirely.
 
-### 8. "Destructive tools (delete_repo, etc.) lack any safety rail" — **real,
-but softer than framed.** ✅ fixed for `delete_repo` (`confirm: true` required
-via `z.literal(true)`, enforced at the schema layer).
-`delete_repo` (`connectors/github/repo_mgmt.js`) does execute immediately with
-only a plain-language "irreversible — use with caution" description and no
-`dry_run`/confirmation parameter. This part is accurate. However, several
-other destructive-sounding tools already went through hardening after real
-incidents (see the `notion_create_page` orphan-page handling above, and the
-slug-like-title guard in `notion/tools.js` after a 2026-08-07 orphan-page
-audit), suggesting the team already treats safety gaps as high priority once
-found — this one just hasn't been hit yet.
-- **Action:** add an explicit confirmation step (e.g. require the caller to
-  pass `repo` twice, or a `confirm: true` flag) to `delete_repo` specifically.
-  Lower priority for other write tools (edit_file, overwrite_files) since
-  those are non-destructive to history (all via commits, revertable via git).
+2. **Tests never actually ran.** Because lint runs before the test step in
+   CI, "Run unit tests" shows as skipped, not passed, on every recent run.
+   Nothing about `test/github-codespaces-exec.test.js` has been confirmed
+   to actually pass -- fix #1, then re-run CI and check the test step
+   specifically before trusting it.
+
+3. **Command-injection bug via `cwd` (real, not the intentional
+   no-restrictions design).** The command string is built as:
+   ```js
+   let fullCommand = command;
+   if (cwd) { fullCommand = `cd ${cwd} && ${command}`; }
+   ```
+   `command` and `codespace_name` are safely wrapped via `JSON.stringify`
+   before being placed into the outer `gh codespace ssh ... sh -c ...`
+   string, but `cwd` is interpolated raw and unquoted. A `cwd` like
+   `"x; rm -rf /"` breaks out of the intended `cd` context before `sh -c`
+   even runs. This is distinct from the deliberate "no command
+   allowlist/denylist" design decision at the top of this doc -- that was
+   about the `command` param being unrestricted by choice; this is an
+   unintended gap in a different param. Fix: quote/escape `cwd` the same
+   way `command` already is, e.g. `` `cd ${JSON.stringify(cwd)} && ${command}` ``
+   (adjust to whatever quoting is correct for the target shell).
+
+4. **`gh` CLI is an undocumented hard runtime dependency.** `exec_in_codespace`
+   shells out to `gh codespace ssh`, but nothing outside `plan.md` says the
+   `gh` CLI must be installed and authenticated wherever this MCP server
+   actually runs. Not in `README.md`, not in `package.json`, not in the
+   tool's own description string. If the deployment environment (e.g. a
+   bare Node container or serverless target) doesn't have `gh` installed,
+   this fails with a cryptic "command not found" at call time. Needs an
+   explicit note in README/docs and ideally a startup check.
+
+5. **Test mocking doesn't actually exercise real `exec` behavior.** The
+   implementation does `const execAsync = promisify(exec);` -- this only
+   destructures cleanly into `{ stdout, stderr }` because Node's real
+   `child_process.exec` has a `util.promisify.custom` implementation
+   attached to it. The test's `vi.mock("node:child_process", () => ({ exec:
+   vi.fn() }))` replaces `exec` with a bare mock that has no such custom
+   symbol, so `promisify()` falls back to generic behavior that does not
+   reliably produce a `{stdout, stderr}`-shaped object. The tests may be
+   passing for the wrong reason (verifying response formatting only) rather
+   than actually proving the exec path works -- which is likely how bug #3
+   above went unnoticed. Needs a test that either uses a promisify-custom-
+   aware mock, or asserts on the literal command string passed to `exec`
+   (which would have caught the unquoted `cwd`).
+
+8. **Merge** (Open -- blocked, see "Bugs found in review" above)
+   - PR from `feat/codespace-exec-access` -> `main` once all 5 items above
+     are resolved and CI is green (lint passes AND the test step actually
+     runs and passes, not just "skipped").
+
+## Open questions for owner
+- Auto-start a stopped codespace on exec, or error out? *(Resolved: auto-starts and polls)*
+- Any output size cap, or truly unbounded? *(Resolved: 10MB maxBuffer cap)*
+- Should exec results be logged anywhere (Notion/Mem0) for audit trail,
+  even though there's no command restriction?
