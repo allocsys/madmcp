@@ -21,15 +21,40 @@ import { promisify } from "node:util";
 // point vi.mock() does, so mockExec is guaranteed to exist by the time the
 // factory needs it.
 const mockExec = vi.hoisted(() => {
-  const fn = () => {};
-  fn._isMock = true;
-  return fn;
+  const fn = (...args) => fn._impl(...args);
+  fn.mock = { calls: [] };
+  fn._impl = () => {};
+  fn.mockImplementation = (impl) => { fn._impl = impl; return fn; };
+  fn.mockReset = () => { fn._impl = () => {}; fn.mock.calls = []; };
+  const wrapped = (...args) => { fn.mock.calls.push(args); return fn._impl(...args); };
+  wrapped.mockImplementation = fn.mockImplementation;
+  wrapped.mockReset = fn.mockReset;
+  wrapped.mock = fn.mock;
+  // Attach the real promisify.custom implementation so promisify(exec) in
+  // the code under test resolves/rejects exactly like Node's built-in
+  // child_process.exec does, instead of falling back to promisify's
+  // generic (and differently-shaped) default behavior.
+  wrapped[Symbol.for("nodejs.util.promisify.custom")] = (cmd, options) => {
+    return new Promise((resolve, reject) => {
+      wrapped._lastCmd = cmd;
+      wrapped._lastOptions = options;
+      wrapped(cmd, options, (err, stdout, stderr) => {
+        if (err) {
+          err.stdout = stdout;
+          err.stderr = stderr;
+          reject(err);
+        } else {
+          resolve({ stdout, stderr });
+        }
+      });
+    });
+  };
+  return wrapped;
 });
 
-vi.mock("node:child_process", () => {
-  const { vi: viLocal } = require("vitest");
-  return { exec: mockExec };
-});
+vi.mock("node:child_process", () => ({
+  exec: mockExec,
+}));
 
 vi.mock("../connectors/github/client.js", () => ({
   githubRequest: vi.fn(),
