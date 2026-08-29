@@ -17,9 +17,9 @@ export function register(server) {
       workflow_id: z.string().optional().describe("Workflow file name or ID (e.g. 'ci.yml'). Omit for all workflows."),
       branch:      z.string().optional().describe("Filter by branch name"),
       status:      z.enum(["queued", "in_progress", "completed", "waiting", "requested", "pending"]).optional().describe("Filter by run status"),
-      per_page:    z.number().optional().describe("Number of runs to return, max 100 (default: 10)"),
+      per_page:    z.number().optional().describe("Number of runs to return, max 100 (default: 20)"),
     },
-    async ({ owner = DEFAULT_OWNER, repo, workflow_id, branch, status, per_page = 10 }) => {
+    async ({ owner = DEFAULT_OWNER, repo, workflow_id, branch, status, per_page = 20 }) => {
       const query = new URLSearchParams({ per_page: String(per_page) });
       if (branch) query.set("branch", branch);
       if (status) query.set("status", status);
