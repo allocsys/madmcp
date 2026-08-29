@@ -140,7 +140,8 @@ export function register(server) {
   server.tool(
     "create_repo_file",
     "DOES: Write a brand-new file to a GitHub repo. NOT the sandbox filesystem -> use the computer-use create_file tool for that.\n" +
-    "RULE: fails if the path already exists -> edit_file to patch or fully replace it instead.",
+    "RULE: fails if the path already exists -> edit_file to patch or fully replace it instead.\n" +
+    "PARAM NAME WARNING: the file body param here is `content`, NOT `file_text` -- `file_text` is the sandbox create_file tool's param name for the same concept. Passing `file_text` to this tool will fail validation.",
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
