@@ -2,8 +2,9 @@
 // test/github-codespaces-exec.test.js
 //
 // Unit tests for the exec_in_codespace tool in connectors/github/codespaces.js.
-// Mocks node:child_process (exec) with [util.promisify.custom] and connectors/github/client.js (githubRequest)
-// to verify:
+// Mocks node:child_process's exec (with a [util.promisify.custom] implementation
+// attached, matching Node's real child_process.exec) and connectors/github/client.js
+// (githubRequest) to verify:
 //   1. Successful command execution when codespace is already Available.
 //   2. Non-zero exit code handling and structured result.
 //   3. Timeout handling (command killed / exit code 124).
@@ -16,12 +17,14 @@ import { promisify } from "node:util";
 
 // vi.mock() factories are hoisted above all other top-level code (including
 // imports and const declarations), so a plain `const mockExec = vi.fn()`
-// referenced inside the factory below would throw "Cannot access 'mockExec'
-// before initialization". vi.hoisted() runs its callback at the same hoisted
-// point vi.mock() does, so mockExec is guaranteed to exist by the time the
-// factory needs it. vi.fn() itself is safe to call inside vi.hoisted().
+// declared below a vi.mock() call -- or even above it in source order -- can
+// still throw "Cannot access 'mockExec' before initialization" once vi.mock
+// is hoisted past it. vi.hoisted() runs its callback at that same hoisted
+// point, so anything created inside it (including via vi.fn(), which is
+// itself safe to call inside vi.hoisted()) is guaranteed to exist by the
+// time the vi.mock() factory below needs it.
 const mockExec = vi.hoisted(() => {
-  const fn = require !== undefined ? null : null; // placeholder removed below
+  const fn = require("vitest").vi.fn();
   return fn;
 });
 
@@ -36,6 +39,29 @@ vi.mock("../connectors/github/client.js", () => ({
 import { exec } from "node:child_process";
 import { githubRequest } from "../connectors/github/client.js";
 import { register } from "../connectors/github/codespaces.js";
+
+// Attach [util.promisify.custom] to the mock so promisify(exec) inside the
+// code under test resolves/rejects exactly like Node's real
+// child_process.exec does ({ stdout, stderr } on success; an error carrying
+// .stdout/.stderr on failure), instead of falling back to promisify's
+// generic (and differently-shaped) default behavior. Done here, after the
+// mock exists, rather than inside vi.hoisted() -- promisify.custom is just a
+// symbol key, no hoisting concerns apply to setting it.
+exec[promisify.custom] = (cmd, options) => {
+  return new Promise((resolve, reject) => {
+    exec._lastCmd = cmd;
+    exec._lastOptions = options;
+    exec(cmd, options, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+};
 
 // Minimal fake MCP server
 function makeFakeServer() {
@@ -53,8 +79,8 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExec._lastCmd = undefined;
-    mockExec._lastOptions = undefined;
+    exec._lastCmd = undefined;
+    exec._lastOptions = undefined;
     server = makeFakeServer();
     register(server);
   });
@@ -77,7 +103,7 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     expect(result.content[0].text).toContain("Stdout:\nhello from codespace");
     expect(githubRequest).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(mockExec._lastCmd).toContain("gh codespace ssh -c \"cs-test\"");
+    expect(exec._lastCmd).toContain("gh codespace ssh -c \"cs-test\"");
   });
 
   it("handles non-zero exit codes correctly", async () => {
@@ -160,9 +186,9 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
       cwd: maliciousCwd,
     });
 
-    expect(mockExec._lastCmd).toBeDefined();
+    expect(exec._lastCmd).toBeDefined();
     // Verify that the command string passed to exec includes JSON.stringify(cwd)
     // so the metacharacters are safely quoted/escaped rather than breaking out of cd.
-    expect(mockExec._lastCmd).toContain(JSON.stringify(maliciousCwd));
+    expect(exec._lastCmd).toContain(JSON.stringify(maliciousCwd));
   });
 });
