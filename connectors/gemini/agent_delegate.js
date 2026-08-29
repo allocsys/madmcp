@@ -207,11 +207,9 @@ function normalizedSignature(name, args) {
 }
 
 // Minimal line-based diff (LCS backtrace) -- good enough for investigation
-// summaries, not a full unified-diff implementation. Capped so a huge file
-// pair can't blow up the O(n*m) table.
-// Minimal line-based diff (LCS backtrace) -- good enough for investigation
 // summaries, not a full unified-diff implementation. Capped at 2000 lines
-// unless a specific range is requested via start_line/end_line (1-indexed).
+// (so a huge file pair can't blow up the O(n*m) table) unless a specific
+// range is requested via start_line/end_line (1-indexed).
 function simpleLineDiff(aText, bText, { start_line, end_line } = {}) {
   const aFull = aText.split("\n");
   const bFull = bText.split("\n");
