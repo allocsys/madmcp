@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Regression test for the 2026-08-28 production bug logged in plan.md's
-// progress log ("production smoke test -- BUG FOUND"): isFinalStep was
-// derived from cappedSteps (this call's own loop bound), which the QStash
-// worker's per-invocation call shrinks to the current step number on every
+// Regression test for a production bug: isFinalStep was derived from
+// cappedSteps (this call's own loop bound), which the QStash worker's
+// per-invocation call shrinks to the current step number on every
 // single-step resume -- so isFinalStep was true on every worker step and
 // tools were withheld from the entire async path, permanently.
 //
