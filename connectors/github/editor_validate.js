@@ -1,6 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_validate.js -- plan.md step 6, "Wire the
-// validate-before-write step" (guardrail #5) for delegate_editor.
+// connectors/github/editor_validate.js -- syntax validation for delegate_editor.
 //
 // Per plan.md: "delegate_designer's per-file-type syntax validator
 // generalizes naturally to more file types (JSON, YAML, and existing JS
@@ -11,8 +10,7 @@
 //
 // Reuses connectors/frontend/validate.js's html/css/scss/jsx/tsx/vue
 // validators VERBATIM for the extensions delegate_editor shares with
-// delegate_designer (EDITOR_ALLOWED_EXTENSIONS is a superset of
-// FRONTEND_ALLOWED_EXTENSIONS) -- not a fork/copy, so a future fix to one
+// delegate_designer -- not a fork/copy, so a future fix to one
 // of those validators (e.g. the HTML tag-balance regex) benefits both
 // tools automatically instead of drifting apart.
 //
@@ -20,21 +18,12 @@
 //   .js / .ts   -- real parse via @babel/parser (already a dependency, see
 //                  frontend/validate.js's own note on why JSX needed a real
 //                  parser over regex; reused here rather than a second
-//                  regex-based approach, since @babel/parser handles plain
-//                  JS/TS syntax too, JSX plugin enabled but harmless for
-//                  non-JSX files).
-//                  NOTE: this is a SYNTAX check only, not the project's own
-//                  eslint.config.js rules (style, unused vars, etc.) -- full
-//                  eslint's Linter API is a heavier, stateful dependency
-//                  (config resolution, plugin loading) that this stateless
-//                  per-call validator deliberately doesn't take on for v1.
-//                  If eslint's actual rule set proves necessary here later,
-//                  that is a deliberate follow-up, not an oversight.
+//                  regex-based approach).
 //   .json       -- JSON.parse, the only correct definition of "valid JSON".
 //   .yml/.yaml  -- js-yaml's load(), same reasoning as JSON: a hand-rolled
 //                  YAML check would be far less reliable than the real
 //                  parser this repo already needs to add as a dependency
-//                  for this (see package.json).
+//                  for this.
 //   .md / .txt  -- NOT validated (fail-open, same as validateByExtension's
 //                  behavior for any extension with no registered validator
 //                  below). Free-form prose has no syntax to check.
@@ -71,10 +60,6 @@ export async function validateYaml(content) {
     return { valid: true, errors: [], skipped: "'js-yaml' is not installed -- syntax check skipped." };
   }
   try {
-    // loadAll would be needed for multi-document streams (---  separated);
-    // load() alone is sufficient for the single-document case this tool
-    // expects for config-style YAML files, and still throws on malformed
-    // syntax either way.
     load(content);
     return { valid: true, errors: [] };
   } catch (err) {
@@ -82,9 +67,7 @@ export async function validateYaml(content) {
   }
 }
 
-// -- JS/TS: real parse via @babel/parser (delegated to validateJsx, which
-// already handles this -- the "jsx" plugin being enabled is harmless for
-// plain .js/.ts input that contains no JSX syntax at all).
+// -- JS/TS: real parse via @babel/parser (delegated to validateJsx).
 export async function validateJs(content) {
   return validateJsx(content, { typescript: false });
 }
