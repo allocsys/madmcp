@@ -133,4 +133,5 @@ product decision for the owner, not a blocker on correctness.
 - Auto-start a stopped codespace on exec, or error out? *(Resolved: auto-starts and polls)*
 - Any output size cap, or truly unbounded? *(Resolved: 10MB maxBuffer cap)*
 - Should exec results be logged anywhere (Notion/Mem0) for audit trail,
-  even though there's no command restriction? *(Still open.)*
+  even though there's no command restriction? *(Resolved: owner decided no
+  audit logging needed.)*
