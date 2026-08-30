@@ -2,56 +2,55 @@
 // test/github-codespaces-exec.test.js
 //
 // Unit tests for the exec_in_codespace tool in connectors/github/codespaces.js.
-// Mocks node:child_process's exec (with a [util.promisify.custom] implementation
-// attached, matching Node's real child_process.exec) and connectors/github/client.js
-// (githubRequest) to verify:
+// Mocks node:child_process's execFile (with a [util.promisify.custom]
+// implementation attached, matching Node's real child_process.execFile) and
+// connectors/github/client.js (githubRequest) to verify:
 //   1. Successful command execution when codespace is already Available.
 //   2. Non-zero exit code handling and structured result.
 //   3. Timeout handling (command killed / exit code 124).
 //   4. Auto-start-when-stopped behavior (polls until Available, then runs).
-//   5. Quoting and escaping of cwd containing shell metacharacters (command injection protection).
+//   5. cwd is passed through execFile's argv array (no local shell
+//      re-parsing possible) and is POSIX single-quoted for the remote
+//      `sh -c`, so $()/backtick/$VAR substitution in cwd cannot execute
+//      either locally or remotely.
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { promisify } from "node:util";
 
 // vi.mock() factories are hoisted above all other top-level code (including
-// imports and const declarations), so a plain `const mockExec = vi.fn()`
-// declared below a vi.mock() call -- or even above it in source order -- can
-// still throw "Cannot access 'mockExec' before initialization" once vi.mock
-// is hoisted past it. vi.hoisted() runs its callback at that same hoisted
-// point, so anything created inside it (including via vi.fn(), which is
-// itself safe to call inside vi.hoisted()) is guaranteed to exist by the
-// time the vi.mock() factory below needs it.
-const mockExec = vi.hoisted(() => {
-  const fn = require("vitest").vi.fn();
-  return fn;
-});
+// imports and const declarations). vi.hoisted() runs its callback at that
+// same hoisted point, so anything created inside it is guaranteed to exist
+// by the time the vi.mock() factory below needs it. `vi` itself is safe to
+// reference here -- Vitest's transform hoists the `vi` binding specifically
+// so this pattern works. (Do NOT reach for require("vitest") as a workaround
+// for perceived hoisting issues -- Vitest ships ESM-only and rejects
+// require() unconditionally, which crashes the entire suite, not just this
+// file.)
+const mockExecFile = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
-  exec: mockExec,
+  execFile: mockExecFile,
 }));
 
 vi.mock("../connectors/github/client.js", () => ({
   githubRequest: vi.fn(),
 }));
 
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { githubRequest } from "../connectors/github/client.js";
 import { register } from "../connectors/github/codespaces.js";
 
-// Attach [util.promisify.custom] to the mock so promisify(exec) inside the
-// code under test resolves/rejects exactly like Node's real
-// child_process.exec does ({ stdout, stderr } on success; an error carrying
-// .stdout/.stderr on failure), instead of falling back to promisify's
-// generic (and differently-shaped) default behavior. Done here, after the
-// mock exists, rather than inside vi.hoisted() -- promisify.custom is just a
-// symbol key, no hoisting concerns apply to setting it.
-exec[promisify.custom] = (cmd, options) => {
+// Attach [util.promisify.custom] so promisify(execFile) inside the code
+// under test resolves/rejects exactly like Node's real
+// child_process.execFile does ({ stdout, stderr } on success; an error
+// carrying .stdout/.stderr on failure).
+execFile[promisify.custom] = (file, args, options) => {
   return new Promise((resolve, reject) => {
-    exec._lastCmd = cmd;
-    exec._lastOptions = options;
-    exec(cmd, options, (err, stdout, stderr) => {
+    execFile._lastFile = file;
+    execFile._lastArgs = args;
+    execFile._lastOptions = options;
+    execFile(file, args, options, (err, stdout, stderr) => {
       if (err) {
         err.stdout = stdout;
         err.stderr = stderr;
@@ -79,8 +78,9 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    exec._lastCmd = undefined;
-    exec._lastOptions = undefined;
+    execFile._lastFile = undefined;
+    execFile._lastArgs = undefined;
+    execFile._lastOptions = undefined;
     server = makeFakeServer();
     register(server);
   });
@@ -88,7 +88,7 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
   it("executes command successfully when codespace is already Available", async () => {
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
 
-    exec.mockImplementation((cmd, opts, callback) => {
+    execFile.mockImplementation((file, args, opts, callback) => {
       const cb = typeof opts === "function" ? opts : callback;
       cb(null, "hello from codespace\n", "");
     });
@@ -102,14 +102,17 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     expect(result.content[0].text).toContain("Exit code: 0");
     expect(result.content[0].text).toContain("Stdout:\nhello from codespace");
     expect(githubRequest).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec._lastCmd).toContain("gh codespace ssh -c \"cs-test\"");
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile._lastFile).toBe("gh");
+    expect(execFile._lastArgs).toEqual([
+      "codespace", "ssh", "-c", "cs-test", "--", "sh", "-c", "echo hello",
+    ]);
   });
 
   it("handles non-zero exit codes correctly", async () => {
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
 
-    exec.mockImplementation((cmd, opts, callback) => {
+    execFile.mockImplementation((file, args, opts, callback) => {
       const cb = typeof opts === "function" ? opts : callback;
       const err = new Error("Command failed");
       err.code = 1;
@@ -129,7 +132,7 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
   it("handles timeout handling (killed = true)", async () => {
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
 
-    exec.mockImplementation((cmd, opts, callback) => {
+    execFile.mockImplementation((file, args, opts, callback) => {
       const cb = typeof opts === "function" ? opts : callback;
       const err = new Error("Command timed out");
       err.killed = true;
@@ -154,7 +157,7 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Starting" });
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
 
-    exec.mockImplementation((cmd, opts, callback) => {
+    execFile.mockImplementation((file, args, opts, callback) => {
       const cb = typeof opts === "function" ? opts : callback;
       cb(null, "started successfully\n", "");
     });
@@ -171,24 +174,70 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     expect(githubRequest).toHaveBeenCalledTimes(4);
   });
 
-  it("properly quotes and escapes cwd containing shell metacharacters to prevent command injection", async () => {
+  it("never invokes a local shell, so codespace_name/command reach gh as discrete argv entries", async () => {
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
 
-    exec.mockImplementation((cmd, opts, callback) => {
+    execFile.mockImplementation((file, args, opts, callback) => {
       const cb = typeof opts === "function" ? opts : callback;
       cb(null, "ok\n", "");
     });
 
-    const maliciousCwd = "x; rm -rf /";
+    await server.tools.exec_in_codespace({
+      codespace_name: "cs-test",
+      command: "echo hi",
+    });
+
+    // execFile spawns `file` directly with an argv array -- there is no
+    // shell string for a local shell to re-parse, so this call shape by
+    // construction cannot let $()/backticks/`;` in any argument execute
+    // on the host running the MCP server.
+    expect(execFile._lastFile).toBe("gh");
+    expect(Array.isArray(execFile._lastArgs)).toBe(true);
+  });
+
+  it("single-quotes cwd so $(...) command substitution cannot execute", async () => {
+    githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
+
+    execFile.mockImplementation((file, args, opts, callback) => {
+      const cb = typeof opts === "function" ? opts : callback;
+      cb(null, "ok\n", "");
+    });
+
+    const maliciousCwd = "$(touch /tmp/pwned)";
     await server.tools.exec_in_codespace({
       codespace_name: "cs-test",
       command: "ls",
       cwd: maliciousCwd,
     });
 
-    expect(exec._lastCmd).toBeDefined();
-    // Verify that the command string passed to exec includes JSON.stringify(cwd)
-    // so the metacharacters are safely quoted/escaped rather than breaking out of cd.
-    expect(exec._lastCmd).toContain(JSON.stringify(maliciousCwd));
+    const fullCommandArg = execFile._lastArgs[execFile._lastArgs.length - 1];
+    // Single-quoted: the literal text is preserved verbatim inside '...',
+    // so a shell will NOT expand it -- unlike double-quoting, where
+    // $(...) is still evaluated.
+    expect(fullCommandArg).toBe(`cd '${maliciousCwd}' && ls`);
+  });
+
+  it("single-quotes cwd containing backticks and embedded single quotes safely", async () => {
+    githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
+
+    execFile.mockImplementation((file, args, opts, callback) => {
+      const cb = typeof opts === "function" ? opts : callback;
+      cb(null, "ok\n", "");
+    });
+
+    const maliciousCwd = "a'; touch /tmp/pwned; echo '`whoami`";
+    await server.tools.exec_in_codespace({
+      codespace_name: "cs-test",
+      command: "ls",
+      cwd: maliciousCwd,
+    });
+
+    const fullCommandArg = execFile._lastArgs[execFile._lastArgs.length - 1];
+    // Embedded ' must be closed-out and re-opened (POSIX '\'' idiom),
+    // never left as a bare unescaped quote that could terminate the
+    // quoted string early.
+    expect(fullCommandArg).toBe(
+      `cd 'a'\\''; touch /tmp/pwned; echo '\\''`+ "`whoami`" + `' && ls`
+    );
   });
 });
