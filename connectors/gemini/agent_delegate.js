@@ -110,7 +110,7 @@ function validateFunctionArgs(fn, args) {
 }
 
 // Repeat-detection signature (fix for redundant/wasted tool calls found in
-// live testing 2026-08-27 -- see plan.md "Redundant tool call dedup fix").
+// live testing 2026-08-27 -- the redundant tool call dedup fix).
 // Used by the stuck-loop guard below in place of the old raw
 // `${name}:${JSON.stringify(args || {})}` signature, which had two gaps
 // that let genuine repeats slip past the dedup cache:
