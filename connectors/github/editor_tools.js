@@ -10,7 +10,7 @@
 // note that mandatory Notion logging was considered and dropped as
 // redundant with this).
 //
-// GATED BEHIND EDITOR_AGENT_ENABLED (plan.md step 10's rollout flag):
+// GATED BEHIND EDITOR_AGENT_ENABLED (the rollout flag):
 // register() below is a no-op unless the flag is "true", so this tool
 // simply doesn't exist on the MCP surface until a human flips it on
 // deliberately -- same "disable without a revert" posture as
