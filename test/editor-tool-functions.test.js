@@ -1,12 +1,11 @@
 // ---------------------------------------------------------------------------
 // test/editor-tool-functions.test.js
 //
-// Unit coverage for connectors/github/editor_tool_functions.js (delegate_editor,
-// plan.md step 3: "Build the tools layer"). Covers read_file, applyReplacements,
-// buildUnifiedDiff, and write_file -- including guardrail #2 (default-branch
-// refusal, looked up live) and guardrails #3/#4 (allow/deny via
-// editor_policy.js) -- independently of any agent loop, per the plan's own
-// step ordering ("Unit test each independently of the agent loop").
+// Unit coverage for connectors/github/editor_tool_functions.js. Covers
+// read_file, applyReplacements, buildUnifiedDiff, and write_file -- including
+// guardrail #2 (default-branch refusal, looked up live) and guardrails
+// #3/#4 (allow/deny via editor_policy.js) -- independently of any agent
+// loop.
 //
 // githubRequest/toBase64/fromBase64 are mocked -- same style as
 // test/frontend-agent-tools.test.js.
