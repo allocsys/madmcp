@@ -3,12 +3,23 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { githubRequest } from "./client.js";
 import { DEFAULT_OWNER, GITHUB_TOKEN } from "../../config.js";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+// POSIX single-quote escaping: wrap in '...' and turn each embedded '
+// into '\'' (close quote, escaped literal quote, reopen quote). Unlike
+// JSON.stringify (double-quote escaping), single quotes suppress ALL
+// shell expansion -- $(...), backticks, $VAR, etc -- not just breakout
+// via unescaped " or \. This matters here because the quoted result is
+// interpolated into a `sh -c "..."` string that a shell parses again
+// remotely, and double-quoted $(...) would still be evaluated there.
+function posixSingleQuote(str) {
+  return `'${String(str).replace(/'/g, `'\\''`)}'`;
+}
 
 export function register(server) {
 
