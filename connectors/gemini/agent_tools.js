@@ -69,7 +69,7 @@ export function register(server) {
         };
       }
 
-      // Async delegate_agent (plan.md Scenario B, "Tool behavior change"):
+      // Async delegate_agent (Scenario B groundwork):
       // gated behind BOTH the rollout flag and QStash actually being
       // reachable -- if either is off/unconfigured, every branch below is
       // skipped and this falls straight through to today's fully-
@@ -97,7 +97,7 @@ export function register(server) {
       if (asyncEnabled && resume_run_id) {
         const checkpoint = await loadCheckpoint(resume_run_id);
         if (checkpoint && checkpoint.status === "failed") {
-          // Dead-lettered by agent_worker.js (plan.md step 8) after repeated
+          // Dead-lettered by agent_worker.js after repeated
           // same-step failures -- a definitive, non-resumable outcome.
           // Return it directly rather than letting runInvestigation try to
           // resume a run that was deliberately given up on.
@@ -122,7 +122,7 @@ export function register(server) {
           // publish, a dropped/undelivered message). Fall through to the
           // ordinary synchronous runInvestigation call below, which resumes
           // the loop IN THIS CALL -- this is what guarantees a run can never
-          // be stranded, per plan.md's "Tool behavior change".
+          // be stranded.
         }
         // checkpoint missing (expired/never existed), or status "done" --
         // fall through to runInvestigation below, which already handles
