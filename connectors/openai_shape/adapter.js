@@ -6,8 +6,7 @@
 // OpenAI-compatible chat-completions provider.
 //
 // EXTRACTED 2026-08-27 from connectors/glm/adapter.js when Groq was added
-// as a second OpenAI-compatible provider alongside GLM/OpenRouter (see
-// plan.md "Groq provider addition", step 3). Nothing in here was ever
+// as a second OpenAI-compatible provider alongside GLM/OpenRouter. Nothing in here was ever
 // OpenRouter-specific -- it was already pure OpenAI-shape translation, so
 // this is a verbatim move, not a rewrite. connectors/glm/adapter.js now
 // re-exports from here (see that file) so existing imports/tests didn't
@@ -104,9 +103,7 @@ export function toOpenAIMessages(contents) {
 // {name, description, parameters} entry into OpenAI's
 // {type:"function", function:{name, description, parameters}} shape.
 // Treating the incoming value as already a flat array of declarations (an
-// earlier draft of the plan this was built from assumed this) would
-// silently produce zero tools -- see plan.md's GLM step 3 "corrected from
-// the original draft" note.
+// earlier design assumption) would silently produce zero tools.
 export function toOpenAITools(tools) {
   if (!tools) return undefined;
   const declarations = Array.isArray(tools)
@@ -124,7 +121,7 @@ export function toOpenAITools(tools) {
 // already consumes from geminiChat: { content: { role: "model", parts:
 // [...] }, finishReason }.
 //
-// KNOWN, ACCEPTED ASYMMETRY (see plan.md's GLM step 3): agent_delegate.js
+// KNOWN, ACCEPTED ASYMMETRY: agent_delegate.js
 // special-cases candidate.finishReason === "MALFORMED_FUNCTION_CALL" to
 // give an actionable error when the final/stuck-loop step withholds tools
 // but the model tries to call one anyway. That's a Gemini-specific
