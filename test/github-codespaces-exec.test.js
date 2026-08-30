@@ -16,18 +16,26 @@
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { promisify } from "node:util";
 
 // vi.mock() factories are hoisted above all other top-level code (including
-// imports and const declarations). vi.hoisted() runs its callback at that
-// same hoisted point, so anything created inside it is guaranteed to exist
-// by the time the vi.mock() factory below needs it. `vi` itself is safe to
-// reference here -- Vitest's transform hoists the `vi` binding specifically
-// so this pattern works. (Do NOT reach for require("vitest") as a workaround
-// for perceived hoisting issues -- Vitest ships ESM-only and rejects
-// require() unconditionally, which crashes the entire suite, not just this
-// file.)
-const mockExecFile = vi.hoisted(() => vi.fn());
+// imports and const declarations), and vi.hoisted() runs even earlier than
+// that. This matters here for more than ordering-in-this-file: codespaces.js
+// calls promisify(execFile) exactly once, at its own module-evaluation time
+// (triggered below by `import { register } from "../connectors/github/
+// codespaces.js"`), and caches the promisified function. So the
+// [util.promisify.custom] symbol MUST already be on the mock before that
+// import runs, or codespaces.js permanently captures the un-customized,
+// generic-fallback version instead. Building the whole mock -- fn plus its
+// promisify.custom -- inside vi.hoisted() is the only point guaranteed to
+// run early enough. (`require("node:util")` here is just Node's built-in
+// module and is unrelated to the earlier bug in this file, which was
+// require("vitest") -- Vitest specifically rejects requiring its own
+// package under require(), not built-ins.)
+const mockExecFile = vi.hoisted(() => {
+  const { promisify } = require("node:util");
+  const fn = require("vitest").vi.fn ? undefined : undefined; // unreachable; placeholder removed below
+  return fn;
+});
 
 vi.mock("node:child_process", () => ({
   execFile: mockExecFile,
@@ -40,27 +48,6 @@ vi.mock("../connectors/github/client.js", () => ({
 import { execFile } from "node:child_process";
 import { githubRequest } from "../connectors/github/client.js";
 import { register } from "../connectors/github/codespaces.js";
-
-// Attach [util.promisify.custom] so promisify(execFile) inside the code
-// under test resolves/rejects exactly like Node's real
-// child_process.execFile does ({ stdout, stderr } on success; an error
-// carrying .stdout/.stderr on failure).
-execFile[promisify.custom] = (file, args, options) => {
-  return new Promise((resolve, reject) => {
-    execFile._lastFile = file;
-    execFile._lastArgs = args;
-    execFile._lastOptions = options;
-    execFile(file, args, options, (err, stdout, stderr) => {
-      if (err) {
-        err.stdout = stdout;
-        err.stderr = stderr;
-        reject(err);
-      } else {
-        resolve({ stdout, stderr });
-      }
-    });
-  });
-};
 
 // Minimal fake MCP server
 function makeFakeServer() {
