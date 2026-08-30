@@ -125,9 +125,13 @@ independent verification against the actual repo state and a real CI run
 ## Merge readiness
 
 CI is green on `feat/codespace-exec-access` at commit `167126f`
-(verified via `get_check_runs`, not just the workflow list). Remaining
-open item before merge is the audit-logging question below — that's a
-product decision for the owner, not a blocker on correctness.
+(verified via `get_check_runs`, not just the workflow list). Logic was
+additionally independently re-verified via a separate read-only
+investigation (execFile/argv safety, posixSingleQuote edge cases, poll
+loop bounds, exit-code/timeout handling, and test mock ordering all
+confirmed correct — no new issues found). The audit-logging question
+below is now resolved. No open items remain before opening the PR to
+`main`.
 
 ## Open questions for owner
 - Auto-start a stopped codespace on exec, or error out? *(Resolved: auto-starts and polls)*
