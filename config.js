@@ -200,7 +200,7 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // DELEGATE_AGENT_ASYNC below.
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 
-// Rollout flag (plan.md step 10): "qstash" opts into Scenario B end to end
+// Rollout flag: "qstash" opts into Scenario B end to end
 // (async start + poll/stale-fallback branching in agent_tools.js); any
 // other value (including unset, the default) keeps delegate_agent on
 // today's fully-synchronous behavior with no code path change at all --
