@@ -103,7 +103,9 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
       command: "echo hello",
     });
 
-    expect(result.isError).toBeUndefined();
+    // isError is always set explicitly (exitCode !== 0), never omitted --
+    // so a clean run is `false`, not an absent/undefined key.
+    expect(result.isError).toBe(false);
     expect(result.content[0].text).toContain("Exit code: 0");
     expect(result.content[0].text).toContain("Stdout:\nhello from codespace");
     expect(githubRequest).toHaveBeenCalledTimes(1);
@@ -172,12 +174,15 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
       command: "pwd",
     });
 
-    expect(result.isError).toBeUndefined();
+    expect(result.isError).toBe(false);
     expect(result.content[0].text).toContain("Exit code: 0");
     expect(result.content[0].text).toContain("Stdout:\nstarted successfully");
     expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/cs-test/start", { method: "POST" });
     expect(githubRequest).toHaveBeenCalledTimes(4);
-  });
+    // This path polls with a real 3000ms setTimeout per attempt (3
+    // iterations here) rather than a mocked timer, so it needs more than
+    // Vitest's 5000ms default test timeout.
+  }, 15000);
 
   it("never invokes a local shell, so codespace_name/command reach gh as discrete argv entries", async () => {
     githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
