@@ -179,7 +179,7 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // both unset until an integration is activated.
 
 // ---------------------------------------------------------------------------
-// QStash (Upstash) -- backs plan.md Scenario B: delegate_agent's
+// QStash (Upstash) -- backs Scenario B, delegate_agent's
 // self-chaining background worker (connectors/gemini/agent_worker.js +
 // connectors/gemini/qstash_client.js). Same Upstash account/dashboard as
 // the Redis checkpoint store above (agent_checkpoint.js/cooldown.js), a new
