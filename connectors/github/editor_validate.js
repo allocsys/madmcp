@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/github/editor_validate.js -- syntax validation for delegate_editor.
 //
-// Per plan.md: "delegate_designer's per-file-type syntax validator
+// "delegate_designer's per-file-type syntax validator
 // generalizes naturally to more file types (JSON, YAML, and existing JS
 // lint tooling via eslint.config.js already in this repo) but not all of
 // them -- define what 'validated' means per allowed file type explicitly
