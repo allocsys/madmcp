@@ -1,7 +1,6 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_tool_functions.js -- plan.md step 3, "Build the
-// tools layer" for delegate_editor ("Limited GitHub write access for
-// delegate_agent (non-default-branch only)").
+// connectors/github/editor_tool_functions.js -- tools layer for delegate_editor
+// ("Limited GitHub write access for delegate_agent (non-default-branch only)").
 //
 // Exposes read_file/write_file against the GENERAL GitHub Contents API
 // (not the frontend-specific helper designer_tool_functions.js uses),
@@ -12,8 +11,8 @@
 // instructions -- same posture designer_delegate.js's own file header
 // insists on for its narrower scope.
 //
-// NOT YET WIRED to any agent loop or MCP tool registration (steps 5/7).
-// Unit tested independently of both, per the plan's own step ordering --
+// NOT YET WIRED to any agent loop or MCP tool registration.
+// Unit tested independently of both, per the step ordering --
 // see test/editor-tool-functions.test.js.
 //
 // Write function shape is modeled on the stress-tested edit_file MCP tool
@@ -51,8 +50,8 @@ function is404(err) {
 }
 
 // Detects the two shapes GitHub's Contents API uses to report a sha
-// mismatch on a PUT: a plain 409, or (observed in practice, see plan.md
-// step 3's writeFile note on the read-then-write race) a 422 whose message
+// mismatch on a PUT: a plain 409, or (observed in practice, see the
+// writeFile note on the read-then-write race) a 422 whose message
 // mentions "sha" -- e.g. when an earlier read said 404 but the file was
 // created concurrently, so the blind create-without-sha PUT is rejected.
 function isShaConflictError(err) {
