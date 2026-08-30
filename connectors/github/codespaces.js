@@ -221,7 +221,7 @@ export function register(server) {
       const timeoutMs = timeout_seconds * 1000;
       let fullCommand = command;
       if (cwd) {
-        fullCommand = `cd ${JSON.stringify(cwd)} && ${command}`;
+        fullCommand = `cd ${posixSingleQuote(cwd)} && ${command}`;
       }
 
       const env = { ...process.env };
@@ -235,8 +235,15 @@ export function register(server) {
       let exitCode = 0;
 
       try {
-        const { stdout: out, stderr: err } = await execAsync(
-          `gh codespace ssh -c ${JSON.stringify(codespace_name)} -- sh -c ${JSON.stringify(fullCommand)}`,
+        // execFile (argv array) instead of exec (single string): this
+        // spawns `gh` directly with its arguments, with no local shell
+        // parsing/re-expanding them in between. Only the remote `sh -c
+        // fullCommand`, run inside the codespace via ssh, sees a shell at
+        // all -- which is where `command`'s intentionally-unrestricted
+        // shell semantics are supposed to apply, not on this host.
+        const { stdout: out, stderr: err } = await execFileAsync(
+          "gh",
+          ["codespace", "ssh", "-c", codespace_name, "--", "sh", "-c", fullCommand],
           {
             timeout: timeoutMs,
             maxBuffer: 10 * 1024 * 1024,
