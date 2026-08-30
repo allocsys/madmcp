@@ -1,9 +1,8 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_policy.js -- guardrails #3 and #4 from plan.md
-// ("Limited GitHub write access for delegate_agent (non-default-branch
-// only)"), as plain, dependency-free functions. Deliberately built and
-// tested in isolation before any tool-layer or agent-loop code exists (plan
-// step 2), mirroring how designer_tool_functions.js's extension check was
+// connectors/github/editor_policy.js -- guardrails #3 and #4,
+// as plain, dependency-free functions. Deliberately built and
+// tested in isolation before any tool-layer or agent-loop code exists,
+// mirroring how designer_tool_functions.js's extension check was
 // built/tested independently of connectors/frontend/designer_delegate.js's
 // loop.
 //
@@ -33,9 +32,8 @@ function normalize(path) {
   return path.replace(/^\.?\/+/, "");
 }
 
-// Path-prefix/glob-lite matcher, deliberately NOT a full glob engine (see
-// config.js's comment on EDITOR_DENY_PATH_PATTERNS): supports exactly two
-// shapes --
+// Path-prefix/glob-lite matcher, deliberately NOT a full glob engine:
+// supports exactly two shapes --
 //   "foo/bar/**"  -> matches "foo/bar" itself and anything under it.
 //   "foo/bar.js"  -> exact path match only.
 // Nothing else (no `*` mid-segment, no `?`, no character classes). Keeping
@@ -93,7 +91,7 @@ export function isPathDenied(path, { denyPatterns = [] } = {}) {
 }
 
 // Guardrail #4's content-level case: package.json's scripts/dependencies/
-// devDependencies fields specifically, called out in plan.md as a
+// devDependencies fields specifically, called out as a
 // supply-chain risk that can't be expressed as a path pattern (the whole
 // file isn't denied, just those fields). `beforeContent`/`afterContent` are
 // raw file text; if either fails to parse as JSON this returns denied=true
@@ -113,7 +111,7 @@ export function touchesPackageJsonRiskyFields(path, beforeContent, afterContent)
 
   for (const field of RISKY_FIELDS) {
     if (JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null)) {
-      return { denied: true, reason: `package.json "${field}" field would change -- requires an explicit override flag (not yet implemented; see plan.md guardrail #4)` };
+      return { denied: true, reason: `package.json "${field}" field would change -- requires an explicit override flag (not yet implemented)` };
     }
   }
   return { denied: false };
