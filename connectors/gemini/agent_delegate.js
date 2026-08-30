@@ -158,8 +158,7 @@ function validateFunctionArgs(fn, args) {
 // Default (no char_offset/char_limit): matches the old hard-30000-cutoff
 // behavior in spirit, but replaces the old bare "...[truncated]" marker
 // (which gave Gemini no way to ever see the rest) with an explicit total
-// length and the exact char_offset to pass next -- same fix as plan.md's
-// "Structural read cap" entry recommended.
+// length and the exact char_offset to pass next.
 function sliceFileContentForModel(content, path, { char_offset, char_limit }) {
   const total = content.length;
 
