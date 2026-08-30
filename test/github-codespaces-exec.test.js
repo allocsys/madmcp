@@ -32,8 +32,26 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // require("vitest") -- Vitest specifically rejects requiring its own
 // package under require(), not built-ins.)
 const mockExecFile = vi.hoisted(() => {
+  // `vi` is safe to reference directly inside vi.hoisted() -- Vitest's
+  // transform hoists that binding specifically to support this pattern.
+  const fn = vi.fn();
   const { promisify } = require("node:util");
-  const fn = require("vitest").vi.fn ? undefined : undefined; // unreachable; placeholder removed below
+  fn[promisify.custom] = (file, args, options) => {
+    return new Promise((resolve, reject) => {
+      fn._lastFile = file;
+      fn._lastArgs = args;
+      fn._lastOptions = options;
+      fn(file, args, options, (err, stdout, stderr) => {
+        if (err) {
+          err.stdout = stdout;
+          err.stderr = stderr;
+          reject(err);
+        } else {
+          resolve({ stdout, stderr });
+        }
+      });
+    });
+  };
   return fn;
 });
 
