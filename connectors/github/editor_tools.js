@@ -1,13 +1,12 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_tools.js -- plan.md step 7, "Register the MCP
-// tool" for delegate_editor ("Limited GitHub write access for delegate_agent
-// (non-default-branch only)").
+// connectors/github/editor_tools.js -- MCP tool registration for delegate_editor
+// ("Limited GitHub write access for delegate_agent (non-default-branch only)").
 //
 // Thin wrapper around runEditorAgent (editor_delegate.js), same shape as
 // connectors/frontend/designer_tools.js's delegate_designer wrapper: same
 // resume_run_id / max_steps / show_transcript conventions, same
 // writtenFiles/transcript response shaping (guardrail #9's audit trail --
-// the transcript/writtenFiles reporting IS the audit trail, per plan.md's
+// the transcript/writtenFiles reporting IS the audit trail, per the
 // note that mandatory Notion logging was considered and dropped as
 // redundant with this).
 //
@@ -16,13 +15,13 @@
 // simply doesn't exist on the MCP surface until a human flips it on
 // deliberately -- same "disable without a revert" posture as
 // DELEGATE_AGENT_ASYNC elsewhere in this repo. Flip via env var, not code,
-// once the step-9 test suite and a manual smoke test both look right.
+// once the test suite and a manual smoke test both look right.
 //
 // Tool description is deliberately as explicit about scope limits as
-// delegate_agent's own description is about being read-only (plan.md step
-// 7's own requirement) -- the calling model needs to know, from the
-// description alone, that this tool can only write to a non-default branch
-// it doesn't get to choose past guardrails #1/#2, before it ever calls it.
+// delegate_agent's own description is about being read-only -- the calling
+// model needs to know, from the description alone, that this tool can only
+// write to a non-default branch it doesn't get to choose past guardrails #1/#2,
+// before it ever calls it.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -46,7 +45,7 @@ function scopeSummary() {
 }
 
 export function register(server) {
-  // Rollout gate (plan.md step 10): this tool is not registered at all --
+  // Rollout gate: this tool is not registered at all --
   // not "registered but refuses calls" -- unless the flag is on. A caller
   // (or a prompt-injected instruction) can't discover or invoke a tool
   // that was never added to the server's tool list in the first place.
