@@ -1,13 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Covers plan.md's async delegate_agent groundwork (Scenario A/B, steps
-// 3+5): unlike test/agent-delegate-loop.test.js (which deliberately leaves
-// Redis unconfigured so checkpoint.js/cooldown.js fail open), THIS file
-// wires up a real fake Redis (same tiny in-memory fake as
-// test/agent-checkpoint.test.js) so it can exercise actual save/resume/done
-// round trips end to end -- the thing a QStash worker calling
-// runInvestigation({ resume_run_id, max_steps: stepsDone + 1 }) once per
-// invocation actually depends on.
+// Covers async delegate_agent groundwork: unlike
+// test/agent-delegate-loop.test.js (which deliberately leaves Redis
+// unconfigured so checkpoint.js/cooldown.js fail open), THIS file wires up a
+// real fake Redis (same tiny in-memory fake as test/agent-checkpoint.test.js)
+// so it can exercise actual save/resume/done round trips end to end -- the
+// thing a QStash worker calling runInvestigation({ resume_run_id, max_steps:
+// stepsDone + 1 }) once per invocation actually depends on.
 function makeFakeRedis() {
   const lists = new Map();
   const strings = new Map();
