@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Covers plan.md's still-open steps 4/6/7/8 for the QStash worker endpoint
-// itself (connectors/gemini/agent_worker.js): signature verification
+// Covers the QStash worker endpoint itself
+// (connectors/gemini/agent_worker.js): signature verification
 // (fail-closed), idempotency (stepsDone/afterStep mismatch -> no-op),
 // re-chaining on a successful-but-unfinished step, and dead-lettering after
 // repeated same-step failures. Mirrors
