@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/llm/router.js — provider router both Gemini and GLM sit
 // behind, so agent_delegate.js's loop body doesn't need to know which
-// provider it's talking to. See plan.md step 4.
+// provider it's talking to.
 //
 // Always hands back Gemini-shaped `candidate` regardless of which provider
 // actually ran -- GLM's OpenAI-shaped request/response never leaks past
