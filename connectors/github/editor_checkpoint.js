@@ -1,6 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_checkpoint.js -- plan.md step 4, "Build the
-// checkpoint layer" for delegate_editor.
+// connectors/github/editor_checkpoint.js -- checkpoint layer for delegate_editor.
 //
 // Reuses connectors/frontend/designer_checkpoint.js's shape verbatim (per
 // guardrail #7: "Checkpoint/resume contract identical to delegate_designer's,
@@ -22,8 +21,7 @@
 // run -- it only means a slow/interrupted run can't be resumed across
 // calls.
 //
-// NOT YET WIRED to any agent loop (step 5) or MCP tool registration
-// (step 7).
+// NOT YET WIRED to any agent loop or MCP tool registration.
 // ---------------------------------------------------------------------------
 
 import { getRedis } from "../gemini/cooldown.js";
