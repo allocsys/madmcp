@@ -34,7 +34,7 @@ import { readFileViaBlob, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
 
 // Slicing logic behind read_file's optional char_offset/char_limit.
 // (Formerly shared with a separate read_file_chunked tool, removed once
-// read_file grew its own char_offset/char_limit params -- see plan.md.)
+// read_file grew its own char_offset/char_limit params.)
 function sliceFileContent(content, path, { char_offset, char_limit }) {
   const total = content.length;
 
