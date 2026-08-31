@@ -65,14 +65,13 @@ async function callChatCompletion(body) {
     throw new Error("BAI_API_KEYS is not set. Add at least one B.AI API key as an environment variable on the madmcp server.");
   }
 
-  let lastErr;
+  const keyAttempts = [];
   for (let keyIndex = 0; keyIndex < BAI_API_KEYS.length; keyIndex++) {
     const apiKey = BAI_API_KEYS[keyIndex];
     const namespace = `bai:${keyIndex}`;
-    const isLastKey = keyIndex === BAI_API_KEYS.length - 1;
 
     if (await isModelCoolingDown(BAI_MODEL, namespace)) {
-      lastErr = lastErr || new Error(`B.AI API error (429): model "${BAI_MODEL}" on key #${keyIndex} is in a recorded cooldown from a recent rate limit.`);
+      keyAttempts.push({ keyIndex, reason: "recorded cooldown" });
       continue;
     }
     try {
@@ -80,11 +79,12 @@ async function callChatCompletion(body) {
       if (keyIndex > 0) data._fallbackKeyIndex = keyIndex;
       return data;
     } catch (err) {
-      lastErr = err;
       const isBadKey = err.status === 401 || err.status === 403;
       const isRateLimited = err.status === 429;
       const isOverloaded = err.status === 503;
       const isNetworkTransient = err.transient === true;
+
+      keyAttempts.push({ keyIndex, reason: err.message });
 
       // NOTE: this client has only ONE loop (key rotation only -- see this
       // file's header on why there's deliberately no inner model loop like
@@ -93,14 +93,18 @@ async function callChatCompletion(body) {
       // -- it must NOT `break`, since with no inner loop to fall out of,
       // `break` here would exit the whole key-rotation loop and abandon any
       // remaining keys entirely.
-      if (!isBadKey && !isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
+      if (!isBadKey && !isRateLimited && !isOverloaded && !isNetworkTransient) {
+        throw err;
+      }
       if (isRateLimited) {
         await setModelCooldown(BAI_MODEL, parseRetryDelaySeconds(err.message), namespace);
       }
-      if (isLastKey) throw err;
     }
   }
-  throw lastErr;
+
+  const totalKeys = BAI_API_KEYS.length;
+  const details = keyAttempts.map(a => `key #${a.keyIndex}: ${a.reason}`).join(", ");
+  throw new Error(`B.AI API error: all ${totalKeys} configured keys are rate-limited, in cooldown, or failed (${details})`);
 }
 
 export async function baiChat(messages, { tools, maxOutputTokens } = {}) {
