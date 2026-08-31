@@ -266,9 +266,9 @@ export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS)
 // isolation) -- deliberately NOT the same name as the singular
 // OPENROUTER_API_KEY already referenced in README.md/docs/API_KEYS.md/
 // docs/env.html from an earlier, never-wired-up pass. Those docs are being
-// updated to the plural name in the same change that introduces this (see
-// plan.md step 9) specifically so operators don't set the old singular name
-// and have it silently ignored.
+// updated to the plural name in the same change that introduces this,
+// specifically so operators don't set the old singular name and have it
+// silently ignored.
 export const OPENROUTER_API_KEYS = (process.env.OPENROUTER_API_KEYS || "")
   .split(",")
   .map((s) => s.trim())
