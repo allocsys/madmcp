@@ -1254,13 +1254,18 @@ function extractConditionalClaims(answerText) {
 // asking the model itself "is this line real?" would just be another
 // LLM-judgment call with the same miscalibrated-confidence failure mode
 // this whole mechanism exists to route around.
-function lineIsVerbatimInToolResults(quotedLine, contents) {
-  const rawToolText = contents
+//
+// Now also checks pre-compaction text to support long-running investigations
+// where historical tool results have been compacted.
+export function lineIsVerbatimInToolResults(quotedLine, contents, preCompactionResults = new Map()) {
+  const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
     .map((p) => p.functionResponse.response?.result || "")
     .join("\n");
-  return rawToolText.includes(quotedLine.trim());
+  const preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  const allToolText = currentRawToolText + "\n" + preCompactionToolText;
+  return allToolText.includes(quotedLine.trim());
 }
 
 // Parses `LINE_QUOTE: <text>` markers (see the structural line-quote ask in
@@ -1749,7 +1754,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // own single-fire guard.
       if (answer && pendingVerification && !structuralRecheckUsed && step < cappedSteps) {
         const quotedLines = extractLineQuotes(answer);
-        const badQuotes = quotedLines.filter((q) => !lineIsVerbatimInToolResults(q, contents));
+        const badQuotes = quotedLines.filter((q) => !lineIsVerbatimInToolResults(q, contents, preCompactionResults));
         if (badQuotes.length) {
           const correctionNote =
             `[STRUCTURAL LINE-QUOTE CHECK FAILED] The following line(s) you quoted as exact source text could NOT be found verbatim in any raw tool result already in this conversation: ${badQuotes.map((q) => `"${q}"`).join(", ")}. This means at least one quoted line was reconstructed, paraphrased, or misremembered rather than copied exactly, which means the conditional/comparison claim it was meant to support has NOT actually been confirmed. Re-read the actual file or location again right now, copy the REAL line character-for-character (do not paraphrase, reformat whitespace, or reconstruct from memory), and give your corrected final answer along with a corrected LINE_QUOTE: <line> for each expression you're re-checking. This is the last verification round -- give your best, fully corrected final answer this time.`;
