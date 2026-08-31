@@ -143,3 +143,48 @@ Fix (implemented in `connectors/gemini/agent_checkpoint.js` and
 
 The exact compaction thresholds are still unvalidated starting guesses —
 see Status above, not part of this fix.
+
+## Caveat found (2026-08-31): visible reasoning text in `content` is not compacted
+
+Confirmed via a live `/v1/chat/completions` call against `glm-5.3-flash`
+that B.AI returns reasoning as a separate `message.reasoning_content`
+field, sibling to `message.content` (confirmed by
+`usage.completion_tokens_details.reasoning_tokens` being nonzero on that
+call). `fromOpenAIChoice()` (`connectors/openai_shape/adapter.js`) only
+ever reads `message.content`, so `reasoning_content` is already never
+pushed into `contents` and never resent — **no bug there, nothing to
+fix on that front.**
+
+The actual gap: the model sometimes also writes a visible step-by-step
+reasoning section *inside* `message.content` itself (confirmed on the
+same live call — a `# Step-by-Step Reasoning` block ahead of the actual
+answer). That text is real assistant-authored content, not a
+structured field the adapter is failing to filter, so it does get
+stored in `contents` and resent on every later step. Existing
+bulky-tool-result compaction doesn't apply here at all — it only ever
+targets tool-result turns, never the model's own `content` turns.
+
+Two options, not yet implemented, not started:
+
+1. **Prompt-level (try first).** Add a line to `SYSTEM_PREAMBLE`
+   (`connectors/gemini/agent_delegate.js`) telling the model to give its
+   final answer directly rather than restating a step-by-step reasoning
+   section in `content` — `reasoning_content` already captures that
+   internally and is already excluded from resend. Cheap, one-line
+   change, testable via the same kind of live call used to confirm this
+   caveat. Not guaranteed: it's a compliance ask to an open model, not a
+   structural fix.
+2. **Compaction-level (only if #1 proves unreliable).** Extend
+   compaction to assistant `content` turns above a char threshold once
+   aged out of the recent window — but **not** a blanket pointer-replace
+   like tool-result compaction. Unlike tool results (recoverable via the
+   side-store, and not something the model needs to "remember" beyond
+   having read them), an assistant's own past answer may be a finding
+   the model needs to build on in later steps. Naive pointer-replacement
+   here risks the same failure mode the plan already rejected for
+   whole-turn truncation ("risks losing findings the model hasn't acted
+   on yet"). If pursued, must strip only the reasoning preamble and
+   preserve the actual concluding answer, not replace the whole turn.
+
+Neither option started. Try #1 first; only reach for #2 if the model
+keeps restating full reasoning despite being told not to.
