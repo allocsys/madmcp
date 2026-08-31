@@ -77,10 +77,15 @@ feature onward always has it set, so that fallback branch is effectively
 dead code going forward. Not a gap.
 
 New item surfaced by this run's own answer, unrelated to compaction:
-`config.js`'s comment on `BAI_MODEL`'s default (`"glm-5.3-flash"`) says
-it is **not yet live-verified** — B.AI's docs never state the literal
-model-ID string, so the default is a guess from their doc URL slug, not
+`config.js`'s comment on `BAI_MODEL`'s default (`"glm-5.3-flash"`) said
+it was **not yet live-verified** — B.AI's docs never state the literal
+model-ID string, so the default was a guess from their doc URL slug, not
 confirmed against `GET https://api.b.ai/v1/models` with a real key.
+
+**Update (2026-08-31):** verified directly against `GET
+https://api.b.ai/v1/models` with a real key — `"glm-5.3-flash"` is
+correct. config.js's "NOT YET LIVE-VERIFIED" comment on `BAI_MODEL` is
+now stale and can be removed/updated next time that file is touched.
 
 Remaining work — **not started, out of scope unless explicitly asked
 for**:
@@ -97,9 +102,6 @@ for**:
   the manual validation above.
 - Investigate whether `resultCache` is missing the repeat calls
   observed in the first live `bai` run above.
-- Verify `BAI_MODEL`'s default (`"glm-5.3-flash"`) against a real
-  `GET https://api.b.ai/v1/models` call — currently unconfirmed per
-  config.js's own comment.
 
 ## Context
 
