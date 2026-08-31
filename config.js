@@ -200,14 +200,39 @@ export const GROQ_FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS || "qwen/q
 export const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS) || 55000;
 export const GROQ_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_DEFAULT_MAX_OUTPUT_TOKENS) || 4096;
 
+// ---------------------------------------------------------------------------
+// B.AI (api.b.ai) -- third delegate_agent provider option, OpenAI-compatible
+// like GLM/Groq above. UNLIKE GLM/Groq: key-rotation-only cascade, no
+// BAI_FALLBACK_MODELS (see connectors/bai/client.js's header for why --
+// there's deliberately only ever one model behind this provider).
+//
+// NO BAI_DEFAULT_MAX_OUTPUT_TOKENS, unlike GLM_DEFAULT_MAX_OUTPUT_TOKENS /
+// GROQ_DEFAULT_MAX_OUTPUT_TOKENS above: GLM's forced default exists because
+// OpenRouter defaults an unset max_tokens to the target model's full
+// context (65536), which 402'd against that account's exhausted paid
+// credit balance -- a real, observed cost problem. B.AI's GLM-5.3-Flash is
+// currently billed at 0 Credits (input/output/cache all free, see
+// docs.b.ai/llmservice/models/glm-5-3-flash/), so there is no equivalent
+// cost-runaway risk to guard against here. A caller-supplied
+// maxOutputTokens is still honored exactly when given (see
+// connectors/llm/router.js's "bai" branch); when omitted, no max_tokens is
+// sent at all and B.AI's own model default applies (65536 for
+// GLM-5.3-Flash per B.AI's docs) -- same "no forced default" contract as
+// the Gemini provider branch. Revisit if B.AI's free-tier pricing changes.
 export const BAI_API_KEYS = (process.env.BAI_API_KEYS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 export const BAI_API = "https://api.b.ai/v1/chat/completions";
+// NOT YET LIVE-VERIFIED: B.AI's docs never state the literal API model-ID
+// string for GLM-5.3-Flash (only a "your-model-id" placeholder throughout
+// their reference). "glm-5.3-flash" is a best guess from the doc URL slug
+// (docs.b.ai/llmservice/models/glm-5-3-flash/) -- confirm against
+// GET https://api.b.ai/v1/models with a real key before relying on this in
+// production.
 export const BAI_MODEL = process.env.BAI_MODEL || "glm-5.3-flash";
+// Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
 export const BAI_REQUEST_TIMEOUT_MS = Number(process.env.BAI_REQUEST_TIMEOUT_MS) || 55000;
-export const BAI_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.BAI_DEFAULT_MAX_OUTPUT_TOKENS) || 4096;
 
 export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSIONS || ".html,.css,.scss,.jsx,.tsx,.vue")
   .split(",")
