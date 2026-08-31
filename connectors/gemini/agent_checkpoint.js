@@ -74,7 +74,7 @@ function resultCacheKey(runId, signature) {
 //     here -- a caller-supplied value could be stale by the time the actual
 //     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, resultCache, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -110,7 +110,17 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     const preCompactionResultIds = preCompactionResults instanceof Map
       ? [...preCompactionResults.keys()]
       : Object.keys(preCompactionResults || {});
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    // Fix for the 2026-08-31 resultcache-not-persisted-on-resume bug: ids
+    // only, same rationale as preCompactionResultIds above -- the actual
+    // result text lives in its own side-store key (saveResultCacheEntry),
+    // never inlined here. This list exists purely so deleteCheckpoint can
+    // GC every resultcache:{runId}:* key a run wrote; nothing restores
+    // in-memory resultCache state from this list on load (see
+    // agent_delegate.js's lazy fetch-on-demand for why that's unnecessary).
+    const resultCacheIds = resultCache instanceof Map
+      ? [...resultCache.keys()]
+      : Object.keys(resultCache || {});
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, resultCacheIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
