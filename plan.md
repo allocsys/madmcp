@@ -7,12 +7,12 @@
 | History compaction (bai token-bloat) | Done — PR #119, merged `main`@`e0a8ee3` |
 | `resultCache` not persisted on resume | Fixed — PR #120, merged `main`@`b48e57f` |
 | Async poll could silently drive 20 steps | Fixed — PR #121, merged `main` |
-| **Heartbeat / in-flight step tracking** | **Done (steps 1-4 completed)** |
+| Heartbeat / in-flight step tracking | Merged — PR #123, merged `main`@`95e83a7` (step 5 live validation still pending) |
 | `deleteCheckpoint` GC never called in prod path | Open, undecided |
 | Visible reasoning text not compacted | Open, try prompt fix first |
 | Manual token-count validation vs baseline | Not completed |
 
-## Next up: Heartbeat / in-flight step tracking
+## Merged, pending live validation: Heartbeat / in-flight step tracking
 
 ### Problem
 
@@ -74,6 +74,10 @@ one bai key-rotation retry (~55s) plus normal step time.
    in-flight heartbeat.
 5. [ ] Live validation: reproduce the 2026-09-01 101s-gap scenario again
    with the fix in place and confirm no false "stalled" report.
+
+Merged via PR #123 (`main`@`95e83a7`). Full suite passing at merge:
+473/473 tests. Step 5 requires a real production run and is left open
+until that's observed.
 
 ## Condensed changelog (resolved)
 
