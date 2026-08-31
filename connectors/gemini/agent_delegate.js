@@ -389,7 +389,7 @@ function simpleLineDiff(aText, bText, { start_line, end_line } = {}) {
 const FUNCTIONS = [
   {
     name: "github_read_file",
-    description: "Read a file's contents from a GitHub repository. Called with no char_offset/char_limit, returns the whole file up to 30,000 chars; if longer, returns the first 30,000 chars plus the file's total length and instructions to pass char_offset yourself to keep reading -- there is no separate chunked/paginated tool, this same function does both. Pass char_offset/char_limit directly to jump to or page through a specific window (e.g. after github_search_code points at a line deep in a large file) instead of always starting from char 0.",
+    description: "Read a file's contents from a GitHub repository. ALWAYS call with no char_offset/char_limit first -- this returns the whole file up to 30,000 chars in one call (the common case), or the first 30,000 chars plus the file's total length and the exact char_offset to continue from if it's longer -- there is no separate chunked/paginated tool, this same function does both. Only pass char_offset/char_limit once you actually have a reason to: either THIS function's own prior response on this SAME file already told you it's longer than 30,000 chars and gave you the offset to continue, or a github_search_code hit already reports a specific line deep inside a file you independently know is large. Do not guess an offset on a file whose real size you haven't confirmed -- if in doubt, call with no params.",
     parameters: {
       type: "object",
       properties: {
@@ -835,7 +835,7 @@ const FUNCTIONS = [
   },
   {
     name: "github_get_file_at_commit",
-    description: "Read a file's contents as it existed at a specific commit SHA. Called with no char_offset/char_limit, returns the whole file up to 30,000 chars, or the first 30,000 plus total length and the offset to continue if longer -- pass char_offset/char_limit directly to page further or jump to a specific window.",
+    description: "Read a file's contents as it existed at a specific commit SHA. ALWAYS call with no char_offset/char_limit first -- returns the whole file up to 30,000 chars in one call, or the first 30,000 plus total length and the offset to continue if longer. Only pass char_offset/char_limit once you already know you need a specific window (this function's own prior truncation notice on this same file/commit, or a search hit pointing at a known-large file) -- do not guess an offset on a file whose real size you haven't confirmed.",
     parameters: { type: "object", properties: {
       owner: { type: "string" }, repo: { type: "string" }, path: { type: "string" }, commit: { type: "string" },
       char_offset: { type: "number", description: "Character offset to start reading from. Omit for default behavior." },
