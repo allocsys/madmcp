@@ -252,7 +252,13 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
         { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "c1", response: { result: originalText } } }] },
     ];
     const preCompactionResults = new Map();
-    compactHistoryInPlace(contents, 10, preCompactionResults, { provider: "bai" });
+    // Pass runId so compactHistoryInPlace actually persists the compacted
+    // result to the side-store (savePreCompactionResult) -- without it,
+    // this only populates the in-memory Map, and there'd be nothing in
+    // the fake Redis for getPreCompactionResults to find below. Awaited
+    // since the side-store writes are fired (not inlined) at the end of
+    // compactHistoryInPlace -- see its own comment on this.
+    await compactHistoryInPlace(contents, 10, preCompactionResults, { provider: "bai", runId });
     
     // Save
     await saveCheckpoint(runId, {
