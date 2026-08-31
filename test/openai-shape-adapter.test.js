@@ -1,14 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../connectors/openai_shape/adapter.js";
 
-// This is the highest-risk file in the whole GLM provider switch (plan.md
-// step 3): a subtle role/shape mismatch here would silently corrupt
-// checkpointed conversations. Written against a synthetic but realistic
-// multi-turn `contents` array shaped exactly like what agent_delegate.js's
-// loop actually produces (task turn -> model turn with a function call ->
-// user turn wrapping a functionResponse -> final model text turn), plus a
-// SYSTEM NOTE-bearing turn (step-budget/stuck-loop nudges mix a
-// functionResponse part with plain text in the SAME turn -- see
+// Tests for openai_shape/adapter.js. Written against a synthetic but
+// realistic multi-turn `contents` array shaped exactly like what
+// agent_delegate.js's loop actually produces (task turn -> model turn with a
+// function call -> user turn wrapping a functionResponse -> final model text
+// turn), plus a SYSTEM NOTE-bearing turn (step-budget/stuck-loop nudges mix
+// a functionResponse part with plain text in the SAME turn -- see
 // agent_delegate.js's header).
 
 describe("openai_shape/adapter.js — toOpenAIMessages", () => {
@@ -112,11 +110,7 @@ describe("openai_shape/adapter.js — toOpenAITools", () => {
     expect(toOpenAITools([{ functionDeclarations: [] }])).toBeUndefined();
   });
 
-  it("does NOT silently produce zero tools when handed the wrapper shape (regression test for the original draft's bug)", () => {
-    // The original (incorrect) draft of this plan assumed `tools` was
-    // already a flat array of declarations -- treating FUNCTION_DECLARATIONS
-    // that way would map over the single wrapper object instead of its
-    // contents and silently produce garbage/zero real tools.
+  it("does NOT silently produce zero tools when handed the wrapper shape", () => {
     const tools = toOpenAITools(FUNCTION_DECLARATIONS);
     expect(tools.length).toBe(2);
     expect(tools.every((t) => t.type === "function" && typeof t.function.name === "string")).toBe(true);
@@ -170,7 +164,7 @@ describe("openai_shape/adapter.js — fromOpenAIChoice", () => {
     expect(candidate.content.parts[0].functionCall.args).toEqual({});
   });
 
-  it("never produces MALFORMED_FUNCTION_CALL as a finishReason (known accepted asymmetry, plan.md step 3)", () => {
+  it("never produces MALFORMED_FUNCTION_CALL as a finishReason (known accepted asymmetry)", () => {
     // An OpenAI-compatible response with no tools available in the request
     // has no way to represent a rejected/malformed tool-call attempt --
     // finish_reason in that case is something ordinary like "stop" or

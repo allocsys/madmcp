@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // connectors/gemini/qstash_client.js — Upstash QStash client + inbound
-// signature verification, backing plan.md's Scenario B self-chaining
+// signature verification, backing Scenario B self-chaining
 // delegate_agent worker (connectors/gemini/agent_worker.js).
 //
 // SAME ACCOUNT, NEW PRODUCT: this is the same Upstash account already used

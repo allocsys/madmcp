@@ -1,15 +1,14 @@
 // ---------------------------------------------------------------------------
 // test/editor-tools.test.js
 //
-// Coverage for connectors/github/editor_tools.js's register() (delegate_editor,
-// plan.md step 7 + step 10's rollout gate). The one fact this test exists
-// to pin down: register() must be a genuine no-op -- server.tool() never
-// called at all -- when EDITOR_AGENT_ENABLED is false, and must register
-// exactly one tool named "delegate_editor" when it's true. Everything else
-// about the handler (arg validation, resume/transcript shaping) mirrors
-// delegate_designer's already-tested wrapper shape closely enough that a
-// full duplicate suite isn't the highest-value use of this step's time --
-// the gate itself is the guardrail unique to this file.
+// Coverage for connectors/github/editor_tools.js's register() rollout
+// gate. The one fact this test exists to pin down: register() must be a
+// genuine no-op -- server.tool() never called at all -- when
+// EDITOR_AGENT_ENABLED is false, and must register exactly one tool named
+// "delegate_editor" when it's true. Everything else about the handler (arg
+// validation, resume/transcript shaping) mirrors delegate_designer's
+// already-tested wrapper shape closely enough that a full duplicate suite
+// isn't necessary -- the gate itself is the guardrail unique to this file.
 //
 // config.js's EDITOR_AGENT_ENABLED is derived once at module-eval time from
 // process.env, so each block below uses vi.resetModules() + a fresh

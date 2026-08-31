@@ -1,8 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/glm/client.js — GLM via OpenRouter (openrouter.ai), an
 // OpenAI-compatible chat completions API. Structurally parallel to
-// connectors/gemini/client.js, see plan.md "Add GLM (via OpenRouter) as a
-// switchable alternative to Gemini".
+// connectors/gemini/client.js.
 //
 // TWO CASCADE AXES, not one: Gemini's client only ever cascades on model
 // (one API key). GLM needs both:

@@ -200,32 +200,31 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 // DELEGATE_AGENT_ASYNC below.
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 
-// Rollout flag (plan.md step 10): "qstash" opts into Scenario B end to end
+// Rollout flag: "qstash" opts into Scenario B end to end
 // (async start + poll/stale-fallback branching in agent_tools.js); any
 // other value (including unset, the default) keeps delegate_agent on
 // today's fully-synchronous behavior with no code path change at all --
 // flip back to disable Scenario B instantly without a revert if the chain
-// misbehaves in production. See plan.md's "Sequencing note".
+// misbehaves in production.
 export const DELEGATE_AGENT_ASYNC = process.env.DELEGATE_AGENT_ASYNC || "sync";
 
 // How fresh a checkpoint's lastStepAt must be for a resume_run_id poll to
 // be treated as "the background worker chain is still actively stepping"
 // (poll-only, don't touch the loop) rather than "the chain likely broke"
-// (fall back to resuming synchronously in this call) -- see plan.md's
-// "Tool behavior change". 25s default: comfortably longer than one Gemini
-// turn plus a QStash publish round-trip normally takes, short enough that a
-// genuinely-broken chain is detected and recovered from within a couple of
-// poll calls rather than minutes.
+// (fall back to resuming synchronously in this call). 25s default: 
+// comfortably longer than one Gemini turn plus a QStash publish round-trip 
+// normally takes, short enough that a genuinely-broken chain is detected 
+// and recovered from within a couple of poll calls rather than minutes.
 export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POLL_FRESH_SECONDS) || 25;
 
-// Dead-letter threshold (plan.md step 8): how many consecutive times the
-// SAME step can fail (a worker invocation that completes without
-// advancing stepsDone) before agent_worker.js stops re-chaining and
-// finalizes the checkpoint as "failed" instead of retrying forever. A
-// genuinely transient 429/503 succeeds well before this many attempts
-// (QStash's own delivery retries already space attempts out in practice);
-// this bounds the cost of a permanently broken run (bad config, a
-// non-transient error) rather than burning QStash messages/Gemini quota on
+// Dead-letter threshold: how many consecutive times the SAME step 
+// can fail (a worker invocation that completes without advancing 
+// stepsDone) before agent_worker.js stops re-chaining and finalizes the 
+// checkpoint as "failed" instead of retrying forever. A genuinely 
+// transient 429/503 succeeds well before this many attempts (QStash's 
+// own delivery retries already space attempts out in practice); this 
+// bounds the cost of a permanently broken run (bad config, a 
+// non-transient error) rather than burning QStash messages/Gemini quota on 
 // it indefinitely.
 export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
 
@@ -258,8 +257,7 @@ export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS)
 
 // ---------------------------------------------------------------------------
 // OpenRouter (GLM) -- second `delegate_agent` provider option alongside
-// Gemini, see plan.md "Add GLM (via OpenRouter) as a switchable alternative
-// to Gemini". Selected per-call via the `provider` arg on delegate_agent,
+// Gemini. Selected per-call via the `provider` arg on delegate_agent,
 // defaulting to DEFAULT_LLM_PROVIDER below so nothing breaks for existing
 // callers who don't pass it.
 //
@@ -268,9 +266,9 @@ export const EXA_REQUEST_TIMEOUT_MS = Number(process.env.EXA_REQUEST_TIMEOUT_MS)
 // isolation) -- deliberately NOT the same name as the singular
 // OPENROUTER_API_KEY already referenced in README.md/docs/API_KEYS.md/
 // docs/env.html from an earlier, never-wired-up pass. Those docs are being
-// updated to the plural name in the same change that introduces this (see
-// plan.md step 9) specifically so operators don't set the old singular name
-// and have it silently ignored.
+// updated to the plural name in the same change that introduces this,
+// specifically so operators don't set the old singular name and have it
+// silently ignored.
 export const OPENROUTER_API_KEYS = (process.env.OPENROUTER_API_KEYS || "")
   .split(",")
   .map((s) => s.trim())
@@ -317,22 +315,19 @@ export const GLM_REQUEST_TIMEOUT_MS = Number(process.env.GLM_REQUEST_TIMEOUT_MS)
 export const GLM_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GLM_DEFAULT_MAX_OUTPUT_TOKENS) || 8192;
 
 // Which provider delegate_agent uses when the caller doesn't pass `provider`.
-// Stays "gemini" until GLM is validated head-to-head on real review tasks
-// (see plan.md "Rollout") -- this is an explicit opt-in switch, not
-// automatic best-model routing.
+// This is an explicit opt-in switch, not automatic best-model routing.
 export const DEFAULT_LLM_PROVIDER = process.env.DEFAULT_LLM_PROVIDER || "gemini";
 
 // ---------------------------------------------------------------------------
-// Groq -- third `delegate_agent` provider option (see plan.md "Groq provider
-// addition"), added because GLM/OpenRouter's free tier turned out to be
-// gated by account credit balance (see plan.md "Current status" -- a
-// zero-balance account is blocked from OpenRouter's free models too, not
-// just paid ones). Groq's free tier is documented as request/token-rate-
-// limited instead, not tied to a dollar balance, and needs no credit card.
-// Also OpenAI-compatible like OpenRouter, so it reuses the same
-// translation layer (see connectors/openai_shape/adapter.js, extracted
-// from connectors/glm/adapter.js specifically so both providers share one
-// implementation instead of two copies drifting apart).
+// Groq -- third `delegate_agent` provider option, added because GLM/OpenRouter's
+// free tier turned out to be gated by account credit balance (a zero-balance 
+// account is blocked from OpenRouter's free models too, not just paid ones). 
+// Groq's free tier is documented as request/token-rate-limited instead, not 
+// tied to a dollar balance, and needs no credit card. Also OpenAI-compatible 
+// like OpenRouter, so it reuses the same translation layer (see 
+// connectors/openai_shape/adapter.js, extracted from connectors/glm/adapter.js 
+// specifically so both providers share one implementation instead of two 
+// copies drifting apart).
 //
 // GROQ_API_KEYS is plural/comma-separated, same rotation pattern as
 // OPENROUTER_API_KEYS/EXA_API_KEYS above.
@@ -342,16 +337,14 @@ export const GROQ_API_KEYS = (process.env.GROQ_API_KEYS || "")
   .filter(Boolean);
 export const GROQ_API = "https://api.groq.com/openai/v1/chat/completions";
 
-// Model choice verified directly against https://console.groq.com/docs/models
-// on 2026-08-27 (not from third-party benchmarks alone): Groq explicitly
-// classifies qwen/qwen3.6-27b as a PREVIEW model ("intended for evaluation
-// purposes only... may be discontinued at short notice") despite it
+// Model choice verified directly against https://console.groq.com/docs/models.
+// Groq explicitly classifies qwen/qwen3.6-27b as a PREVIEW model ("intended for 
+// evaluation purposes only... may be discontinued at short notice") despite it 
 // scoring highest on Groq's own intelligence ranking, while
 // openai/gpt-oss-120b is a PRODUCTION model. For a persistent, unattended
 // delegate_agent provider, availability stability matters more than a
 // benchmark edge, so production is the default and the stronger-but-
-// preview model is only the fallback -- do not swap this ordering without
-// re-reading plan.md's "Model choice -- CORRECTED" note first.
+// preview model is only the fallback.
 export const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 export const GROQ_FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS || "qwen/qwen3.6-27b")
   .split(",")
@@ -363,20 +356,15 @@ export const GROQ_FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS || "qwen/q
 export const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS) || 55000;
 
 // Default cap on Groq's max_tokens when a caller doesn't specify one
-// explicitly -- set UP FRONT this time, unlike GLM_DEFAULT_MAX_OUTPUT_TOKENS,
-// which was only added reactively after a live 402 revealed OpenRouter has
-// no sane default at all (see plan.md's "Current status" and the Groq
-// section's step 1 note: don't repeat that discovery-by-failure cycle).
-// 4096 follows Groq's own tool-use guidance ("set max_completion_tokens to
-// 3000-4000 for complex tasks" -- see console.groq.com/docs on built-in
-// tool use). NOT YET LIVE-VERIFIED: Groq's chat completions endpoint is
-// OpenAI-compatible, but it's unconfirmed whether it honors the legacy
-// `max_tokens` field name (what connectors/openai_shape/adapter.js and
-// glm/client.js both send) the same way for every model, or whether some
-// Groq models expect the newer `max_completion_tokens` name instead --
-// this needs live-testing in plan.md step 9 before being treated as
-// settled, exactly the kind of thing pre-emptive comments can flag but not
-// substitute for actually running the smoke test.
+// explicitly. 4096 follows Groq's own tool-use guidance ("set 
+// max_completion_tokens to 3000-4000 for complex tasks" -- see 
+// console.groq.com/docs on built-in tool use). NOT YET LIVE-VERIFIED: Groq's 
+// chat completions endpoint is OpenAI-compatible, but it's unconfirmed 
+// whether it honors the legacy `max_tokens` field name (what 
+// connectors/openai_shape/adapter.js and glm/client.js both send) the same 
+// way for every model, or whether some Groq models expect the newer 
+// `max_completion_tokens` name instead -- this needs live-testing before 
+// being treated as settled.
 export const GROQ_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_DEFAULT_MAX_OUTPUT_TOKENS) || 4096;
 
 // ---------------------------------------------------------------------------
@@ -420,22 +408,20 @@ export const FRONTEND_HARD_MAX_STEPS = Number(process.env.FRONTEND_HARD_MAX_STEP
 export const FRONTEND_MAX_VALIDATE_CALLS = Number(process.env.FRONTEND_MAX_VALIDATE_CALLS) || 5;
 
 // ---------------------------------------------------------------------------
-// delegate_editor (plan.md, "Limited GitHub write access for delegate_agent
+// delegate_editor (Limited GitHub write access for delegate_agent
 // (non-default-branch only)") -- config surface for steps 2-6 (allow/deny
 // lists, write caps, step budget, validate-call cap). The tools layer
-// (editor_tool_functions.js, step 3), checkpoint layer (editor_checkpoint.js,
-// step 4), agent loop (editor_delegate.js, step 5), and validate wiring
-// (editor_validate.js, step 6) are all built and unit-testable as of this
-// comment. MCP registration (step 7, editor_tools.js) is what actually
-// exposes this to a caller -- see EDITOR_AGENT_ENABLED below, which gates
-// that registration and stays "false" by default per plan.md step 10's
-// rollout posture until a human flips it on deliberately.
+// (editor_tool_functions.js), checkpoint layer (editor_checkpoint.js),
+// agent loop (editor_delegate.js), and validate wiring (editor_validate.js) 
+// are all built and unit-testable. MCP registration (editor_tools.js) 
+// is what actually exposes this to a caller -- see EDITOR_AGENT_ENABLED 
+// below, which gates that registration.
 //
 // Deliberately a SEPARATE config surface from FRONTEND_ALLOWED_EXTENSIONS
 // above, not a superset/reuse of it -- delegate_designer's scope is
-// intentionally narrower (frontend file types only) and this plan's
-// Non-goals section says explicitly that tool's fencing isn't being
-// loosened. EDITOR_* below is for the new, broader-scope tool only.
+// intentionally narrower (frontend file types only) and this tool's 
+// fencing is not being loosened. EDITOR_* below is for the new, 
+// broader-scope tool only.
 
 // Guardrail #3 (path/extension allowlist, "configurable per run rather than
 // hardcoded to frontend types"): unlike FRONTEND_ALLOWED_EXTENSIONS,
@@ -484,9 +470,9 @@ export const EDITOR_DENY_PATH_PATTERNS = (process.env.EDITOR_DENY_PATH_PATTERNS 
 // Guardrail #6: per-run and per-file write caps, same reasoning/shape as
 // FRONTEND_MAX_VALIDATE_CALLS -- bound the blast radius of a stuck or
 // misbehaving loop before a human ever looks at the branch. Also covers
-// the "long sequential chain" exposure noted in plan.md's parallel-
-// orchestration resolution (a chain of many small edits over time can
-// touch as much surface as a simultaneous batch would have).
+// the "long sequential chain" exposure from the parallel-orchestration
+// design (a chain of many small edits over time can touch as much surface
+// as a simultaneous batch would have).
 export const EDITOR_MAX_FILES_PER_RUN    = Number(process.env.EDITOR_MAX_FILES_PER_RUN) || 15;
 export const EDITOR_MAX_WRITES_PER_FILE  = Number(process.env.EDITOR_MAX_WRITES_PER_FILE) || 5;
 
@@ -506,14 +492,9 @@ export const EDITOR_MAX_VALIDATE_CALLS   = Number(process.env.EDITOR_MAX_VALIDAT
 export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) || 15;
 export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 24;
 
-// Rollout flag (plan.md step 10), same "disable without a revert" reasoning
-// as DELEGATE_AGENT_ASYNC above. FLIPPED TO DEFAULT-ON 2026-08-28 per explicit
-// operator request -- delegate_editor is now registered and callable unless
-// this is explicitly set to "false". Prior to this change it defaulted off
-// pending a deliberate human decision (plan.md step 10's original rollout
-// posture, and its own step 9 notes that checkpoint/validate-specific unit
-// tests and a live end-to-end smoke test were still outstanding at the time
-// this was flipped -- see plan.md's progress log).
+// Rollout flag, same "disable without a revert" reasoning
+// as DELEGATE_AGENT_ASYNC above. delegate_editor is registered and callable 
+// unless this is explicitly set to "false".
 export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
 
 // ---------------------------------------------------------------------------

@@ -167,7 +167,7 @@ app.post("/mcp", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 
 // QStash-invoked worker for delegate_agent's Scenario B self-chaining
-// background loop (plan.md) -- deliberately NOT behind requireMcpKey/
+// background loop -- deliberately NOT behind requireMcpKey/
 // requireAllowedIp (QStash calls from its own infrastructure, not from the
 // MCP client's network) or mcpLimiter (a long chain of legitimate one-
 // step-per-message calls for a single run would otherwise trip a limiter

@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
 // connectors/gemini/agent_worker.js — QStash-invoked HTTP endpoint that
 // advances a delegate_agent run one step at a time in the background
-// (plan.md Scenario B: self-chaining QStash worker).
+// (Scenario B: self-chaining QStash worker).
 //
 // Reuses runInvestigation's EXISTING synchronous loop one call at a time
 // (resume_run_id + singleStep: true) rather than a bespoke single-step
-// function extracted from it -- see plan.md's "Progress log" entry for
-// step 5 for why the literal per-step extraction the plan originally
+// function extracted from it -- see the "Progress log" entry for
+// step 5 for why the literal per-step extraction the design originally
 // called for turned out to be unnecessary, and riskier than this reuse,
 // given how much interacting fix history lives inside that loop body.
 //
@@ -17,7 +17,7 @@
 // with this call's own artificially-shrunk bound on every single
 // invocation -- withholding tools from every worker-driven step
 // regardless of how many the run was actually meant to have (see the
-// 2026-08-28 production-bug entry in plan.md's progress log). singleStep
+// 2026-08-28 production-bug entry in the progress log). singleStep
 // instead restores the true ceiling from the checkpoint (set once, at
 // seedRun time) and only bounds THIS call's own loop to one iteration.
 //
@@ -35,7 +35,7 @@
 // the same message already advanced it), this invocation no-ops instead of
 // double-executing a Gemini turn for a step that's already done.
 //
-// DEAD-LETTER / RETRY BOUND (plan.md step 8): `retryCount` bounds
+// DEAD-LETTER / RETRY BOUND (step 8): `retryCount` bounds
 // consecutive same-step failures (a step that completes without advancing
 // stepsDone -- e.g. a transient 429/503 that runInvestigation's own
 // per-step try/catch already turned into a `{ failed: true }` result rather
@@ -139,7 +139,7 @@ export async function handleAgentWorker(req, res) {
   }
 
   if (!advanced && newRetryCount >= AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) {
-    // Dead-letter (plan.md step 8): this exact step has now failed
+    // Dead-letter (step 8): this exact step has now failed
     // AGENT_WORKER_MAX_CONSECUTIVE_FAILURES times in a row without ever
     // advancing stepsDone. A genuinely transient 429/503 succeeds well
     // before this many attempts -- QStash's own delivery-retry backoff

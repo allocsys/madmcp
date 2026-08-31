@@ -1,8 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/groq/client.js — Groq (api.groq.com), an OpenAI-compatible
 // chat completions API. Structurally parallel to connectors/glm/client.js
-// (itself parallel to connectors/gemini/client.js) -- see plan.md "Groq
-// provider addition".
+// (itself parallel to connectors/gemini/client.js).
 //
 // SAME TWO CASCADE AXES AS GLM, for the same reasons (see glm/client.js's
 // header for the full explanation): outer cascade over GROQ_API_KEYS on
@@ -138,8 +137,7 @@ export async function groqChat(messages, { model = GROQ_MODEL, tools, maxOutputT
   // NOTE (see config.js's GROQ_DEFAULT_MAX_OUTPUT_TOKENS comment): sent as
   // `max_tokens`, matching GLM's client and the OpenAI legacy field name.
   // Not yet live-verified against Groq's actual API behavior for every
-  // model -- flagged for the live smoke test in plan.md step 9, not
-  // assumed correct just because it mirrors GLM.
+  // model -- not assumed correct just because it mirrors GLM.
   if (maxOutputTokens) body.max_tokens = maxOutputTokens;
 
   const data = await callChatCompletion(body, model);

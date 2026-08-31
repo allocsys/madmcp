@@ -35,8 +35,8 @@ export function register(server) {
   registerRepoMgmt(server);
   registerCloneToken(server);
   registerCodespaces(server);
-  // Self-gates on EDITOR_AGENT_ENABLED (plan.md step 10) -- a no-op call
-  // unless the flag is on, so delegate_editor doesn't appear on the MCP
-  // surface until a human flips it on deliberately.
+  // Self-gates on EDITOR_AGENT_ENABLED -- a no-op call unless the flag 
+  // is on, so delegate_editor doesn't appear on the MCP surface until a 
+  // human flips it on deliberately.
   registerEditor(server);
 }

@@ -1,7 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_delegate.js -- plan.md step 5, "Build the agent
-// loop" for delegate_editor ("Limited GitHub write access for delegate_agent
-// (non-default-branch only)").
+// connectors/github/editor_delegate.js -- core agent loop for delegate_editor ("Limited GitHub write access for agent").
 //
 // Adapts connectors/frontend/designer_delegate.js's runDesignAgent shape --
 // same multi-step Gemini function-calling loop, same checkpoint/resume
@@ -11,8 +9,8 @@
 // withholding fixes -- but:
 //
 //   - THREE tools (read_file/write_file/validate), same shape as
-//     designer_delegate.js's own three-tool loop -- plan.md step 6 wires
-//     validate() in here via editor_tool_functions.js's sibling module
+//     designer_delegate.js's own three-tool loop -- validate is wired
+//     in here via editor_tool_functions.js's sibling module
 //     editor_validate.js, capped per-file the same way
 //     FRONTEND_MAX_VALIDATE_CALLS caps designer_delegate.js's validate()
 //     (see EDITOR_MAX_VALIDATE_CALLS below). validate is opt-in, same as
@@ -41,7 +39,7 @@
 //     three-tool array never including anything outside its own scope.
 //
 // NOT YET WIRED TO AN MCP TOOL: exports runEditorAgent as a plain function,
-// unit-testable independently of any server.tool(...) registration (step 7)
+// unit-testable independently of any server.tool(...) registration
 // -- same "build the loop, unit test it independently" posture
 // designer_delegate.js's own header describes for its step.
 // ---------------------------------------------------------------------------
@@ -197,7 +195,7 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
     },
     {
       name: "validate",
-      description: "Syntax-check content against its file type (by extension) before writing. Capped per file path -- see the system instructions. Some extensions (.md, .txt) have no validator and always report valid.",
+      description: "Syntax-check content against its file type (by extension) before writing. Capped per file path -- see the system instructions. Some extensions (.md, .txt) have no syntax to check and will always report valid.",
       parameters: {
         type: "object",
         properties: {
@@ -229,7 +227,7 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
 // Runs the write-capable general-editor agent loop. Returns
 // { answer, steps, transcript, runId, writtenFiles, task, failed? } -- same
 // overall shape as designer_delegate.js's runDesignAgent / delegate_agent's
-// runInvestigation, so the eventual MCP-facing tool (step 7) can follow the
+// runInvestigation, so the eventual MCP-facing tool can follow the
 // same resume_run_id/failed-response conventions those already use.
 //
 // On a fresh call, owner/repo/branch/task are required; on a resume

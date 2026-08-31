@@ -56,7 +56,7 @@ describe("isPathAllowed", () => {
   });
 });
 
-describe("isPathDenied -- CI workflow and auth-file cases (plan.md step 9)", () => {
+describe("isPathDenied -- CI workflow and auth-file cases", () => {
   it("denies a write under .github/workflows/", () => {
     const result = isPathDenied(".github/workflows/ci.yml", { denyPatterns: DENY });
     expect(result.denied).toBe(true);

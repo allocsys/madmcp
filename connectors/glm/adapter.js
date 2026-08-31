@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/glm/adapter.js — thin re-export.
 //
-// EXTRACTED 2026-08-27 (see plan.md "Groq provider addition", step 3): this
+// EXTRACTED 2026-08-27: this
 // file used to contain the full toOpenAIMessages/toOpenAITools/
 // fromOpenAIChoice implementation, but none of it was ever OpenRouter-
 // specific -- it's pure Gemini-shape <-> OpenAI-shape translation, equally

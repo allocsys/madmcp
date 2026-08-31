@@ -45,7 +45,7 @@ function metaKey(runId) {
 //     know that on its own since it never sees the full array.
 //   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
 //     small stuff, always written in full (cheap regardless of run length).
-//   - status/lastStepAt (added for plan.md's async delegate_agent work,
+//   - status/lastStepAt (added for async delegate_agent work,
 //     Scenario A `waitUntil` and Scenario B QStash self-chaining -- both
 //     reuse this same meta shape): `status` is one of "running" | "done" |
 //     "failed", defaulting to "running" when omitted so every existing
@@ -72,7 +72,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
       // list-creation time.
       ops.push(client.expire(contentsKey(runId), CHECKPOINT_TTL_SECONDS));
     }
-    // finalAnswer (added alongside status/lastStepAt for plan.md's async
+    // finalAnswer (added alongside status/lastStepAt for async
     // delegate_agent work): only ever set by agent_delegate.js's completion
     // paths, once a run is genuinely done -- this is what lets a
     // resume_run_id poll of a "done" checkpoint (agent_delegate.js's
@@ -120,7 +120,7 @@ export async function loadCheckpoint(runId) {
     // checkpoint write was mid-loop and therefore always had at least one
     // turn already pushed. Two legitimate cases now produce an empty list
     // alongside real meta: (a) a "done" checkpoint (see agent_delegate.js's
-    // finishRun/hard-cap-finalize paths, added for plan.md's async
+    // finishRun/hard-cap-finalize paths, added for async
     // delegate_agent groundwork), which deliberately skips re-pushing
     // `contents` since nothing reads it once a run is finished -- only
     // finalAnswer/steps/transcript/task matter for a poll; and (b) a task

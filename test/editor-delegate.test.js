@@ -1,22 +1,19 @@
 // ---------------------------------------------------------------------------
 // test/editor-delegate.test.js
 //
-// Coverage for connectors/github/editor_delegate.js's runEditorAgent loop
-// (delegate_editor, plan.md step 5), focused on the guardrails that are
-// specific to THIS loop rather than already covered by
-// test/editor-tool-functions.test.js (guardrails #2/#3/#4, enforced at the
-// tool layer) or test/editor-policy.test.js (guardrails #3/#4's allow/deny
-// logic in isolation):
+// Coverage for connectors/github/editor_delegate.js's runEditorAgent loop,
+// focused on the guardrails that are specific to THIS loop rather than
+// already covered by test/editor-tool-functions.test.js (guardrails
+// #2/#3/#4, enforced at the tool layer) or test/editor-policy.test.js
+// (guardrails #3/#4's allow/deny logic in isolation):
 //
 //   - Guardrail #6 (per-run / per-file write caps), enforced inside
 //     write_file's execute() closure BEFORE writeFile() is ever called --
 //     this is the one guardrail that lives in editor_delegate.js itself,
 //     not editor_tool_functions.js, so it needs its own test here.
 //   - Guardrail #8 (no create_pull_request/merge_pull_request in this
-//     loop's own function set) -- plan.md step 9 explicitly calls out that
-//     this must be a TESTED structural fact, not an assumed one ("a
-//     fencing claim not backed by a test that would fail without the fence
-//     is not a verified fence").
+//     loop's own function set) -- this must be a TESTED structural fact,
+//     not an assumed one.
 //   - Guardrail #2 (default-branch refusal), checked once up front before
 //     the loop starts -- editor_tool_functions.test.js already covers
 //     assertNotDefaultBranch in isolation; this confirms runEditorAgent

@@ -1,14 +1,12 @@
 // ---------------------------------------------------------------------------
 // test/agent-tools-async.test.js
 //
-// Covers plan.md step 9's explicitly-named remaining gap: "the agent_tools.js
-// branching logic ... remain[s] unexercised." test/agent-worker.test.js and
+// Covers the agent_tools.js branching logic: test/agent-worker.test.js and
 // test/agent-delegate-async-checkpoint.test.js cover the worker endpoint and
 // the underlying runInvestigation resume mechanics respectively, but neither
 // exercises connectors/gemini/agent_tools.js's delegate_agent handler itself
-// -- the branching described in plan.md's "Tool behavior change" section
-// (fresh start / poll-fresh / poll-stale-fallback / done / failed), gated by
-// DELEGATE_AGENT_ASYNC + isQStashConfigured().
+// -- the branching (fresh start / poll-fresh / poll-stale-fallback / done /
+// failed), gated by DELEGATE_AGENT_ASYNC + isQStashConfigured().
 //
 // Unlike agent-worker.test.js and agent-delegate-async-checkpoint.test.js
 // (which wire up a real fake Redis to exercise genuine checkpoint
@@ -77,7 +75,7 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25 } = {}
   return server.tools.delegate_agent;
 }
 
-describe("agent_tools.js — delegate_agent async branching (plan.md 'Tool behavior change')", () => {
+describe("agent_tools.js — delegate_agent async branching", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
