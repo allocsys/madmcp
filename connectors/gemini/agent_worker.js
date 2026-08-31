@@ -113,6 +113,27 @@ export async function handleAgentWorker(req, res) {
     return res.status(200).json({ status: "no-op", reason: `stepsDone (${checkpoint.stepsDone}) != afterStep (${afterStep}) -- already advanced by another invocation` });
   }
 
+  // Heartbeat write (step 1): write stepStartedAt timestamp onto the checkpoint
+  // via saveCheckpoint, INSIDE the existing afterStep/stepsDone idempotency guard.
+  await saveCheckpoint(runId, {
+    transcript: checkpoint.transcript,
+    stepsDone: checkpoint.stepsDone,
+    task: checkpoint.task,
+    repeatCounts: checkpoint.repeatCounts,
+    consecutiveAllRepeatSteps: checkpoint.consecutiveAllRepeatSteps,
+    preCompactionResults: checkpoint.preCompactionResultIds,
+    resultCache: checkpoint.resultCacheIds,
+    provider: checkpoint.provider,
+    model: checkpoint.model,
+    maxOutputTokens: checkpoint.maxOutputTokens,
+    pendingVerification: checkpoint.pendingVerification,
+    structuralRecheckUsed: checkpoint.structuralRecheckUsed,
+    overallMaxSteps: checkpoint.overallMaxSteps,
+    status: checkpoint.status,
+    finalAnswer: checkpoint.finalAnswer,
+    stepStartedAt: Date.now(),
+  });
+
   let result;
   try {
     result = await runInvestigation({ resume_run_id: runId, singleStep: true });
@@ -162,6 +183,7 @@ export async function handleAgentWorker(req, res) {
       structuralRecheckUsed: latest.structuralRecheckUsed,
       status: "failed",
       finalAnswer: `Investigation stopped after ${AGENT_WORKER_MAX_CONSECUTIVE_FAILURES} consecutive failures on step ${latest.stepsDone + 1}: ${result.answer}`,
+      stepStartedAt: null,
     });
     console.error(`agent-worker: runId ${runId} dead-lettered after ${newRetryCount} consecutive failures on step ${latest.stepsDone + 1}`);
     return res.status(200).json({ status: "dead-lettered", steps: latest.stepsDone });
