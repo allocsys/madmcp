@@ -86,8 +86,14 @@ async function callChatCompletion(body) {
       const isOverloaded = err.status === 503;
       const isNetworkTransient = err.transient === true;
 
-      if (isBadKey) break;
-      if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
+      // NOTE: this client has only ONE loop (key rotation only -- see this
+      // file's header on why there's deliberately no inner model loop like
+      // groq/glm's clients have). A bad key (401/403) should move on to the
+      // next key, same as the rate-limited/overloaded/transient cases below
+      // -- it must NOT `break`, since with no inner loop to fall out of,
+      // `break` here would exit the whole key-rotation loop and abandon any
+      // remaining keys entirely.
+      if (!isBadKey && !isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
       if (isRateLimited) {
         await setModelCooldown(BAI_MODEL, parseRetryDelaySeconds(err.message), namespace);
       }
