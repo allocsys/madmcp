@@ -20,6 +20,7 @@ function makeFakeRedis() {
     async get(key) { return strings.has(key) ? strings.get(key) : null; },
     async lrange(key) { return lists.get(key) || []; },
     async del(key) { lists.delete(key); strings.delete(key); return 1; },
+    async mget(...keys) { return keys.map((k) => (strings.has(k) ? strings.get(k) : null)); },
   };
 }
 
@@ -46,7 +47,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     expect(preCompactionResults.get("call_1")).toBe(longText);
   });
 
-  it("ensures claims grounded in compacted tool results verify successfully via pre-compaction capture", () => {
+  it("ensures claims grounded in compacted tool results verify successfully via pre-compaction capture", async () => {
     const longText = "SECRET_TOKEN_XYZ_123 " + "A".repeat(1000);
     const contents = [
       { role: "user", parts: [{ text: "initial prompt" }] },
@@ -62,7 +63,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
 
     // Verify claim
     const claims = ["SECRET_TOKEN_XYZ_123", "FABRICATED_CLAIM_999"];
-    const unverified = findUnverifiedClaims(claims, contents, preCompactionResults);
+    const unverified = await findUnverifiedClaims(claims, contents, preCompactionResults);
 
     expect(unverified).toEqual(["FABRICATED_CLAIM_999"]);
   });
