@@ -209,4 +209,35 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     // Assert fabricated quote is correctly flagged as false (unverifiable) even with preCompactionResults
     expect(lineIsVerbatimInToolResults("this line was never in any tool result", contents, preCompactionResults)).toBe(false);
   });
+
+  it("integration test: checkpoint save/load correctly round-trips contents and preCompactionResults", async () => {
+    // Import here to use the mocked Redis environment set up in test/agent-checkpoint.test.js
+    const { saveCheckpoint, loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+    
+    const originalText = "BULKY_PAYLOAD_CONTENT_" + "X".repeat(600);
+    const runId = "test-integration-compaction-roundtrip";
+    
+    // Simulate: Step 1 (tool call) -> Step 2 (compaction) -> saveCheckpoint
+    const contents = [
+        { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "f" }, id: "c1" } }] },
+        { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "c1", response: { result: originalText } } }] },
+    ];
+    const preCompactionResults = new Map();
+    compactHistoryInPlace(contents, 10, preCompactionResults, { provider: "bai" });
+    
+    // Save
+    await saveCheckpoint(runId, {
+        newContents: contents,
+        transcript: [], stepsDone: 1, task: "t", repeatCounts: {}, consecutiveAllRepeatSteps: 0,
+        provider: "bai", preCompactionResults,
+    });
+    
+    // Load
+    const loaded = await loadCheckpoint(runId);
+    
+    // Check round-trip
+    expect(loaded.contents).toEqual(contents);
+    expect(loaded.preCompactionResults).toEqual(Object.fromEntries(preCompactionResults));
+    expect(loaded.preCompactionResults["c1"]).toBe(originalText);
+  });
 });
