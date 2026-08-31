@@ -220,6 +220,43 @@ run forward via `runInvestigation`. Tool/param descriptions
 (`delegate_agent`'s description, `max_steps`'s own description) updated
 to document the poll-vs-push contract. CI green, merged to `main`.
 
+### Live repro (2026-09-01): PR #121 works as designed, but the underlying stall-detection gap is still open
+
+Ran a real `delegate_agent` investigation (`provider: "bai"`) against this
+repo itself, task: summarize `agent_worker.js` + cross-check
+`AGENT_ASYNC_POLL_FRESH_SECONDS` between `config.js` and `agent_tools.js`.
+
+- Polled normally through steps 1/3/10. At 19 steps, a poll (no
+  `max_steps`) reported "stalled" — 101s since last activity — and
+  correctly stayed poll-only instead of silently driving steps, exactly
+  PR #121's fix.
+- Manually pushed forward with an explicit `max_steps: 21` (2 over the
+  20 already done — first tried `max_steps: 2`, which no-op'd because
+  `max_steps` bounds the whole run, not "N more steps"; the tool's own
+  error message explains this). The run was **not actually dead**: it
+  completed step 20 immediately and returned a real synthesized final
+  answer (verdict: no discrepancy between the two files' constant
+  usage) — no error, no retry needed.
+- **Confirms PR #121 does what it was built to do** (stopped the poll
+  from silently burning up to 20 real steps). **Does not close the gap
+  that motivated the heartbeat idea discussed separately**: `lastStepAt`
+  only reflects the last *completed* step, so a step that's merely slow
+  looks identical to a genuinely broken chain. This run is a live,
+  reproducible instance of exactly that false positive — worth
+  prioritizing an in-flight/heartbeat marker (worker writes a
+  `stepStartedAt` before calling `singleStep`, poll check takes
+  `max(lastStepAt, stepStartedAt)`) as the next step, per the earlier
+  discussion. A real fix also needs a separate, longer ceiling on
+  `stepStartedAt` itself (crash-mid-step still needs to read as dead
+  eventually), not just a lower floor on "fresh."
+- Root cause of the 101s gap not conclusively isolated — candidates:
+  QStash publish→delivery latency, the checkpoint's own Redis round
+  trip, or bai's single-key retry path (up to 55s observed elsewhere in
+  this file, see "Context" below). No per-hop timestamp exists yet to
+  tell these apart; would need separate instrumentation (e.g. logging
+  QStash publish time distinctly from worker-invocation time and
+  step-compute time) to pin down definitively rather than guess.
+
 ## Context
 
 `connectors/gemini/agent_delegate.js`'s investigation loop resends its
