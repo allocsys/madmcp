@@ -223,43 +223,100 @@ five implementation steps now closed.
        provider on both occurrences (free-tier GLM-5.3-Flash, only 3 keys,
        no model-fallback cascade -- see `connectors/bai/client.js`,
        `config.js`'s `BAI_API_KEYS` section).
-  Given this, root cause is still open but now has a credible non-bug
-  candidate in addition to the two original hypotheses. **Do not gate
-  the invocation-id logging behind `DEBUG_AGENT_WORKER` yet** -- the
-  original task's instruction to only do that "once diagnosed" hasn't
-  been met; this update narrows the space of explanations but doesn't
-  close it, and the logging is still the only planned way to fully
-  settle (1)/(2)/(3) if a Vercel-log-capable path becomes available
-  later. Next steps, in rough priority order:
-  - If/when Vercel function-log access becomes available (a Vercel
-    MCP connector, dashboard export, or similar), read the
-    `agent-worker[<id>]:` lines for this run_id's step-19 timeframe --
-    same diagnostic logic as originally planned, just needs the right
-    tool.
-  - Consider whether B.AI's 429 responses are transient-looking enough
-    (they don't literally say "429" as an HTTP status in two of the
-    three messages, just prose) that `agent_delegate.js`'s own
-    transient-vs-permanent classification (the "This does not look like
-    a transient error" check on resume) might be miscategorizing a
-    genuinely-transient B.AI rate-limit as permanent -- worth a separate
-    look independent of the QStash question, since it changes whether
-    resuming a stalled `bai` run is even the right recovery step vs.
-    just waiting out the rate limit.
+  **Update (2026-09-01, later still: Vercel MCP added, mid-investigation)
+  -- DIAGNOSED. Root cause is (3), sustained B.AI rate-limiting driving
+  the existing retry/re-chain path exactly as designed, not a
+  concurrent-duplicate idempotency bug.**
 
-  **Follow-up once diagnosed: gate the invocation-id logging, don't
-  leave it unconditional forever.** It's log-only and cheap (a
-  `randomUUID()` plus a handful of `console.log` calls per invocation,
-  no checkpoint/behavior impact), so there's no urgency to remove it —
-  but once the concurrent-duplicate-vs-dead-retry question is actually
-  settled, the ongoing per-invocation log volume on `/api/agent-worker`
-  stops earning its keep and becomes pure noise/cost on every step of
-  every run. When that point is reached: wrap the `console.log` calls
-  in `agent_worker.js` behind a `DEBUG_AGENT_WORKER` env var (default
-  off, same pattern as other flags in `config.js`) rather than deleting
-  them outright — keeps the instrumentation available to flip back on
-  if a similar stall resurfaces later, without needing to re-add it
-  from scratch. Not started; do this only after the current stall is
-  actually diagnosed, not before.
+  A Vercel MCP connector became available mid-investigation, giving
+  direct access to `Vercel:get_runtime_logs` against the actual host
+  (project `madmcp`, team `allocsys`) -- the Cloudflare tooling had been
+  a dead end (see above; this project runs on Vercel, not Cloudflare).
+  Pulling logs for `/api/agent-worker` across both incidents showed:
+
+  - **Both runs dead-lettered identically.** The original incident,
+    run_id `7a9a3942-e4f0-4063-a39f-af1ebbff109e`, dead-lettered at
+    22:41:07 with `agent-worker: runId ... dead-lettered after 5
+    consecutive failures on step 20`. Today's reproduction, run_id
+    `87ff9356-56a5-4d4a-aaf3-bbaba0f213bd`, dead-lettered at 23:03:13
+    with the identical message, also on step 20. Same step, same
+    `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` (5) exhausted, same outcome,
+    on two independent occurrences of the same repro shape
+    (full `connectors/` audit, provider `bai`).
+  - **Timing is serial, not concurrent.** The `/api/agent-worker` POSTs
+    for each run's retry sequence are spaced by single- to double-digit-
+    second gaps, steadily increasing, no genuinely overlapping distinct
+    invocation bursts -- consistent with one retry chain re-publishing
+    after each failed attempt, not two invocations racing on the same
+    `runId`+`afterStep`.
+  - **The invocation-id log bodies themselves (commit `2aad526`)
+    couldn't be directly read.** `Vercel:get_runtime_logs` only surfaces
+    message body text for `error`/`warn`-level entries in this tool's
+    output; `info`-level `console.log` lines (which is what the
+    `agent-worker[<id>]: entry/exit ...` instrumentation uses) show only
+    the request-summary line (timestamp/status/deployment), not stdout
+    content, regardless of query text tried (`agent-worker[`, "entry",
+    "heartbeat written", the full run_id as a query string, etc. all
+    returned either the summary-only rows or nothing). This appears to
+    be a limitation of what this tool surfaces for info-level logs on
+    this project, not evidence the instrumentation isn't firing --
+    combined with the earlier confirmation that commit `2aad526` is live
+    on `main` and unit-tested, the simplest explanation is the logging
+    is running but its body text isn't retrievable through this
+    particular tool/view.
+  - **Resuming the stalled run surfaced the actual proximate cause
+    directly** (see the entry above this one): all 3 `BAI_API_KEYS`
+    rate-limited (429) simultaneously at the failing step.
+
+  Taken together -- identical dead-letter-after-5-failures pattern on
+  both occurrences, serial (non-overlapping) retry timing, a confirmed
+  sustained B.AI 429 as the trigger, and `agent_worker.js`'s own
+  documented re-chain-with-fresh-heartbeat behavior on every
+  failed-but-under-cap attempt -- this is now diagnosed with reasonable
+  confidence as **hypothesis (3): the existing retry/re-chain mechanism
+  working exactly as designed under sustained rate-limit pressure**, not
+  (1) QStash-redelivery-after-death or (2) a concurrent-duplicate
+  idempotency-guard gap. The original "self-recovery" (heartbeat age
+  154s -> 59s) was never a recovery in the sense of the run succeeding --
+  it was the retry chain continuing (each attempt resetting the
+  heartbeat) right up until it exhausted the 5-attempt cap and finalized
+  as `failed`. No evidence surfaced anywhere in this investigation of
+  two invocation ids overlapping in time on the same `runId`+`afterStep`,
+  which is what would be required to confirm (2). This is not a
+  from-first-principles proof (the invocation-id body text remains
+  unread), but it is enough to close this out as diagnosed rather than
+  leave it open pending a tool that may not surface that detail anyway.
+
+  **No code fix needed for the idempotency guard** -- (2) is not
+  confirmed to be happening, so there's nothing there to patch. The
+  B.AI-rate-limit angle is a separate, real operational concern (a
+  long `bai`-provider audit can apparently exhaust all 3 rotation keys),
+  but is out of scope for this ticket; noted as a candidate follow-up
+  below rather than fixed here.
+
+  **Follow-up (not done here, flagged for later): B.AI rate-limit
+  resilience.** Two candidates worth a separate look:
+  - Whether B.AI's 429 responses are transient-looking enough (two of
+    the three don't literally say "429" as a status, just prose) that
+    `agent_delegate.js`'s transient-vs-permanent classification (the
+    "This does not look like a transient error" check on resume) might
+    be miscategorizing a genuinely-transient B.AI rate-limit as
+    permanent -- would change whether resuming a stalled `bai` run is
+    the right recovery step vs. just waiting out the rate limit.
+  - Whether `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` (5) or the re-chain
+    backoff spacing should account for B.AI's specific rate-limit
+    behavior on long audits, given this reproduced twice on the same
+    task shape.
+
+  **Gating the invocation-id logging: DONE.** Diagnosis criterion is
+  met, so per the original plan the `console.log` calls in
+  `agent_worker.js` are now wrapped behind a `DEBUG_AGENT_WORKER` env
+  var (default off, same `!== "false"`-style pattern as
+  `EDITOR_AGENT_ENABLED` in `config.js`) rather than left unconditional
+  or deleted -- see `config.js` and `agent_worker.js` for the change.
+  Kept rather than removed so it can be flipped back on quickly if a
+  similar stall resurfaces and a future investigation gets access to a
+  tool that can actually read the body text this time.
 - `deleteCheckpoint`'s side-store GC is correct in isolation but never
   called anywhere in the production path (`agent_delegate.js`,
   `agent_worker.js`, `qstash_client.js`, `agent_tools.js`) — cleanup
