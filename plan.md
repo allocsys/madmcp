@@ -108,6 +108,22 @@ five implementation steps now closed.
 
 ## Open items (not started, no active work)
 
+- **New (2026-09-01): genuine QStash worker-chain stall observed live.**
+  A second `bai`-provider audit run (run_id
+  `7a9a3942-e4f0-4063-a39f-af1ebbff109e`, a full `connectors/` directory
+  audit) completed 19 steps normally, then went silent for 154s (past
+  the 120s `AGENT_ASYNC_STEP_DEAD_SECONDS` ceiling) and was correctly
+  reported as stalled rather than "still running" forever — this is the
+  crash-detection half of PR #123 working as designed, a good real-world
+  validation of that path specifically (distinct from the false-stall
+  fix, which was validated separately same day). All 13 connector
+  subfolders had already been read by step 19, so the run was close to
+  done. Not yet resumed/diagnosed. Open question: why did the QStash
+  re-chain actually break here (a dropped/failed `publishAgentStep`
+  call, a worker crash mid-step, a QStash-side delivery failure) —
+  the heartbeat fix correctly *detects* dead chains, it doesn't explain
+  *why* they die. Worth checking Cloudflare/Vercel function logs for
+  this runId's timeframe if it recurs.
 - `deleteCheckpoint`'s side-store GC is correct in isolation but never
   called anywhere in the production path (`agent_delegate.js`,
   `agent_worker.js`, `qstash_client.js`, `agent_tools.js`) — cleanup
