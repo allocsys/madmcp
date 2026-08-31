@@ -1,5 +1,20 @@
 # Plan: Reduce context/token bloat in delegate_agent's investigation loop
 
+## Status (2026-08-31)
+
+Feature is implemented and shipped on `feat/history-compaction-bai`. All
+known bugs (see changelog below) are fixed. Full suite verified via fresh
+clone: **468/468 passing**.
+
+Remaining work — **not started, out of scope unless explicitly asked
+for**:
+- Manual validation: a real multi-step `bai` run, comparing input
+  tokens/step and answer quality against an uncompacted baseline, plus
+  confirming a parallel `gemini` run is fully unaffected.
+- Threshold tuning (`HISTORY_FULL_DETAIL_STEPS`, the char threshold) —
+  current values are starting guesses, meant to be revisited only after
+  the manual validation above.
+
 ## Context
 
 `connectors/gemini/agent_delegate.js`'s investigation loop resends its
@@ -59,117 +74,72 @@ before this feature). Gemini/GLM/Groq are untouched by default.
    out, non-bulky never compacted, compacted-then-re-requested served
    from cache — all under `provider: "bai"`; `provider: "gemini"` run
    confirms byte-for-byte unchanged history.
-6. Manual validation: real multi-step `bai` run — input tokens/step level
-   off, answer quality unaffected vs. uncompacted baseline; parallel
-   `gemini` run on the same task fully unaffected.
+6. **Not started.** Manual validation — see Status above.
 
-Open question: exact thresholds (`HISTORY_FULL_DETAIL_STEPS`, char
-threshold) are starting guesses, tune after step 6, not final.
+Steps 1–5 done and tested. Step 6 is the open item tracked in Status.
 
-## Bugs found and fixed during implementation review (changelog)
+## Bugs found and fixed during implementation (changelog)
 
-- **Compaction broke `findUnverifiedClaims`** (substring-matches claims
-  against raw tool text, which compaction had replaced). Fixed: capture
-  pre-compaction text into a `preCompactionResults` Map before
-  overwriting; check both current + pre-compaction text.
-- **`preCompactionResults` piggybacked on `resultCache`**, which doesn't
-  survive checkpoint resume — silently re-broke the bug above on resumed
-  `bai` runs. Fixed: dedicated Map, threaded through
-  `saveCheckpoint`/`loadCheckpoint` like `repeatCounts`.
-- **Compaction didn't survive a checkpoint resume** — `contents`' Redis
-  list is append-only, so an in-memory-only compacted turn came back
-  uncompacted after a resume, re-sending full bloat on the next
-  `providerChat` call. Fixed: re-run `compactHistoryInPlace` on restored
-  `contents`/`preCompactionResults` immediately after `loadCheckpoint`,
-  before the loop's first `providerChat` call.
-- **Off-by-one in the full-detail window** — `compactHistoryInPlace` runs
-  before the current step is appended, so the window formula silently
-  kept 2 full-detail steps instead of 3. Fixed: threshold corrected to
-  `stepIndex <= (currentStep - 1) - fullDetailSteps`, `currentStep`
-  consistently meaning "the step about to run" at every call site.
-- **`functionResponse.id` isn't guaranteed unique across a whole run** —
-  a reused id could let compaction overwrite an earlier turn's saved
-  text. Fixed: `setPreCompactionResult` helper stores under a
-  disambiguated key (`${id}#2`, ...) instead of overwriting.
-- **`lineIsVerbatimInToolResults` was never updated for compaction**
-  (same class of bug as `findUnverifiedClaims` above, fixed later).
-  Fixed: threaded `preCompactionResults` through it the same way.
-  Regression tests in `test/history_compaction_test.js` cover both the
-  false-positive and true-positive cases.
-- **False alarm, checked, do not re-raise without new evidence**:
-  `setPreCompactionResult`'s `#2`/`#3` collision suffixing does not
-  depend on Map/object iteration order (it resolves via explicit
-  `.has()`/`.get()` on specific keys), so the `Object.fromEntries` ->
-  JSON -> `Object.entries` -> `Map` round-trip through checkpoints does
-  not affect its correctness.
+Condensed to the lessons that matter for future changes in this area —
+see git history for full narrative if needed.
 
-## Current outstanding issue (2026-08-31): `preCompactionResults` checkpoint-bloom
+- Compaction broke `findUnverifiedClaims` and
+  `lineIsVerbatimInToolResults` (both substring-match against raw tool
+  text, which compaction had already overwritten). Fixed by capturing
+  pre-compaction text before overwriting and checking it as a fallback.
+- Pre-compaction text lives in a dedicated Map (now a Redis side-store,
+  see below) — never in `resultCache`, which doesn't survive checkpoint
+  resume.
+- Compaction must be re-applied to restored `contents` immediately after
+  `loadCheckpoint`, before the loop's first `providerChat` call, or a
+  resumed run silently re-sends uncompacted history.
+- The full-detail window is computed relative to `currentStep` meaning
+  "the step about to run," consistently at every call site — get this
+  wrong and you under/over-count the recent window by one.
+- `functionResponse.id` is not guaranteed unique across a whole run;
+  pre-compaction storage keys must disambiguate collisions (`${id}#2`,
+  ...) rather than overwrite.
 
-**Bug**: commit `2eea726` ("Fix #1: Bound preCompactionResults") added
-mid-run eviction in `agent_checkpoint.js`'s `saveCheckpoint` — deletes the
-oldest `preCompactionResults` entries once `size > 200`
-(`MAX_PRE_COMPACTION_RESULTS_ENTRIES`). **This reopens the
-findUnverifiedClaims/lineIsVerbatimInToolResults false-fail bug** (see
-changelog above) for any run compacting >200 results — exactly the long
-`bai` runs this feature targets. Root cause: `saveCheckpoint` writes
-`meta` (which includes `preCompactionResults`) as one full JSON blob on
-every call, unlike `contents`, which is append-delta via `RPUSH` — so an
-unbounded Map means unbounded per-step write cost, and `2eea726` "fixed"
-that by evicting live verification data instead of changing the storage
-shape.
+## Resolved: `preCompactionResults` checkpoint-bloat (side-store fix)
 
-**Do not fix by tuning the cap or eviction order** — any mid-run deletion
-of verification data is the bug, regardless of threshold. Fix with a
-side-store instead:
+Previously tracked as "Current outstanding issue" (2026-08-31). **Closed
+— fixed and verified, 468/468 tests pass on this branch.**
 
-1. **Remove the `2eea726` eviction block** in `saveCheckpoint` (the
-   `size > MAX_PRE_COMPACTION_RESULTS_ENTRIES` loop and that constant).
-2. **Side-store writes**: in `compactHistoryInPlace`, when a result is
-   first compacted, write its full text once to Redis key
-   `precompact:{runId}:{id}` via a new `agent_checkpoint.js` helper
-   (`savePreCompactionResult(runId, id, text)`) — not just the in-memory
-   Map.
-3. **Shrink `meta`**: serialize `preCompactionResults` as just the set of
-   ids with a side-store entry, not the text. **Correction (2026-08-31
-   review): this is not O(new entries this step) and does not match
-   `contents`' `RPUSH` pattern** — `saveCheckpoint` still writes `meta`
-   as one full `client.set()` overwrite every call, so the ids-set is
-   re-serialized in full each time regardless of how it's stored. The
-   real win is a much smaller per-entry cost (an id vs. up to 30k chars
-   of text), not a change in growth order — `meta` write size is still
-   O(total ids compacted so far), just with a far smaller constant. If
-   O(delta) writes are actually needed for very long runs, `meta`'s ids
-   set would itself need to move to an append-only structure (e.g. a
-   Redis SET/RPUSH of ids, mirroring `contents`), which this fix does
-   not attempt — call that out as a possible follow-up, not implied as
-   already solved here.
-4. **Fetch-on-demand**: thread `runId` through `findUnverifiedClaims` and
-   `lineIsVerbatimInToolResults` (new `getPreCompactionResult(runId, id)`)
-   so a Map miss falls back to the side-store. **Two implementation
-   details the plan glossed over (2026-08-31 review):**
-   - `lineIsVerbatimInToolResults` is currently called inside a
-     synchronous predicate (`quotedLines.filter(q =>
-     !lineIsVerbatimInToolResults(...))`). Making its side-store lookup
-     async means that call site needs restructuring — e.g. resolve all
-     lookups first via `Promise.all`, then `filter` on the resolved
-     results — not a drop-in `async`/`await` on the existing signature.
-   - A naive per-id `GET` on every compacted id, on every verification
-     pass, is a real latency cost on exactly the long `bai` runs this
-     targets (runs compacting 200+ ids). Batch the fetch with a single
-     `MGET` across all ids needed for that pass instead of one round
-     trip per id.
-5. **GC only at run completion**: extend `deleteCheckpoint` to
-   batch-delete all `precompact:{runId}:*` keys, mirroring its existing
-   `contentsKey`/`metaKey` cleanup. No mid-run deletion, ever.
-6. **Tests**: side-store populates correctly across save/resume;
-   checkpoint `meta` write size stays flat over a long run; no entry is
-   ever lost mid-run regardless of compacted-result count.
+Root cause: commit `2eea726` added mid-run eviction of
+`preCompactionResults` once it exceeded 200 entries, which silently
+reopened the `findUnverifiedClaims`/`lineIsVerbatimInToolResults` bug
+above for any run compacting more than 200 results.
 
-**Also confirmed, not yet fixed**: no test exercises the real
-resume → recompaction path end-to-end. `test/history_compaction_test.js`'s
-round-trip test only calls `compactHistoryInPlace` directly on hand-built
-arrays, never the actual `loadCheckpoint`/`saveCheckpoint`/
-`runInvestigation` resume path. Fold into step 6 above (integration test
-via mocked or real test Redis: save checkpoint mid-run, resume via
-`runInvestigation`, assert resumed `contents` sent to `providerChat` is
-already compacted).
+Fix (implemented in `connectors/gemini/agent_checkpoint.js` and
+`agent_delegate.js`):
+
+1. Removed the `2eea726` eviction block and its cap constant. No
+   mid-run deletion of verification data, ever — this is the core
+   invariant; don't reintroduce it by tuning the cap or eviction order.
+2. Full compacted text is written once to a Redis side-store key
+   `precompact:{runId}:{id}` (`savePreCompactionResult`) instead of
+   living only in memory.
+3. Checkpoint `meta` now stores only the *ids* of compacted results, not
+   their text. This shrinks the per-write cost substantially (an id vs.
+   up to 30k chars) but `meta` is still one full overwrite per
+   `saveCheckpoint` call — O(total ids so far), not O(delta). A true
+   append-only ids store (mirroring `contents`' `RPUSH`) would be needed
+   for O(delta) writes on very long runs; not implemented, flagged as a
+   possible follow-up.
+4. `findUnverifiedClaims`/`lineIsVerbatimInToolResults` fall back to the
+   side-store (`getPreCompactionResult`) on a Map miss. Both are now
+   async as a result; lookups are batched via a single `MGET` per
+   verification pass rather than one round trip per id.
+5. `deleteCheckpoint` batch-deletes all `precompact:{runId}:*` keys
+   alongside `contents`/`meta`. GC only fires at genuine run completion,
+   never mid-run.
+6. Tests added (`test/history-compaction.test.js`): GC removes
+   side-store entries; `meta` stays flat (ids only, no text) over a long
+   run; a 250-entry run round-trips fully through save/load with no
+   loss (regression guard against the removed 200-cap). Also added: an
+   integration test exercising the real
+   `loadCheckpoint` → recompaction → `providerChat` resume path, which
+   was previously only unit-tested against hand-built arrays.
+
+The exact compaction thresholds are still unvalidated starting guesses —
+see Status above, not part of this fix.
