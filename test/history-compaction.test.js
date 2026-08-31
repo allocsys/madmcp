@@ -299,7 +299,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     });
 
     // 2. Mock providerChat from ../llm/router.js so we can inspect `contents` passed into it on the resumed call
-    const routerModule = await import("../llm/router.js");
+    const routerModule = await import("../connectors/llm/router.js");
     const originalProviderChat = routerModule.providerChat;
     
     let capturedContentsPassedToChat = null;
