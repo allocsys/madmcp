@@ -233,6 +233,54 @@ export async function getPreCompactionResults(runId, ids) {
   return found;
 }
 
+// Side-store for a single tool call's cached result text, keyed by the
+// same normalized-call signature agent_delegate.js's resultCache Map uses
+// in memory (fix for the 2026-08-31 resultcache-not-persisted-on-resume
+// bug -- see plan.md). Mirrors savePreCompactionResult immediately above in
+// shape and contract (write once, on first computation of a given key;
+// fails open; never throws), but keyed by call signature instead of a
+// functionResponse id, and written on EVERY fresh (non-cached) tool call
+// agent_delegate.js executes -- not just ones that later get compacted --
+// since any of them could turn out to be repeated across a resume/step
+// boundary.
+export async function saveResultCacheEntry(runId, signature, text) {
+  const client = getRedis();
+  if (!client) return;
+  try {
+    await client.set(resultCacheKey(runId, signature), text, { ex: CHECKPOINT_TTL_SECONDS });
+  } catch {
+    // best-effort -- see file header
+  }
+}
+
+// Batched fetch-on-demand for cached result text (fix for the 2026-08-31
+// resultcache-not-persisted-on-resume bug -- see plan.md). Mirrors
+// getPreCompactionResults immediately above: a fresh runInvestigation
+// invocation's in-memory resultCache Map starts empty regardless of
+// whether this is a resume, so before executing a step's function calls,
+// agent_delegate.js collects every signature that repeatCounts (which IS
+// restored from the checkpoint) already knows is a repeat but the local
+// Map doesn't have yet, and fetches all of them here in ONE round trip
+// (MGET) rather than one GET per signature.
+// Fails open -- returns an empty Map on any error or missing Redis, same
+// contract as every other function in this file. Never throws.
+export async function getResultCacheEntries(runId, signatures) {
+  const sigList = [...new Set((signatures || []).filter(Boolean))];
+  const found = new Map();
+  if (!sigList.length) return found;
+  const client = getRedis();
+  if (!client) return found;
+  try {
+    const values = await client.mget(...sigList.map((sig) => resultCacheKey(runId, sig)));
+    sigList.forEach((sig, i) => {
+      if (values[i] != null) found.set(sig, values[i]);
+    });
+  } catch {
+    // best-effort -- see file header
+  }
+  return found;
+}
+
 // Deletes a checkpoint once a run finishes (a final answer, or the model
 // stops issuing function calls) -- nothing left to resume. Clears the
 // contents/meta keys, plus (plan.md step 5) every precompact:{runId}:*
