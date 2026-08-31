@@ -21,6 +21,11 @@ function makeFakeRedis() {
     async lrange(key) { return lists.get(key) || []; },
     async del(key) { lists.delete(key); strings.delete(key); return 1; },
     async mget(...keys) { return keys.map((k) => (strings.has(k) ? strings.get(k) : null)); },
+    // Test-only introspection hook (not part of the real @upstash/redis
+    // surface): lets a test inspect the literal raw string written for a
+    // key, rather than only what loadCheckpoint's parsed return shape
+    // reflects. Used by the meta-flatness test below.
+    _strings: strings,
   };
 }
 
