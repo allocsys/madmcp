@@ -83,7 +83,7 @@ export const BULKY_TOOL_NAMES = new Set([
 //
 // Gated on HISTORY_COMPACTION_PROVIDERS.includes(provider) so non-opted-in
 // providers (like default gemini) remain completely unaffected byte-for-byte.
-export function compactHistoryInPlace(contents, currentStep, {
+export function compactHistoryInPlace(contents, currentStep, preCompactionResults, {
   fullDetailSteps = HISTORY_FULL_DETAIL_STEPS,
   charThreshold = COMPACTION_CHAR_THRESHOLD,
   bulkyTools = BULKY_TOOL_NAMES,
@@ -92,29 +92,36 @@ export function compactHistoryInPlace(contents, currentStep, {
   const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
   if (!isEnabled || !Array.isArray(contents)) return;
 
-  // We scan contents for model turns (which carry step/turn context) and user turns
-  // (which carry functionResponse parts).
-  // A turn is "older than fullDetailSteps" if its step < currentStep - fullDetailSteps + 1
-  // or equivalently if the number of completed steps since that turn exceeds fullDetailSteps.
-  // We track the step number of tool turns based on the structure: each step consists of
-  // a model turn followed by a user turn (functionResponse).
-  // More directly: user turns with functionResponses appear in order corresponding to step 1, 2, ...
+  let modelTurnStack = [];
   let stepIndex = 0;
   for (const turn of contents) {
-    if (turn.role === "user" && Array.isArray(turn.parts)) {
+    if (turn.role === "model") {
+      modelTurnStack.push(turn);
+    } else if (turn.role === "user" && Array.isArray(turn.parts)) {
       const hasFunctionResponses = turn.parts.some((p) => p.functionResponse);
       if (hasFunctionResponses) {
         stepIndex++;
-        // If this step is older than the recent window (i.e. older than currentStep - fullDetailSteps + 1)
+        const recentModelTurn = modelTurnStack[modelTurnStack.length - 1];
         if (stepIndex <= currentStep - fullDetailSteps) {
           for (const part of turn.parts) {
             if (part.functionResponse && bulkyTools.has(part.functionResponse.name)) {
               const res = part.functionResponse.response;
               if (res && typeof res.result === "string" && res.result.length > charThreshold) {
+                // Store original text before compacting
+                preCompactionResults.set(part.functionResponse.id, res.result);
+
                 const originalLength = res.result.length;
                 const toolName = part.functionResponse.name;
-                // Find target if possible by inspecting preceding model call or keeping a succinct note
-                res.result = `[Earlier tool result compacted: ${toolName}, originally ${originalLength} chars — call the tool again if the exact content is needed; resultCache will serve it without a new network round trip.]`;
+                let target = "";
+                if (recentModelTurn && recentModelTurn.parts) {
+                  const call = recentModelTurn.parts.find(p => p.functionCall?.id === part.functionResponse.id);
+                  if (call) {
+                    const args = call.functionCall.args || {};
+                    target = args.path || args.pull_number || args.query || args.run_id || args.job_id || "";
+                  }
+                }
+                const targetDisplay = target ? ` (${target})` : "";
+                res.result = `[Earlier tool result compacted: ${toolName}${targetDisplay}, originally ${originalLength} chars — call the tool again if the exact content is needed; resultCache will serve it without a new network round trip.]`;
               }
             }
           }
@@ -1167,13 +1174,15 @@ function extractMechanicalClaims(answerText) {
 // own earlier assertions would just let a wrong claim "verify" itself by
 // citing itself. A claim is "verified" only if it appears verbatim in
 // something an actual tool returned.
-function findUnverifiedClaims(claims, contents) {
-  const rawToolText = contents
+function findUnverifiedClaims(claims, contents, preCompactionResults) {
+  const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
     .map((p) => p.functionResponse.response?.result || "")
     .join("\n");
-  return claims.filter((claim) => !rawToolText.includes(claim));
+  const preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  const allToolText = currentRawToolText + "\n" + preCompactionToolText;
+  return claims.filter((claim) => !allToolText.includes(claim));
 }
 
 // Conditional/comparison-expression claims (2026-08-27, fix for a Run 5
@@ -1650,7 +1659,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // generic instruction the model can satisfy by just re-reading its
         // own draft and feeling confident about it again.
         const mechanicalClaims = extractMechanicalClaims(answer);
-        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents);
+        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents, resultCache);
         const claimNote = unverifiedClaims.length
           ? `\n\n[SPECIFIC ITEMS TO CHECK] The following identifier(s)/snippet(s) in your draft answer do not appear verbatim in any raw tool result you've fetched so far this run: ${unverifiedClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: re-read or re-search the specific file/location it's claimed to come from and confirm it exact-matches what's actually there, THEN either (a) keep the claim only if you can now quote it verbatim from a fresh tool result, or (b) correct it if the fresh read shows something different. Do not restate any of these unchanged based on memory or on the fact that you already wrote it once -- that is exactly the failure mode this check exists to catch. (Note: some of these may be false positives -- ordinary words, or claims already correctly quoted -- but each one still needs a fresh check, not a guess about which category it's in.)`
           : "";
@@ -1990,7 +1999,9 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
 
     // Compact older bulky tool results in contents before appending this step's turns
     // (or before saving checkpoint / sending next turn), only if provider opted in.
-    compactHistoryInPlace(contents, step, { provider: effectiveProvider });
+    // We pass a preCompactionResults map to store text that gets compacted,
+    // so it remains available for findUnverifiedClaims.
+    compactHistoryInPlace(contents, step, resultCache, { provider: effectiveProvider });
 
     contents.push({ role: "user", parts: responseParts });
 
