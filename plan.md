@@ -7,7 +7,7 @@
 | History compaction (bai token-bloat) | Done — PR #119, merged `main`@`e0a8ee3` |
 | `resultCache` not persisted on resume | Fixed — PR #120, merged `main`@`b48e57f` |
 | Async poll could silently drive 20 steps | Fixed — PR #121, merged `main` |
-| **Heartbeat / in-flight step tracking** | **Next up — not started (see below)** |
+| **Heartbeat / in-flight step tracking** | **Done (steps 1-4 completed)** |
 | `deleteCheckpoint` GC never called in prod path | Open, undecided |
 | Visible reasoning text not compacted | Open, try prompt fix first |
 | Manual token-count validation vs baseline | Not completed |
@@ -62,13 +62,13 @@ one bai key-rotation retry (~55s) plus normal step time.
 
 ### Implementation steps
 
-1. [ ] Add `stepStartedAt` write in `agent_worker.js`, inside the
+1. [x] Add `stepStartedAt` write in `agent_worker.js`, inside the
    existing `afterStep`/`stepsDone` guard.
-2. [ ] Update `agent_tools.js`'s freshness check to `max(lastStepAt,
+2. [x] Update `agent_tools.js`'s freshness check to `max(lastStepAt,
    stepStartedAt)`.
-3. [ ] Add a separate long-ceiling constant + check for a stuck
+3. [x] Add a separate long-ceiling constant + check for a stuck
    `stepStartedAt` (crash case).
-4. [ ] Tests: fresh via `stepStartedAt` alone (no completed step yet);
+4. [x] Tests: fresh via `stepStartedAt` alone (no completed step yet);
    stale via the new long ceiling despite a fresh-looking
    `stepStartedAt`; duplicate-delivery race doesn't clobber a real
    in-flight heartbeat.
