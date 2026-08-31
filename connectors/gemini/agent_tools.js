@@ -124,8 +124,8 @@ export function register(server) {
           const stepStartedAt = checkpoint.stepStartedAt || 0;
           const lastStepAt = checkpoint.lastStepAt || 0;
 
-          let isFresh = false;
-          let ageMs = now - lastStepAt;
+          let isFresh;
+          let ageMs;
 
           if (stepStartedAt > 0) {
             const stepStartedAgeMs = now - stepStartedAt;
