@@ -109,16 +109,16 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
         contents.push({ role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "c" + i, response: { result: `PAYLOAD_${i}_` + "X".repeat(600) } } }] });
     }
     
-    // Call with 3 completed steps (currentStep 3) - nothing compacted (3 steps full)
+    // Call with currentStep 4 (3 completed steps) - nothing compacted (3 steps full)
     const map1 = new Map();
-    compactHistoryInPlace(contents, 3, map1, { provider: "bai" });
+    compactHistoryInPlace(contents, 4, map1, { provider: "bai" });
     for (let i = 1; i <= 4; i++) {
         expect(contents[i*2-1].parts[0].functionResponse.response.result).toContain(`PAYLOAD_${i}_`);
     }
 
-    // Call with 4 completed steps (currentStep 4) - step 1 compacted
+    // Call with currentStep 5 (4 completed steps) - step 1 compacted
     const map2 = new Map();
-    compactHistoryInPlace(contents, 4, map2, { provider: "bai" });
+    compactHistoryInPlace(contents, 5, map2, { provider: "bai" });
     expect(contents[1].parts[0].functionResponse.response.result).toContain("Earlier tool result compacted"); // Step 1
     for (let i = 2; i <= 4; i++) {
         expect(contents[i*2-1].parts[0].functionResponse.response.result).toContain(`PAYLOAD_${i}_`);
