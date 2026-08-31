@@ -101,4 +101,74 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     expect(result).toContain("Earlier tool result compacted");
     expect(result).toContain("src/secret.js");
   });
+
+  it("Window-boundary contract test", () => {
+    const contents = [];
+    for (let i = 1; i <= 4; i++) {
+        contents.push({ role: "model", parts: [{ functionCall: { name: "github_read_file", args: { repo: "foo", path: "file" + i }, id: "c" + i } }] });
+        contents.push({ role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "c" + i, response: { result: `PAYLOAD_${i}_` + "X".repeat(600) } } }] });
+    }
+    
+    // Call with 3 completed steps (currentStep 3) - nothing compacted (3 steps full)
+    const map1 = new Map();
+    compactHistoryInPlace(contents, 3, map1, { provider: "bai" });
+    for (let i = 1; i <= 4; i++) {
+        expect(contents[i*2-1].parts[0].functionResponse.response.result).toContain(`PAYLOAD_${i}_`);
+    }
+
+    // Call with 4 completed steps (currentStep 4) - step 1 compacted
+    const map2 = new Map();
+    compactHistoryInPlace(contents, 4, map2, { provider: "bai" });
+    expect(contents[1].parts[0].functionResponse.response.result).toContain("Earlier tool result compacted"); // Step 1
+    for (let i = 2; i <= 4; i++) {
+        expect(contents[i*2-1].parts[0].functionResponse.response.result).toContain(`PAYLOAD_${i}_`);
+    }
+  });
+
+  it("Id-collision safety test", () => {
+    const contents = [
+        { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "1" }, id: "call_1" } }] },
+        { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_1", response: { result: "TEXT_A" + "X".repeat(600) } } }] },
+        { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "2" }, id: "call_1" } }] },
+        { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_1", response: { result: "TEXT_B" + "X".repeat(600) } } }] },
+    ];
+    const preCompactionResults = new Map();
+    compactHistoryInPlace(contents, 10, preCompactionResults, { provider: "bai" });
+
+    const values = Array.from(preCompactionResults.values());
+    expect(values).toContain(contents[1].parts[0].functionResponse.response.result); // Not directly, check values
+    expect(values.length).toBe(2);
+    expect(values).toContain("TEXT_A" + "X".repeat(600));
+    expect(values).toContain("TEXT_B" + "X".repeat(600));
+  });
+
+  it("Checkpoint-round-trip recompaction test", () => {
+    const originalText = "BULKY_TEXT_" + "X".repeat(600);
+    const contents = [
+        { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "f" }, id: "c1" } }] },
+        { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "c1", response: { result: originalText } } }] },
+    ];
+
+    // Compact once
+    const map1 = new Map();
+    compactHistoryInPlace(contents, 10, map1, { provider: "bai" });
+    expect(contents[1].parts[0].functionResponse.response.result).toContain("Earlier tool result compacted");
+
+    // Reconstruct round-tripped
+    const roundTrippedContents = JSON.parse(JSON.stringify(contents));
+    // The bug: roundTrippedContents would be full text
+    // Simulate what happens in Redis (the original text IS in the round-tripped version)
+    // Actually, in the code, JSON.parse(JSON.stringify(contents)) results in the compacted text.
+    // The requirement says: simulate what loadCheckpoint reconstructs - original, never-recompacted turn.
+    const restoredContents = [
+        { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "f" }, id: "c1" } }] },
+        { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "c1", response: { result: originalText } } }] },
+    ];
+    
+    // Compact again
+    const map2 = new Map();
+    compactHistoryInPlace(restoredContents, 10, map2, { provider: "bai" });
+    expect(restoredContents[1].parts[0].functionResponse.response.result).toContain("Earlier tool result compacted");
+    expect(map2.get("c1")).toBe(originalText);
+  });
 });
