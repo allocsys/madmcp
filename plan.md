@@ -130,11 +130,34 @@ side-store instead:
    (`savePreCompactionResult(runId, id, text)`) — not just the in-memory
    Map.
 3. **Shrink `meta`**: serialize `preCompactionResults` as just the set of
-   ids with a side-store entry, not the text — O(new entries this step),
-   matching `contents`' `RPUSH` pattern.
+   ids with a side-store entry, not the text. **Correction (2026-08-31
+   review): this is not O(new entries this step) and does not match
+   `contents`' `RPUSH` pattern** — `saveCheckpoint` still writes `meta`
+   as one full `client.set()` overwrite every call, so the ids-set is
+   re-serialized in full each time regardless of how it's stored. The
+   real win is a much smaller per-entry cost (an id vs. up to 30k chars
+   of text), not a change in growth order — `meta` write size is still
+   O(total ids compacted so far), just with a far smaller constant. If
+   O(delta) writes are actually needed for very long runs, `meta`'s ids
+   set would itself need to move to an append-only structure (e.g. a
+   Redis SET/RPUSH of ids, mirroring `contents`), which this fix does
+   not attempt — call that out as a possible follow-up, not implied as
+   already solved here.
 4. **Fetch-on-demand**: thread `runId` through `findUnverifiedClaims` and
    `lineIsVerbatimInToolResults` (new `getPreCompactionResult(runId, id)`)
-   so a Map miss falls back to the side-store.
+   so a Map miss falls back to the side-store. **Two implementation
+   details the plan glossed over (2026-08-31 review):**
+   - `lineIsVerbatimInToolResults` is currently called inside a
+     synchronous predicate (`quotedLines.filter(q =>
+     !lineIsVerbatimInToolResults(...))`). Making its side-store lookup
+     async means that call site needs restructuring — e.g. resolve all
+     lookups first via `Promise.all`, then `filter` on the resolved
+     results — not a drop-in `async`/`await` on the existing signature.
+   - A naive per-id `GET` on every compacted id, on every verification
+     pass, is a real latency cost on exactly the long `bai` runs this
+     targets (runs compacting 200+ ids). Batch the fetch with a single
+     `MGET` across all ids needed for that pass instead of one round
+     trip per id.
 5. **GC only at run completion**: extend `deleteCheckpoint` to
    batch-delete all `precompact:{runId}:*` keys, mirroring its existing
    `contentsKey`/`metaKey` cleanup. No mid-run deletion, ever.
