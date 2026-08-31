@@ -1,6 +1,5 @@
-
 import { describe, it, expect, vi } from "vitest";
-import { compactHistoryInPlace, findUnverifiedClaims, BULKY_TOOL_NAMES } from "../connectors/gemini/agent_delegate.js";
+import { compactHistoryInPlace, findUnverifiedClaims, lineIsVerbatimInToolResults, BULKY_TOOL_NAMES } from "../connectors/gemini/agent_delegate.js";
 
 describe("History Compaction Feature & Verification (agent_delegate.js)", () => {
   it("compacts older bulky tool results and uses dedicated store", () => {
@@ -171,5 +170,43 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     compactHistoryInPlace(restoredContents, 10, map2, { provider: "bai" });
     expect(restoredContents[1].parts[0].functionResponse.response.result).toContain("Earlier tool result compacted");
     expect(map2.get("c1")).toBe(originalText);
+  });
+
+  it("lineIsVerbatimInToolResults: does not false-positive on a correct quote that has been compacted out of contents (regression)", () => {
+    const exactLine = "if (step < cappedSteps) {";
+    const bulkyPayload = exactLine + "\n" + "A".repeat(1000);
+    const contents = [
+      { role: "user", parts: [{ text: "initial prompt" }] },
+      { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { repo: "foo", path: "src/exact.js" }, id: "call_1" } }] },
+      { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_1", response: { result: bulkyPayload } } }] },
+    ];
+
+    const preCompactionResults = new Map();
+    compactHistoryInPlace(contents, 5, preCompactionResults, { provider: "bai" });
+
+    // Assert contents no longer contains the exact line (confirms it was actually compacted)
+    expect(contents[2].parts[0].functionResponse.response.result).not.toContain(exactLine);
+
+    // Assert lineIsVerbatimInToolResults returns true with preCompactionResults
+    expect(lineIsVerbatimInToolResults(exactLine, contents, preCompactionResults)).toBe(true);
+
+    // Assert lineIsVerbatimInToolResults returns false with NO third argument (empty Map / pre-fix behavior)
+    expect(lineIsVerbatimInToolResults(exactLine, contents)).toBe(false);
+  });
+
+  it("lineIsVerbatimInToolResults: still correctly flags a fabricated quote as unverifiable after compaction (true-positive still works)", () => {
+    const exactLine = "if (step < cappedSteps) {";
+    const bulkyPayload = exactLine + "\n" + "A".repeat(1000);
+    const contents = [
+      { role: "user", parts: [{ text: "initial prompt" }] },
+      { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { repo: "foo", path: "src/exact.js" }, id: "call_1" } }] },
+      { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_1", response: { result: bulkyPayload } } }] },
+    ];
+
+    const preCompactionResults = new Map();
+    compactHistoryInPlace(contents, 5, preCompactionResults, { provider: "bai" });
+
+    // Assert fabricated quote is correctly flagged as false (unverifiable) even with preCompactionResults
+    expect(lineIsVerbatimInToolResults("this line was never in any tool result", contents, preCompactionResults)).toBe(false);
   });
 });
