@@ -2,18 +2,74 @@
 
 ## Status (2026-08-31)
 
-Feature is implemented and shipped on `feat/history-compaction-bai`. All
-known bugs (see changelog below) are fixed. Full suite verified via fresh
-clone: **468/468 passing**.
+Feature is implemented and shipped on `feat/history-compaction-bai`
+(merged to `main` via PR #119, squashed at `e0a8ee3`). All known bugs
+(see changelog below) are fixed. Full suite verified via fresh clone of
+`main` @ `e0a8ee3`: **468/468 passing, 38/38 files**.
+
+### Post-merge spot-check findings (2026-08-31, fresh clone of `main`)
+
+- `deleteCheckpoint`'s side-store GC (plan.md step 5) is correct in
+  isolation — reads `preCompactionResultIds` from meta, batch-deletes
+  `precompact:{runId}:{id}` alongside `contents`/`meta`. **But it is
+  never actually called anywhere in the gemini connector's production
+  code path** (`agent_delegate.js`, `agent_worker.js`,
+  `qstash_client.js`, `agent_tools.js` all checked) — only unit tests
+  call it directly. `finishRun` saves the checkpoint with `status:
+  "done"` and leaves it for polling; cleanup of both the checkpoint and
+  its side-store keys currently happens entirely via the shared 1hr
+  `CHECKPOINT_TTL_SECONDS`, not an explicit sweep. Not a leak (TTL is a
+  real backstop) and not mid-run eviction (the thing step 1 removed),
+  but worth a decision on whether something should call
+  `deleteCheckpoint` once a caller has polled and retrieved the final
+  answer.
+- No mid-run eviction of `preCompactionResults` found anywhere —
+  confirmed via grep (`MAX_PRE_COMPACTION`, `evict`, stray `.delete(`)
+  and `git log`, which shows the 2eea726 eviction block added then
+  explicitly reverted (`2e3bf54`). Bug stays fixed.
+- `findUnverifiedClaims`/`lineIsVerbatimInToolResults` correctly fall
+  back to the side-store on Map miss, batched via one `MGET`
+  (`findCompactedIdsMissingFromMap` + `getPreCompactionResults`) —
+  matches plan.md step 4 as written.
+
+### Live `bai` run (2026-08-31, real `delegate_agent` call, `provider:
+"bai"`, task: summarize agent_delegate.js/agent_checkpoint.js/
+agent_worker.js/bai client/adapter)
+
+Not a controlled token-count comparison — the run failed before
+reaching that point — but it did surface two things worth tracking:
+
+- **Repeat-call pattern:** steps 5–6 re-issued byte-for-byte identical
+  `github_read_file` calls (same path + same `char_offset`) already
+  made in steps 1–2. `resultCache` is supposed to serve a repeat call
+  from cache instead of re-fetching; this run's transcript doesn't show
+  that happening. Worth checking whether `resultCache` keys on
+  something (e.g. call ordering/step number) that doesn't match here,
+  or whether this is expected behavior for a different reason.
+- **Key exhaustion at step 7:** run failed with all 3
+  `BAI_API_KEYS` unavailable (key #0: 429 capacity limit, keys #1/#2:
+  55s timeouts) after only 6 steps / ~20 tool calls, most of which was
+  re-reading the same files (see repeat-call point above). Consistent
+  with the original bug report ("burned through all 3 keys' quota by
+  step 16") — if the repeat-call issue is real, it's plausibly making
+  quota exhaustion worse, independent of the compaction fix itself.
+  Run did not survive long enough to observe compaction actually
+  triggering (`HISTORY_FULL_DETAIL_STEPS = 3` should engage by step 4+).
 
 Remaining work — **not started, out of scope unless explicitly asked
 for**:
 - Manual validation: a real multi-step `bai` run, comparing input
   tokens/step and answer quality against an uncompacted baseline, plus
-  confirming a parallel `gemini` run is fully unaffected.
+  confirming a parallel `gemini` run is fully unaffected. (Attempted
+  once above; failed on key exhaustion before completing — needs a
+  retry once keys are off cooldown, and ideally the repeat-call
+  question above resolved first since it may be inflating the very
+  quota usage this feature is meant to reduce.)
 - Threshold tuning (`HISTORY_FULL_DETAIL_STEPS`, the char threshold) —
   current values are starting guesses, meant to be revisited only after
   the manual validation above.
+- Investigate whether `resultCache` is missing the repeat calls
+  observed in the live `bai` run above.
 
 ## Context
 
