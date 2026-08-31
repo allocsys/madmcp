@@ -172,6 +172,21 @@ five implementation steps now closed.
   Root cause is still open; only the logging groundwork is done. Next
   step is waiting for (or deliberately reproducing) another stall and
   reading the new `agent-worker[<id>]:` log lines.
+
+  **Follow-up once diagnosed: gate the invocation-id logging, don't
+  leave it unconditional forever.** It's log-only and cheap (a
+  `randomUUID()` plus a handful of `console.log` calls per invocation,
+  no checkpoint/behavior impact), so there's no urgency to remove it —
+  but once the concurrent-duplicate-vs-dead-retry question is actually
+  settled, the ongoing per-invocation log volume on `/api/agent-worker`
+  stops earning its keep and becomes pure noise/cost on every step of
+  every run. When that point is reached: wrap the `console.log` calls
+  in `agent_worker.js` behind a `DEBUG_AGENT_WORKER` env var (default
+  off, same pattern as other flags in `config.js`) rather than deleting
+  them outright — keeps the instrumentation available to flip back on
+  if a similar stall resurfaces later, without needing to re-add it
+  from scratch. Not started; do this only after the current stall is
+  actually diagnosed, not before.
 - `deleteCheckpoint`'s side-store GC is correct in isolation but never
   called anywhere in the production path (`agent_delegate.js`,
   `agent_worker.js`, `qstash_client.js`, `agent_tools.js`) — cleanup
