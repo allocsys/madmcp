@@ -269,4 +269,87 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     expect(loaded.preCompactionResults).toEqual(Object.fromEntries(preCompactionResults));
     expect(loaded.preCompactionResults["c1"]).toBe(originalText);
   });
+
+  it("integration test: resume -> recompaction code path in runInvestigation exercises re-compaction and populates preCompactionResults", async () => {
+    // 1. Simulate a checkpoint saved BEFORE a turn was ever compacted (uncompacted full-size functionResponse in fake Redis)
+    const { saveCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    
+    const resumeRunId = "test-resume-recompaction-integration";
+    const bulkyToolResponseText = "AGED_OUT_BULKY_TOOL_RESULT_CONTENT_" + "Y".repeat(800);
+    
+    // Construct uncompacted history representing a past step (e.g., step 1 completed, now at step 5)
+    // with an uncompacted functionResponse for an old bulky tool call.
+    const uncompactedContents = [
+      { role: "user", parts: [{ text: "System Preamble & Task: investigate repo" }] },
+      { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "src/main.js" }, id: "call_aged_1" } }] },
+      { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_aged_1", response: { result: bulkyToolResponseText } } }] },
+    ];
+
+    // Save the checkpoint with stepsDone: 4 (meaning next step is 5, which is past fullDetailSteps window of 3)
+    await saveCheckpoint(resumeRunId, {
+      newContents: uncompactedContents,
+      transcript: ["[step 1] github_read_file(...) -> ..."],
+      stepsDone: 4,
+      task: "Investigate repo files",
+      repeatCounts: {},
+      preCompactionResults: {},
+      consecutiveAllRepeatSteps: 0,
+      provider: "bai",
+    });
+
+    // 2. Mock providerChat from ../llm/router.js so we can inspect `contents` passed into it on the resumed call
+    const routerModule = await import("../llm/router.js");
+    const originalProviderChat = routerModule.providerChat;
+    
+    let capturedContentsPassedToChat = null;
+    vi.spyOn(routerModule, "providerChat").mockImplementation(async (contentsArg, options) => {
+      capturedContentsPassedToChat = contentsArg;
+      // Return a plain text final answer so runInvestigation completes successfully on this resumed step
+      return {
+        content: { parts: [{ text: "Investigation complete based on resumed recompacted history." }] },
+        finishReason: "STOP",
+      };
+    });
+
+    try {
+      // 3. Import and call the real runInvestigation export with resume_run_id set, provider: "bai", and enough steps budget
+      const result = await runInvestigation({
+        task: "Investigate repo files",
+        max_steps: 6,
+        resume_run_id: resumeRunId,
+        provider: "bai",
+      });
+
+      expect(result.failed).toBeFalsy();
+
+      // 4. Assert providerChat received `contents` where the aged-out functionResponse has ALREADY been replaced with the "[Earlier tool result compacted: ...]" pointer text BEFORE providerChat is called
+      expect(capturedContentsPassedToChat).toBeDefined();
+      const functionResponsePart = capturedContentsPassedToChat[2].parts[0].functionResponse;
+      expect(functionResponsePart.response.result).toContain("Earlier tool result compacted");
+      expect(functionResponsePart.response.result).toContain("src/main.js");
+      expect(functionResponsePart.response.result).not.toContain("AGED_OUT_BULKY_TOOL_RESULT_CONTENT_");
+
+      // 5. Assert preCompactionResults ends up populated with the original full text for that compacted entry (enabling unverified claims & verbatim check support)
+      // Since preCompactionResults is scoped internally inside runInvestigation, we can verify its effects via findUnverifiedClaims or lineIsVerbatimInToolResults using the captured contents + extracted/checked claims,
+      // or directly verify that claims check out successfully.
+      const exactSubstring = "AGED_OUT_BULKY_TOOL_RESULT_CONTENT_";
+      // Even though the raw functionResponse in capturedContentsPassedToChat is compacted,
+      // lineIsVerbatimInToolResults with the pre-compaction mechanics (or findUnverifiedClaims) verifies it successfully.
+      // Wait, where is preCompactionResults captured? Let's check how runInvestigation uses it or how we can test it.
+      // In runInvestigation, preCompactionResults is passed to compactHistoryInPlace and persisted in checkpoints.
+      // Let's load the checkpoint saved after runInvestigation completed or check if we can verify via findUnverifiedClaims.
+      const { loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+      const savedCheckpointAfterRun = await loadCheckpoint(resumeRunId);
+      expect(savedCheckpointAfterRun.preCompactionResults["call_aged_1"]).toBe(bulkyToolResponseText);
+
+      // Also test that lineIsVerbatimInToolResults / findUnverifiedClaims work correctly with the re-populated preCompactionResults map
+      const restoredPreCompactionMap = new Map(Object.entries(savedCheckpointAfterRun.preCompactionResults));
+      expect(lineIsVerbatimInToolResults("AGED_OUT_BULKY_TOOL_RESULT_CONTENT_", capturedContentsPassedToChat, restoredPreCompactionMap)).toBe(true);
+      
+    } finally {
+      // Restore providerChat
+      vi.spyOn(routerModule, "providerChat").mockImplementation(originalProviderChat);
+    }
+  });
 });
