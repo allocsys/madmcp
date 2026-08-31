@@ -1,6 +1,33 @@
 import { describe, it, expect, vi } from "vitest";
 import { compactHistoryInPlace, findUnverifiedClaims, BULKY_TOOL_NAMES, lineIsVerbatimInToolResults } from "../connectors/gemini/agent_delegate.js";
 
+// Minimal in-memory fake of the @upstash/redis surface agent_checkpoint.js
+// uses, same shape as test/agent-checkpoint.test.js's makeFakeRedis --
+// needed locally because vi.mock is scoped per test file in Vitest; the
+// mock declared in test/agent-checkpoint.test.js does not carry over here.
+function makeFakeRedis() {
+  const lists = new Map();
+  const strings = new Map();
+  return {
+    async rpush(key, ...vals) {
+      const list = lists.get(key) || [];
+      list.push(...vals);
+      lists.set(key, list);
+      return list.length;
+    },
+    async expire() { return 1; },
+    async set(key, val) { strings.set(key, val); return "OK"; },
+    async get(key) { return strings.has(key) ? strings.get(key) : null; },
+    async lrange(key) { return lists.get(key) || []; },
+    async del(key) { lists.delete(key); strings.delete(key); return 1; },
+  };
+}
+
+const fakeRedis = makeFakeRedis();
+vi.mock("../connectors/gemini/cooldown.js", () => ({
+  getRedis: () => fakeRedis,
+}));
+
 describe("History Compaction Feature & Verification (agent_delegate.js)", () => {
   it("compacts older bulky tool results and uses dedicated store", () => {
     const longText = "SECRET_TOKEN_XYZ_123 " + "A".repeat(1000);
@@ -211,7 +238,9 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
   });
 
   it("integration test: checkpoint save/load correctly round-trips contents and preCompactionResults", async () => {
-    // Import here to use the mocked Redis environment set up in test/agent-checkpoint.test.js
+    // Uses this file's own fakeRedis mock (see top of file) via the real
+    // saveCheckpoint/loadCheckpoint persistence functions -- not manually
+    // invoked compaction on hand-built arrays like the tests above.
     const { saveCheckpoint, loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
     
     const originalText = "BULKY_PAYLOAD_CONTENT_" + "X".repeat(600);
