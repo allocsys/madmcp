@@ -470,9 +470,9 @@ export const EDITOR_DENY_PATH_PATTERNS = (process.env.EDITOR_DENY_PATH_PATTERNS 
 // Guardrail #6: per-run and per-file write caps, same reasoning/shape as
 // FRONTEND_MAX_VALIDATE_CALLS -- bound the blast radius of a stuck or
 // misbehaving loop before a human ever looks at the branch. Also covers
-// the "long sequential chain" exposure noted in plan.md's parallel-
-// orchestration resolution (a chain of many small edits over time can
-// touch as much surface as a simultaneous batch would have).
+// the "long sequential chain" exposure from the parallel-orchestration
+// design (a chain of many small edits over time can touch as much surface
+// as a simultaneous batch would have).
 export const EDITOR_MAX_FILES_PER_RUN    = Number(process.env.EDITOR_MAX_FILES_PER_RUN) || 15;
 export const EDITOR_MAX_WRITES_PER_FILE  = Number(process.env.EDITOR_MAX_WRITES_PER_FILE) || 5;
 
