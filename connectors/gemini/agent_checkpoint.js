@@ -143,30 +143,12 @@ export async function loadCheckpoint(runId) {
 }
 
 // Deletes a checkpoint once a run finishes (a final answer, or the model
-// stops issuing function calls) -- nothing left to resume. Clears the
-// contents/meta keys, plus (plan.md step 5) every precompact:{runId}:*
-// side-store key savePreCompactionResult wrote during the run -- those
-// live outside CHECKPOINT_KEY_PREFIX (see precompactKey's comment), so
-// they wouldn't be swept up by deleting contents/meta alone and would
-// otherwise just sit until their own CHECKPOINT_TTL_SECONDS TTL expires.
-// The id list isn't passed in -- it's read back from meta's own
-// preCompactionResultIds (fetched before meta is deleted), since that's
-// the only record of which ids exist; this deliberately avoids relying on
-// Redis KEYS/SCAN (not guaranteed available/cheap on every provider this
-// runs against -- same fail-open, provider-agnostic contract as the rest
-// of this file).
+// stops issuing function calls) -- nothing left to resume. Clears both keys.
 export async function deleteCheckpoint(runId) {
   const client = getRedis();
   if (!client) return;
   try {
-    const rawMeta = await client.get(metaKey(runId));
-    const meta = rawMeta ? (typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta) : null;
-    const ids = (meta && meta.preCompactionResultIds) || [];
-    await Promise.all([
-      client.del(contentsKey(runId)),
-      client.del(metaKey(runId)),
-      ...ids.map((id) => client.del(precompactKey(runId, id))),
-    ]);
+    await Promise.all([client.del(contentsKey(runId)), client.del(metaKey(runId))]);
   } catch {
     // best-effort
   }
