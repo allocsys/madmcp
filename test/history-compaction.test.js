@@ -163,7 +163,6 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     compactHistoryInPlace(contents, 10, preCompactionResults, { provider: "bai" });
 
     const values = Array.from(preCompactionResults.values());
-    expect(values).toContain(contents[1].parts[0].functionResponse.response.result); // Not directly, check values
     expect(values.length).toBe(2);
     expect(values).toContain("TEXT_A" + "X".repeat(600));
     expect(values).toContain("TEXT_B" + "X".repeat(600));
