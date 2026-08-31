@@ -135,8 +135,40 @@ for**:
   before the side-store fix this whole feature is about. Any fix needs
   the same side-store pattern (Redis key per signature, ids-only in
   meta, fetch-on-demand), not a return to inlining full result text
-  into the checkpoint blob. Being fixed on a debug branch — see repo
-  for current status.
+  into the checkpoint blob.
+
+  **Fixed (2026-08-31), PR #120, merged to `main` at `b48e57f`,
+  `debug/resultcache-not-persisted-on-resume` deleted.** Same
+  side-store pattern as `preCompactionResults`: `saveResultCacheEntry`/
+  `getResultCacheEntries` added to `agent_checkpoint.js`
+  (`resultcache:{runId}:{signature}` keys, batched `MGET` fetch),
+  `agent_delegate.js`'s step loop fetches any signature `repeatCounts`
+  already knows is a repeat but the local `resultCache` Map doesn't
+  have yet — one round trip before executing that step's calls — and
+  writes every fresh (non-cached) result to the side-store as it's
+  computed. `saveCheckpoint` now tracks `resultCacheIds` (ids only, no
+  text) alongside the existing `preCompactionResultIds`, same growth
+  shape. Regression test added
+  (`test/agent-resultcache-resume.test.js`). CI green on `main`
+  post-merge (`#1362`/`#1363`). Live-validated same day with a real
+  `provider: "bai"` `delegate_agent` run (`max_steps: 2` to force a
+  checkpoint boundary, resumed with a higher ceiling): a
+  `github_read_file` call repeated across the resume boundary came
+  back tagged `[CACHED — identical call already made this run, not
+  re-executed]` with no second network round trip — confirms the fix
+  holds under the same `agent_worker.js`-style resume-per-step pattern
+  the original bug report was about, not just in unit tests.
+
+  **Not yet covered:** the `deleteCheckpoint` GC-never-called gap
+  documented in "Post-merge spot-check findings" above (originally
+  found for `precompact:{runId}:*`) applies identically to the new
+  `resultcache:{runId}:*` keys — `resultCacheIds` batch-delete logic in
+  `deleteCheckpoint` is correct in isolation (mirrors the
+  `preCompactionResultIds` sweep exactly) but `agent_delegate.js` still
+  never calls `deleteCheckpoint` anywhere in its production path, so
+  cleanup for both key families relies entirely on the shared 1hr TTL.
+  Same open decision as before, now covering two side-stores instead
+  of one.
 
 ## Context
 
