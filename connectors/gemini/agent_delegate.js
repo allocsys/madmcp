@@ -1058,8 +1058,7 @@ const SYSTEM_PREAMBLE =
   "Do not let a later, narrower result override an earlier, complete one just because it came later.";
 
 // Mechanical-claim extraction (2026-08-27, fix for the confident-wrong-
-// constant failure mode found in live testing -- see plan.md "Live
-// verification test", runs 3-4: the model asserted `HARD_MAX_STEPS` gated a
+// constant failure mode found in live testing, runs 3-4: the model asserted `HARD_MAX_STEPS` gated a
 // condition when the real gate was `cappedSteps`, confidently and with no
 // hedge, and the existing text-only VERIFICATION_PROMPT ("if you're not
 // certain, re-check") did not catch it because the model WAS certain -- just
