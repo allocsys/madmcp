@@ -41,7 +41,7 @@
 import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { formatCascadeLogLine } from "../llm/cascade_log.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./agent_checkpoint.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult } from "./agent_checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
@@ -97,7 +97,7 @@ export const BULKY_TOOL_NAMES = new Set([
 function setPreCompactionResult(preCompactionResults, id, text) {
   if (!preCompactionResults.has(id) || preCompactionResults.get(id) === text) {
     preCompactionResults.set(id, text);
-    return;
+    return id;
   }
   let suffix = 2;
   let altKey = `${id}#${suffix}`;
@@ -106,16 +106,32 @@ function setPreCompactionResult(preCompactionResults, id, text) {
     altKey = `${id}#${suffix}`;
   }
   preCompactionResults.set(altKey, text);
+  return altKey;
 }
 
-export function compactHistoryInPlace(contents, currentStep, preCompactionResults, {
+export async function compactHistoryInPlace(contents, currentStep, preCompactionResults, {
   fullDetailSteps = HISTORY_FULL_DETAIL_STEPS,
   charThreshold = COMPACTION_CHAR_THRESHOLD,
   bulkyTools = BULKY_TOOL_NAMES,
   provider,
+  runId,
 } = {}) {
   const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
   if (!isEnabled || !Array.isArray(contents)) return;
+
+  // Side-store writes (plan.md "Current outstanding issue" step 2): every
+  // first-time compaction below also persists its full text to Redis via
+  // savePreCompactionResult, not just the in-memory `preCompactionResults`
+  // Map -- meta's checkpoint blob only carries the Map, which is what made
+  // the now-removed 2eea726 eviction "necessary" in the first place. The
+  // writes are collected here and fired at the end (see the Promise.all
+  // below) rather than awaited inline, so every synchronous mutation to
+  // `contents`/`preCompactionResults` in the loop below still completes
+  // before this function's first `await` -- callers (and every existing
+  // test, none of which await this call) that only care about those
+  // synchronous mutations keep working unchanged; only callers that want to
+  // know the side-store writes have actually landed need to await this.
+  const sideStoreWrites = [];
 
   let modelTurnStack = [];
   let stepIndex = 0;
@@ -137,7 +153,10 @@ export function compactHistoryInPlace(contents, currentStep, preCompactionResult
               const res = part.functionResponse.response;
               if (res && typeof res.result === "string" && res.result.length > charThreshold) {
                 // Store original text before compacting -- collision-safe, see setPreCompactionResult above.
-                setPreCompactionResult(preCompactionResults, part.functionResponse.id, res.result);
+                const storedKey = setPreCompactionResult(preCompactionResults, part.functionResponse.id, res.result);
+                if (runId) {
+                  sideStoreWrites.push(savePreCompactionResult(runId, storedKey, res.result));
+                }
 
                 const originalLength = res.result.length;
                 const toolName = part.functionResponse.name;
@@ -158,6 +177,8 @@ export function compactHistoryInPlace(contents, currentStep, preCompactionResult
       }
     }
   }
+
+  if (sideStoreWrites.length) await Promise.all(sideStoreWrites);
 }
 
 // 429 (rate limit) and 503 (overloaded/high demand) are the only cases
@@ -2055,8 +2076,12 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // Compact older bulky tool results in contents before appending this step's turns
     // (or before saving checkpoint / sending next turn), only if provider opted in.
     // We pass a preCompactionResults map to store text that gets compacted,
-    // so it remains available for findUnverifiedClaims.
-    compactHistoryInPlace(contents, step, preCompactionResults, { provider: effectiveProvider });
+    // so it remains available for findUnverifiedClaims. Passing runId also lets
+    // compactHistoryInPlace side-store each newly-compacted result's full text in
+    // Redis (plan.md "Current outstanding issue" step 2), not just this in-memory
+    // Map -- awaited so a checkpoint saved right after this line never races ahead
+    // of the side-store writes it corresponds to.
+    await compactHistoryInPlace(contents, step, preCompactionResults, { provider: effectiveProvider, runId });
 
     contents.push({ role: "user", parts: responseParts });
 
