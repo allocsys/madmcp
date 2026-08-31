@@ -45,7 +45,7 @@ const mockPublishAgentStep = vi.fn();
 const mockIsQStashConfigured = vi.fn();
 const mockDoCreatePage = vi.fn();
 
-async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25 } = {}) {
+async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25, stepDeadSeconds = 120 } = {}) {
   vi.resetModules();
   vi.clearAllMocks();
 
@@ -53,6 +53,7 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25 } = {}
     GEMINI_NOTION_ROOT_PAGE_ID: "root-page-id",
     DELEGATE_AGENT_ASYNC: delegateAgentAsync,
     AGENT_ASYNC_POLL_FRESH_SECONDS: pollFreshSeconds,
+    AGENT_ASYNC_STEP_DEAD_SECONDS: stepDeadSeconds,
   }));
   vi.doMock("../connectors/gemini/agent_delegate.js", () => ({
     runInvestigation: mockRunInvestigation,
@@ -156,6 +157,44 @@ describe("agent_tools.js — delegate_agent async branching", () => {
     expect(result.content[0].text).toMatch(/Still running/);
     expect(result.content[0].text).toContain("3 step(s)");
     expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
+  });
+
+  it("poll with a checkpoint fresh via stepStartedAt alone (with no newly-completed step): is NOT reported as stalled", async () => {
+    const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25, stepDeadSeconds: 120 });
+    mockIsQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 2,
+      lastStepAt: Date.now() - 120000, // 2 minutes ago (stale if lastStepAt alone)
+      stepStartedAt: Date.now() - 10000, // 10s ago, step in-flight and fresh
+      transcript: [],
+    });
+
+    const result = await delegate_agent({ resume_run_id: "run-poll-started" });
+
+    expect(mockRunInvestigation).not.toHaveBeenCalled();
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/Still running/);
+    expect(result.content[0].text).toContain("2 step(s)");
+  });
+
+  it("poll with a checkpoint whose stepStartedAt is older than the long-ceiling constant (AGENT_ASYNC_STEP_DEAD_SECONDS): IS reported as stalled even though stepStartedAt is set", async () => {
+    const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25, stepDeadSeconds: 50 });
+    mockIsQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 2,
+      lastStepAt: Date.now() - 200000,
+      stepStartedAt: Date.now() - 70000, // 70s ago, older than 50s dead ceiling (stuck worker crash case)
+      transcript: [],
+    });
+
+    const result = await delegate_agent({ resume_run_id: "run-poll-stuck" });
+
+    expect(mockRunInvestigation).not.toHaveBeenCalled();
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/stalled/);
+    expect(result.content[0].text).toMatch(/explicit max_steps/);
   });
 
   // Fix (2026-08-31): a stale checkpoint used to ALWAYS fall through to a
