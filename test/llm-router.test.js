@@ -1,17 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS, BAI_DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
 
-// Mock all three provider clients and the shared adapter so this test is
-// purely about router.js's dispatch logic, not any provider's own wire
-// format. Mock path is ../connectors/openai_shape/adapter.js, NOT
-// ../connectors/glm/adapter.js -- router.js imports the shared module
-// directly since both glm and groq depend on it (see that file's header
-// for the extraction history); glm/adapter.js still re-exports the same
-// functions for any other importer, but router.js itself no longer goes
-// through that re-export.
+// Mock all provider clients and the shared adapter so this test is
+// purely about router.js's dispatch logic.
 const mockGeminiChat = vi.fn();
 const mockGlmChat = vi.fn();
 const mockGroqChat = vi.fn();
+const mockBaiChat = vi.fn();
 const mockToOpenAIMessages = vi.fn((contents) => [{ role: "user", content: "adapted" }]);
 const mockToOpenAITools = vi.fn((tools) => (tools ? [{ type: "function", function: { name: "adapted_tool" } }] : undefined));
 const mockFromOpenAIChoice = vi.fn((choice) => ({ content: { role: "model", parts: [{ text: "adapted answer" }] }, finishReason: choice?.finish_reason }));
@@ -24,6 +19,9 @@ vi.mock("../connectors/glm/client.js", () => ({
 }));
 vi.mock("../connectors/groq/client.js", () => ({
   groqChat: mockGroqChat,
+}));
+vi.mock("../connectors/bai/client.js", () => ({
+  baiChat: mockBaiChat,
 }));
 vi.mock("../connectors/openai_shape/adapter.js", () => ({
   toOpenAIMessages: mockToOpenAIMessages,
@@ -48,6 +46,8 @@ describe("connectors/llm/router.js — providerChat", () => {
 
     expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools: undefined, model: undefined });
     expect(mockGlmChat).not.toHaveBeenCalled();
+    expect(mockGroqChat).not.toHaveBeenCalled();
+    expect(mockBaiChat).not.toHaveBeenCalled();
     expect(result.finishReason).toBe("STOP");
   });
 
@@ -59,7 +59,6 @@ describe("connectors/llm/router.js — providerChat", () => {
     await providerChat(contents, { provider: "gemini", tools, model: "gemini-flash-latest" });
 
     expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools, model: "gemini-flash-latest" });
-    // Gemini's own path never touches the GLM adapter.
     expect(mockToOpenAIMessages).not.toHaveBeenCalled();
     expect(mockToOpenAITools).not.toHaveBeenCalled();
   });
@@ -73,20 +72,14 @@ describe("connectors/llm/router.js — providerChat", () => {
 
     expect(mockToOpenAIMessages).toHaveBeenCalledWith(contents);
     expect(mockToOpenAITools).toHaveBeenCalledWith(tools);
-    // No maxOutputTokens was passed to providerChat here, so the glm branch
-    // must fall back to GLM_DEFAULT_MAX_OUTPUT_TOKENS -- unlike model/tools,
-    // this is NOT passed straight through as undefined (see config.js's
-    // comment on why an unset max_tokens breaks every GLM call on a
-    // credit-limited account).
     expect(mockGlmChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
       { model: "z-ai/glm-4.6", tools: [{ type: "function", function: { name: "adapted_tool" } }], maxOutputTokens: GLM_DEFAULT_MAX_OUTPUT_TOKENS }
     );
     expect(mockFromOpenAIChoice).toHaveBeenCalledWith({ message: { content: "glm says hi" }, finish_reason: "stop" });
-    // The import-boundary check: a provider:"glm" call must never reach
-    // Gemini's own client, so a Gemini-only misconfiguration (e.g. a
-    // missing GEMINI_API_KEY) can never break a GLM-only deployment.
     expect(mockGeminiChat).not.toHaveBeenCalled();
+    expect(mockGroqChat).not.toHaveBeenCalled();
+    expect(mockBaiChat).not.toHaveBeenCalled();
     expect(result).toEqual({ content: { role: "model", parts: [{ text: "adapted answer" }] }, finishReason: "stop" });
   });
 
@@ -109,9 +102,6 @@ describe("connectors/llm/router.js — providerChat", () => {
 
     await providerChat(contents, { provider: "glm", maxOutputTokens: 2048 });
 
-    // A caller-supplied value must win outright, not be merged with or
-    // overridden by GLM_DEFAULT_MAX_OUTPUT_TOKENS -- same "explicit choice
-    // wins" contract as model's cascade-disable behavior in glm/client.js.
     expect(mockGlmChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
       { model: undefined, tools: undefined, maxOutputTokens: 2048 }
@@ -125,9 +115,6 @@ describe("connectors/llm/router.js — providerChat", () => {
     await providerChat(contents, { provider: "gemini", maxOutputTokens: 4096 });
     expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools: undefined, model: undefined, maxOutputTokens: 4096 });
 
-    // And when omitted entirely, gemini gets `undefined` -- NOT any default
-    // (unlike glm's GLM_DEFAULT_MAX_OUTPUT_TOKENS fallback; see config.js's
-    // comment for why this asymmetry between providers is intentional).
     mockGeminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [{ text: "hi" }] }, finishReason: "STOP" });
     await providerChat(contents, { provider: "gemini" });
     expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools: undefined, model: undefined, maxOutputTokens: undefined });
@@ -140,7 +127,7 @@ describe("connectors/llm/router.js — providerChat", () => {
     await expect(providerChat(contents, { provider: "glm" })).rejects.toThrow("OpenRouter API error (503): overloaded");
   });
 
-  it("dispatches to groq: adapts contents/tools in, adapts the choice back out, and NEVER touches geminiChat/glmChat", async () => {
+  it("dispatches to groq: adapts contents/tools in, adapts the choice back out", async () => {
     mockGroqChat.mockResolvedValueOnce({ message: { content: "groq says hi" }, finish_reason: "stop" });
     const contents = [{ role: "user", parts: [{ text: "hello" }] }];
     const tools = [{ functionDeclarations: [{ name: "x" }] }];
@@ -149,8 +136,6 @@ describe("connectors/llm/router.js — providerChat", () => {
 
     expect(mockToOpenAIMessages).toHaveBeenCalledWith(contents);
     expect(mockToOpenAITools).toHaveBeenCalledWith(tools);
-    // Same "no maxOutputTokens passed -> fall back to the provider's own
-    // default" contract as glm, but against GROQ_DEFAULT_MAX_OUTPUT_TOKENS.
     expect(mockGroqChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
       { model: "openai/gpt-oss-120b", tools: [{ type: "function", function: { name: "adapted_tool" } }], maxOutputTokens: GROQ_DEFAULT_MAX_OUTPUT_TOKENS }
@@ -158,6 +143,7 @@ describe("connectors/llm/router.js — providerChat", () => {
     expect(mockFromOpenAIChoice).toHaveBeenCalledWith({ message: { content: "groq says hi" }, finish_reason: "stop" });
     expect(mockGeminiChat).not.toHaveBeenCalled();
     expect(mockGlmChat).not.toHaveBeenCalled();
+    expect(mockBaiChat).not.toHaveBeenCalled();
     expect(result).toEqual({ content: { role: "model", parts: [{ text: "adapted answer" }] }, finishReason: "stop" });
   });
 
@@ -191,6 +177,58 @@ describe("connectors/llm/router.js — providerChat", () => {
     const contents = [{ role: "user", parts: [{ text: "hello" }] }];
 
     await expect(providerChat(contents, { provider: "groq" })).rejects.toThrow("Groq API error (503): overloaded");
+  });
+
+  it("dispatches to bai: adapts contents/tools in, adapts the choice back out", async () => {
+    mockBaiChat.mockResolvedValueOnce({ message: { content: "b.ai says hi" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+    const tools = [{ functionDeclarations: [{ name: "x" }] }];
+
+    const result = await providerChat(contents, { provider: "bai", tools });
+
+    expect(mockToOpenAIMessages).toHaveBeenCalledWith(contents);
+    expect(mockToOpenAITools).toHaveBeenCalledWith(tools);
+    expect(mockBaiChat).toHaveBeenCalledWith(
+      [{ role: "user", content: "adapted" }],
+      { tools: [{ type: "function", function: { name: "adapted_tool" } }], maxOutputTokens: BAI_DEFAULT_MAX_OUTPUT_TOKENS }
+    );
+    expect(mockFromOpenAIChoice).toHaveBeenCalledWith({ message: { content: "b.ai says hi" }, finish_reason: "stop" });
+    expect(mockGeminiChat).not.toHaveBeenCalled();
+    expect(mockGlmChat).not.toHaveBeenCalled();
+    expect(mockGroqChat).not.toHaveBeenCalled();
+    expect(result).toEqual({ content: { role: "model", parts: [{ text: "adapted answer" }] }, finishReason: "stop" });
+  });
+
+  it("omits tools from the bai path when none were passed", async () => {
+    mockBaiChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "bai" });
+
+    expect(mockToOpenAITools).not.toHaveBeenCalled();
+    expect(mockBaiChat).toHaveBeenCalledWith(
+      [{ role: "user", content: "adapted" }],
+      { tools: undefined, maxOutputTokens: BAI_DEFAULT_MAX_OUTPUT_TOKENS }
+    );
+  });
+
+  it("honors an explicit maxOutputTokens on the bai path instead of the default", async () => {
+    mockBaiChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "bai", maxOutputTokens: 2048 });
+
+    expect(mockBaiChat).toHaveBeenCalledWith(
+      [{ role: "user", content: "adapted" }],
+      { tools: undefined, maxOutputTokens: 2048 }
+    );
+  });
+
+  it("propagates a baiChat failure without swallowing it", async () => {
+    mockBaiChat.mockRejectedValueOnce(new Error("B.AI API error (503): overloaded"));
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await expect(providerChat(contents, { provider: "bai" })).rejects.toThrow("B.AI API error (503): overloaded");
   });
 
   it("propagates a geminiChat failure without swallowing it", async () => {
