@@ -41,7 +41,7 @@
 import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { formatCascadeLogLine } from "../llm/cascade_log.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult } from "./agent_checkpoint.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults } from "./agent_checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
@@ -1218,19 +1218,60 @@ function extractMechanicalClaims(answerText) {
   return [...claims];
 }
 
+// Scans `contents` for functionResponse parts whose text has already been
+// replaced by compactHistoryInPlace's marker string, and returns the ids of
+// those that `preCompactionResults` (the in-memory Map) doesn't have text
+// for -- compaction only ever replaces the TEXT of a functionResponse part,
+// never its `id` (see compactHistoryInPlace's hard constraints), so the id
+// is always still readable straight off `contents` even once compacted.
+// This is the exact "ids needed for this pass" set that the side-store
+// fallback (plan.md step 4) batches a single MGET across, instead of
+// fetching speculatively or one id at a time.
+function findCompactedIdsMissingFromMap(contents, preCompactionResults) {
+  const missing = new Set();
+  for (const turn of contents) {
+    if (turn.role !== "user" || !Array.isArray(turn.parts)) continue;
+    for (const part of turn.parts) {
+      if (!part.functionResponse) continue;
+      const result = part.functionResponse.response?.result;
+      if (typeof result === "string" && result.startsWith("[Earlier tool result compacted:")) {
+        const id = part.functionResponse.id;
+        if (id && !preCompactionResults.has(id)) missing.add(id);
+      }
+    }
+  }
+  return [...missing];
+}
+
 // Checks each extracted claim against the RAW tool-result text already
 // gathered this run (functionResponse parts in `contents`) -- deliberately
 // NOT against the model's own prior turns/text, since matching against its
 // own earlier assertions would just let a wrong claim "verify" itself by
 // citing itself. A claim is "verified" only if it appears verbatim in
 // something an actual tool returned.
-export function findUnverifiedClaims(claims, contents, preCompactionResults = new Map()) {
+//
+// `runId` (plan.md step 4, optional -- omitting it preserves the old
+// Map-only behavior, e.g. for the hand-built-array unit tests that don't
+// go through Redis) enables a side-store fallback for any compacted id
+// `preCompactionResults` doesn't have text for -- a real gap the normal
+// compact-then-verify-same-run flow doesn't hit, but which a caller
+// reconstructing state from a checkpoint's id-only `preCompactionResultIds`
+// without first re-running compactHistoryInPlace would. Batches every
+// missing id into one MGET rather than fetching per id.
+export async function findUnverifiedClaims(claims, contents, preCompactionResults = new Map(), runId = null) {
   const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
     .map((p) => p.functionResponse.response?.result || "")
     .join("\n");
-  const preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  let preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  if (runId) {
+    const missingIds = findCompactedIdsMissingFromMap(contents, preCompactionResults);
+    if (missingIds.length) {
+      const fetched = await getPreCompactionResults(runId, missingIds);
+      if (fetched.size) preCompactionToolText += "\n" + Array.from(fetched.values()).join("\n");
+    }
+  }
   const allToolText = currentRawToolText + "\n" + preCompactionToolText;
   return claims.filter((claim) => !allToolText.includes(claim));
 }
@@ -1278,13 +1319,24 @@ function extractConditionalClaims(answerText) {
 //
 // Now also checks pre-compaction text to support long-running investigations
 // where historical tool results have been compacted.
-export function lineIsVerbatimInToolResults(quotedLine, contents, preCompactionResults = new Map()) {
+//
+// `runId` (plan.md step 4, optional, same contract as findUnverifiedClaims
+// above): side-store fallback, batched via one MGET, for any compacted id
+// `preCompactionResults` doesn't have text for.
+export async function lineIsVerbatimInToolResults(quotedLine, contents, preCompactionResults = new Map(), runId = null) {
   const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
     .map((p) => p.functionResponse.response?.result || "")
     .join("\n");
-  const preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  let preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  if (runId) {
+    const missingIds = findCompactedIdsMissingFromMap(contents, preCompactionResults);
+    if (missingIds.length) {
+      const fetched = await getPreCompactionResults(runId, missingIds);
+      if (fetched.size) preCompactionToolText += "\n" + Array.from(fetched.values()).join("\n");
+    }
+  }
   const allToolText = currentRawToolText + "\n" + preCompactionToolText;
   return allToolText.includes(quotedLine.trim());
 }
