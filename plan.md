@@ -140,3 +140,23 @@ opt-in switch, config-driven per provider:
   via the shared loop. Default to uniform first since the loop itself is
   provider-agnostic; revisit only if Gemini-specific runs show no real
   benefit from it.
+
+## Bugs found and fixed during implementation review
+
+### Compaction broke the existing anti-hallucination check (`findUnverifiedClaims`)
+It substring-matches the model's claims against raw tool text in `contents`; once compaction replaces that raw text with a summary pointer, a genuinely-correct claim the model made earlier would stop verifying. Fixed by capturing pre-compaction text into a dedicated `preCompactionResults` Map before overwriting, and having `findUnverifiedClaims` check both current + pre-compaction text.
+
+### `preCompactionResults` was initially piggybacked onto the existing `resultCache` Map, which is not persisted across checkpoint resumes
+This would silently re-break bug #1 specifically on any resumed run, exactly the scenario the `bai` provider hits due to rate limits. Fixed by giving `preCompactionResults` its own dedicated Map, threaded through `saveCheckpoint`/`loadCheckpoint` and every `saveCheckpoint` call site, mirroring the existing `repeatCounts` pattern.
+
+### Compaction itself never survived a checkpoint resume
+`saveCheckpoint`'s `contents` Redis list is append-only (only new turns since the last save are ever RPUSHed), so it never rewrites a turn already in Redis even though `compactHistoryInPlace` mutates old turns' text in place, in memory only. A turn compacted before a crash came back from `loadCheckpoint` in its original, uncompacted form, and the resumed run's very first `providerChat` call would re-send that full bloat — exactly the token-bloat failure this feature exists to prevent, on exactly the runs (`bai`, rate-limited, resumed) that motivate it. Fixed by re-running `compactHistoryInPlace` on the restored `contents`/`preCompactionResults` immediately after a checkpoint loads, before the loop's first `providerChat` call.
+
+### Off-by-one in the "keep the last `HISTORY_FULL_DETAIL_STEPS` steps full" window
+`compactHistoryInPlace` is called before the current step's own response is appended to `contents`, so at call time `contents` only holds completed responses for steps `1..currentStep-1`. The original formula didn't account for that, and silently kept only 2 full-detail steps instead of the documented 3. Fixed by correcting the threshold formula to `stepIndex <= (currentStep - 1) - fullDetailSteps`, with `currentStep` meaning "the step about to run" consistently at every call site (the main loop's `compactHistoryInPlace(contents, step, ...)` and the post-resume `compactHistoryInPlace(contents, startStep, ...)` added for bug #3).
+
+### `functionResponse.id` is not guaranteed unique across a whole run, only within a single turn
+Nothing in this codebase or Gemini's contract promises call ids stay unique across steps. If two different steps' calls ever reused an id, keying `preCompactionResults` directly by that id would let a later compaction silently overwrite an earlier turn's saved text, the same class of bug as #1/#2. Fixed defensively with a `setPreCompactionResult` helper that stores under a disambiguated key (`${id}#2`, etc.) instead of ever overwriting a differing existing value.
+
+### The structural line-quote check (`lineIsVerbatimInToolResults`) was never updated for compaction, even though the older `findUnverifiedClaims` check (bug #1) was
+Two separate anti-hallucination mechanisms exist in this file: `findUnverifiedClaims` (identifier/constant-shaped claims) and `lineIsVerbatimInToolResults` (exact-line quotes for conditional/comparison claims, added later). Only the first was ever threaded through `preCompactionResults`. On a `bai` run, once a tool result the model correctly quoted earlier ages past the compaction window, `lineIsVerbatimInToolResults` searches only the now-compacted `contents`, doesn't find the line, and the loop tells the model its correct quote could not be verified — a false positive that can push a correct answer toward an incorrect "correction," worse than having no compaction at all for exactly the long, bulky, `bai` runs compaction targets. Fixed by threading `preCompactionResults` through `lineIsVerbatimInToolResults` the same way `findUnverifiedClaims` already does, including at its call site.
