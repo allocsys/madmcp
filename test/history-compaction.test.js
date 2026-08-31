@@ -321,7 +321,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
         provider: "bai",
       });
 
-      expect(result.failed).toBeFalsy();
+      expect(result.failed).toBe(false);
 
       // 4. Assert providerChat received `contents` where the aged-out functionResponse has ALREADY been replaced with the "[Earlier tool result compacted: ...]" pointer text BEFORE providerChat is called
       expect(capturedContentsPassedToChat).toBeDefined();
