@@ -199,7 +199,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     expect(map2.get("c1")).toBe(originalText);
   });
 
-  it("lineIsVerbatimInToolResults: does not false-positive on a correct quote that has been compacted out of contents (regression)", () => {
+  it("lineIsVerbatimInToolResults: does not false-positive on a correct quote that has been compacted out of contents (regression)", async () => {
     const exactLine = "if (step < cappedSteps) {";
     const bulkyPayload = exactLine + "\n" + "A".repeat(1000);
     const contents = [
@@ -221,7 +221,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     expect(await lineIsVerbatimInToolResults(exactLine, contents)).toBe(false);
   });
 
-  it("lineIsVerbatimInToolResults: still correctly flags a fabricated quote as unverifiable after compaction (true-positive still works)", () => {
+  it("lineIsVerbatimInToolResults: still correctly flags a fabricated quote as unverifiable after compaction (true-positive still works)", async () => {
     const exactLine = "if (step < cappedSteps) {";
     const bulkyPayload = exactLine + "\n" + "A".repeat(1000);
     const contents = [
