@@ -100,8 +100,43 @@ for**:
 - Threshold tuning (`HISTORY_FULL_DETAIL_STEPS`, the char threshold) —
   current values are starting guesses, meant to be revisited only after
   the manual validation above.
-- Investigate whether `resultCache` is missing the repeat calls
-  observed in the first live `bai` run above.
+- ~~Investigate whether `resultCache` is missing the repeat calls~~
+  **Confirmed bug (2026-08-31):** `repeatCounts` is restored from the
+  checkpoint on resume (`agent_delegate.js:1556`,
+  `new Map(Object.entries(checkpoint.repeatCounts || {}))`) but
+  `resultCache` is not — it's unconditionally reinitialized as
+  `let resultCache = new Map()` (line 1484) with no corresponding
+  restore anywhere in the resume path. Effect: on a resumed invocation,
+  `isRepeat = repeatCounts.has(signature)` correctly comes back `true`,
+  but the serve-from-cache check
+  (`isRepeat && resultCache.has(signature)`, line 1998) fails because
+  the cache is empty in this fresh invocation — the call falls through
+  to the `else` branch and is **silently re-executed for real**, no
+  `[CACHED]` tag in the transcript, full network round-trip spent.
+  Reproduced live: steps 5–6 of the first live `bai` run above
+  re-issued byte-for-byte identical `github_read_file` calls already
+  made in steps 1–2, none tagged `[CACHED]`.
+  This matters more than an ordinary edge case because
+  `agent_worker.js` (the QStash self-chaining path, its own header
+  comment calls this the production mechanism for multi-step runs)
+  calls `runInvestigation` with `resume_run_id + singleStep: true`
+  **once per step** — each call is a fresh serverless invocation, so
+  `resultCache` is wiped every single step under normal async
+  execution, not just on rare crash-recovery resumes. Any repeat call
+  spanning a step boundary re-executes for real, amplifying the exact
+  API-quota burn this whole feature exists to reduce.
+  The comment justifying the non-persistence (“a correctness no-op,
+  not worth the extra checkpoint weight”) assumed resumes are rare
+  exceptional events; under `agent_worker.js` they're the normal unit
+  of execution, so the assumption doesn't hold.
+  **Fix constraint:** cannot just add `resultCache:
+  Object.fromEntries(resultCache)` to the checkpoint's `meta` blob —
+  that's exactly the unbounded-growth shape `preCompactionResults` had
+  before the side-store fix this whole feature is about. Any fix needs
+  the same side-store pattern (Redis key per signature, ids-only in
+  meta, fetch-on-demand), not a return to inlining full result text
+  into the checkpoint blob. Being fixed on a debug branch — see repo
+  for current status.
 
 ## Context
 
