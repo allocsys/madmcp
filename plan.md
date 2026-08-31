@@ -9,7 +9,7 @@
 | Async poll could silently drive 20 steps | Fixed — PR #121, merged `main` |
 | Heartbeat / in-flight step tracking | Done — PR #123, merged `main`@`95e83a7`, live-validated 2026-09-01 |
 | `deleteCheckpoint` GC never called in prod path | Open, undecided |
-| Visible reasoning text not compacted | Open, try prompt fix first |
+| Visible reasoning text not compacted | Fixed — PR #126, merged `main`@`31ad09a`, live-validated 2026-09-01 |
 | Manual token-count validation vs baseline | Not completed |
 
 ## Resolved: Heartbeat / in-flight step tracking
@@ -105,6 +105,40 @@ five implementation steps now closed.
   poll with no explicit `max_steps` used to fall through to a
   synchronous run capped at a default of 20 steps. Now a poll without
   explicit `max_steps` stays poll-only and reports the stall instead.
+- **Visible reasoning text not compacted (PR #126)**: `compactHistoryInPlace`
+  only ever rewrites `"user"`-role `functionResponse` turns -- it never
+  touched `"model"`-role text, which is where a provider's inline
+  chain-of-thought shows up when it isn't cleanly separated into the
+  dedicated `reasoning_content` field (that field itself was never the
+  issue -- `fromOpenAIChoice` in `connectors/openai_shape/adapter.js`
+  only ever reads `message.content`/`message.tool_calls`, so
+  `reasoning_content` was already excluded from resend regardless of
+  this fix). Per the plan, tried the prompt-level fix first rather than
+  extending compaction: added an explicit instruction to
+  `SYSTEM_PREAMBLE` in `connectors/gemini/agent_delegate.js` telling the
+  model not to narrate reasoning/plans in visible turn text -- no
+  explanation alongside a function call, no walkthrough before the
+  final answer. Merged `main`@`31ad09a`. Live-validated 2026-09-01: a
+  `bai`-provider run (run_id `6b5787a2-5722-45ab-9cf5-63a19d48c6ce`,
+  task: explain 401/403 vs 429 handling in `connectors/bai/client.js`)
+  completed in 2 steps -- step 1 went straight to `github_read_file`
+  with no narration, and the final answer led directly with the answer
+  itself, no restated reasoning. Answer was also verified correct
+  against the source file. Compaction of assistant turns (reasoning
+  portion only, never the concluding answer, per the plan's original
+  constraint) remains the documented fallback if this prompt fix is
+  later found to be unreliable in practice -- not needed so far.
+
+  **Not yet covered by this fix**: `delegate_editor`
+  (`connectors/github/editor_delegate.js`) and `delegate_designer`
+  (`connectors/frontend/designer_delegate.js`) each build their own,
+  separate system-preamble text and don't share `agent_delegate.js`'s
+  `SYSTEM_PREAMBLE` constant -- this fix does not apply to them.
+  Separately, `delegate_editor`'s `runEditorAgent` doesn't even accept
+  or forward a `provider` argument to `providerChat()`, so it cannot
+  currently be routed to `bai` at all (always runs on the default
+  `"gemini"` provider) -- not in scope for this fix, flagged here for a
+  future item.
 
 ## Open items (not started, no active work)
 
@@ -322,12 +356,6 @@ five implementation steps now closed.
   `agent_worker.js`, `qstash_client.js`, `agent_tools.js`) — cleanup
   relies entirely on the 1hr Redis TTL. Undecided whether something
   should call it after a caller retrieves the final answer.
-- Visible step-by-step reasoning text inside assistant `content` (not
-  the separate `reasoning_content` field, which is already excluded
-  from resend) is never compacted. Try a `SYSTEM_PREAMBLE` prompt fix
-  first; only extend compaction to assistant turns if that proves
-  unreliable, and only strip the reasoning preamble, never the
-  concluding answer.
 - Manual token-count validation of compaction vs. an uncompacted
   baseline still hasn't completed a run that survives long enough to
   produce a real comparison.
