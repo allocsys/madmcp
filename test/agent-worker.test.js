@@ -118,6 +118,33 @@ describe("agent_worker.js — handleAgentWorker", () => {
     expect(mockPublish).not.toHaveBeenCalled();
   });
 
+  it("heartbeat write in agent_worker.js only happens inside the idempotency guard: a duplicate/late-arriving message with a stale afterStep does not update stepStartedAt", async () => {
+    const runId = await seedRun({ task: "idempotency heartbeat test", provider: "gemini" });
+
+    // Advance stepsDone to 1 so afterStep: 0 is stale
+    mockGithubRequest.mockResolvedValue({ names: [] });
+    mockProviderChat.mockResolvedValueOnce({
+      content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_1" } }] },
+      finishReason: "STOP",
+    });
+    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    await runInvestigation({ resume_run_id: runId, max_steps: 1, provider: "gemini" });
+
+    const cpAdvanced = await loadCheckpoint(runId);
+    expect(cpAdvanced.stepsDone).toBe(1);
+
+    // Send late message with stale afterStep: 0
+    const { req, res } = makeReqRes({ body: { runId, afterStep: 0, retryCount: 0 } });
+    await handleAgentWorker(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+
+    const cpAfter = await loadCheckpoint(runId);
+    // stepStartedAt should remain null/unset (not overwritten by the stale message)
+    expect(cpAfter.stepStartedAt).toBeNull();
+  });
+
   it("takes one step and re-chains (publishes the next message) when the run isn't finished yet", async () => {
     const runId = await seedRun({ task: "multi-step task", provider: "gemini" });
     mockGithubRequest.mockResolvedValue({ names: [] });
