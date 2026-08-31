@@ -2,8 +2,6 @@
 // config.js
 // Central place for all environment variables and shared constants.
 // ---------------------------------------------------------------------------
-// (test commit: verifying the Vercel deploy check after removing the
-// legacy "Manufact"-named deployment -- no functional change)
 
 export const GITHUB_TOKEN   = process.env.GITHUB_TOKEN;
 export const GITHUB_API     = "https://api.github.com";
@@ -168,6 +166,12 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 export const DELEGATE_AGENT_ASYNC = process.env.DELEGATE_AGENT_ASYNC || "sync";
 export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POLL_FRESH_SECONDS) || 60;
+// Max plausible time a single delegate_agent step can legitimately take before
+// being considered genuinely stuck/crashed (comfortably longer than bai's
+// worst-case single-key retry time of ~55s plus QStash delivery lag). Used
+// alongside AGENT_ASYNC_POLL_FRESH_SECONDS to guard against the crash blind
+// spot where a worker dies mid-step and leaves stepStartedAt set indefinitely.
+export const AGENT_ASYNC_STEP_DEAD_SECONDS = Number(process.env.AGENT_ASYNC_STEP_DEAD_SECONDS) || 120;
 export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
 
 export const EXA_API_KEYS = (process.env.EXA_API_KEYS || "")

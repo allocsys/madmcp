@@ -74,7 +74,7 @@ function resultCacheKey(runId, signature) {
 //     here -- a caller-supplied value could be stale by the time the actual
 //     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, resultCache, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, resultCache, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer, stepStartedAt }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -107,9 +107,11 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // in this blob (meta is rewritten in full every call) -- the win is a far
     // smaller per-entry cost (one id vs. up to tens of thousands of chars of
     // text), not a change in growth order.
-    const preCompactionResultIds = preCompactionResults instanceof Map
-      ? [...preCompactionResults.keys()]
-      : Object.keys(preCompactionResults || {});
+    const preCompactionResultIds = Array.isArray(preCompactionResults)
+      ? preCompactionResults
+      : (preCompactionResults instanceof Map
+          ? [...preCompactionResults.keys()]
+          : Object.keys(preCompactionResults || {}));
     // Fix for the 2026-08-31 resultcache-not-persisted-on-resume bug: ids
     // only, same rationale as preCompactionResultIds above -- the actual
     // result text lives in its own side-store key (saveResultCacheEntry),
@@ -117,10 +119,12 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // GC every resultcache:{runId}:* key a run wrote; nothing restores
     // in-memory resultCache state from this list on load (see
     // agent_delegate.js's lazy fetch-on-demand for why that's unnecessary).
-    const resultCacheIds = resultCache instanceof Map
-      ? [...resultCache.keys()]
-      : Object.keys(resultCache || {});
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, resultCacheIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    const resultCacheIds = Array.isArray(resultCache)
+      ? resultCache
+      : (resultCache instanceof Map
+          ? [...resultCache.keys()]
+          : Object.keys(resultCache || {}));
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, resultCacheIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, stepStartedAt: stepStartedAt ?? null, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {

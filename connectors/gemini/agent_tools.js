@@ -3,7 +3,7 @@ import { runInvestigation, seedRun } from "./agent_delegate.js";
 import { loadCheckpoint } from "./agent_checkpoint.js";
 import { publishAgentStep, isQStashConfigured } from "./qstash_client.js";
 import { doCreatePage } from "../notion/tools.js";
-import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS } from "../../config.js";
+import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS, AGENT_ASYNC_STEP_DEAD_SECONDS } from "../../config.js";
 
 export function register(server) {
 
@@ -120,9 +120,31 @@ export function register(server) {
           };
         }
         if (checkpoint && checkpoint.status === "running") {
-          const ageMs = Date.now() - (checkpoint.lastStepAt || 0);
-          if (ageMs < AGENT_ASYNC_POLL_FRESH_SECONDS * 1000) {
-            // Fresh lastStepAt -- the background worker chain is still
+          const now = Date.now();
+          const stepStartedAt = checkpoint.stepStartedAt || 0;
+          const lastStepAt = checkpoint.lastStepAt || 0;
+
+          let isFresh = false;
+          let ageMs = now - lastStepAt;
+
+          if (stepStartedAt > 0) {
+            const stepStartedAgeMs = now - stepStartedAt;
+            if (stepStartedAgeMs > AGENT_ASYNC_STEP_DEAD_SECONDS * 1000) {
+              // Exceeded long ceiling: treat as genuine stall/crash case, NOT as fresh.
+              isFresh = false;
+              ageMs = stepStartedAgeMs;
+            } else {
+              // Within long ceiling: in-flight step counts as fresh.
+              isFresh = true;
+              ageMs = stepStartedAgeMs;
+            }
+          } else {
+            ageMs = now - lastStepAt;
+            isFresh = ageMs < AGENT_ASYNC_POLL_FRESH_SECONDS * 1000;
+          }
+
+          if (isFresh) {
+            // Fresh lastStepAt or stepStartedAt -- the background worker chain is still
             // actively stepping. Poll-only: report progress WITHOUT taking
             // a step ourselves, so a poll can never race the worker.
             return {
@@ -131,8 +153,7 @@ export function register(server) {
                 (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
             };
           }
-          // Stale lastStepAt -- the QStash chain likely broke (a failed
-          // publish, a dropped/undelivered message).
+          // Stale activity -- either lastStepAt is old, or stepStartedAt exceeded AGENT_ASYNC_STEP_DEAD_SECONDS.
           //
           // Fix (2026-08-31): this used to fall through to a synchronous
           // runInvestigation call unconditionally, regardless of whether the
