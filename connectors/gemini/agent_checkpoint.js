@@ -27,6 +27,7 @@ const CHECKPOINT_KEY_PREFIX = "gemini:checkpoint:";
 // A checkpoint only needs to survive long enough for the caller to retry
 // with resume_run_id -- not to become a permanent store.
 const CHECKPOINT_TTL_SECONDS = 3600;
+const MAX_PRE_COMPACTION_RESULTS_ENTRIES = 200;
 
 function contentsKey(runId) {
   return `${CHECKPOINT_KEY_PREFIX}${runId}:contents`;
@@ -82,6 +83,14 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // rather than conditionally spread in, so the shape of a saved
     // checkpoint doesn't vary step-to-step -- consistent with every other
     // field here.
+    // Bound preCompactionResults to prevent unbounded checkpoint meta growth.
+    // Map insertion order is guaranteed (oldest first).
+    if (preCompactionResults && preCompactionResults.size > MAX_PRE_COMPACTION_RESULTS_ENTRIES) {
+      const keys = [...preCompactionResults.keys()];
+      for (let i = 0; i < keys.length - MAX_PRE_COMPACTION_RESULTS_ENTRIES; i++) {
+        preCompactionResults.delete(keys[i]);
+      }
+    }
     const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
