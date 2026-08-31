@@ -21,8 +21,9 @@
 import { geminiChat } from "../gemini/client.js";
 import { glmChat } from "../glm/client.js";
 import { groqChat } from "../groq/client.js";
+import { baiChat } from "../bai/client.js";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../openai_shape/adapter.js";
-import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS, BAI_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
 
 export async function providerChat(contents, { provider = "gemini", tools, model, maxOutputTokens } = {}) {
   if (provider === "glm") {
@@ -47,6 +48,12 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     const messages = toOpenAIMessages(contents);
     const openAITools = tools ? toOpenAITools(tools) : undefined;
     const choice = await groqChat(messages, { model, tools: openAITools, maxOutputTokens: maxOutputTokens ?? GROQ_DEFAULT_MAX_OUTPUT_TOKENS });
+    return fromOpenAIChoice(choice);
+  }
+  if (provider === "bai") {
+    const messages = toOpenAIMessages(contents);
+    const openAITools = tools ? toOpenAITools(tools) : undefined;
+    const choice = await baiChat(messages, { tools: openAITools, maxOutputTokens: maxOutputTokens ?? BAI_DEFAULT_MAX_OUTPUT_TOKENS });
     return fromOpenAIChoice(choice);
   }
   // default / "gemini" -- maxOutputTokens passed through as-is, no forced
