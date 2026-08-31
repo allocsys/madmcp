@@ -47,6 +47,7 @@
 // QStash's (and this account's Gemini quota's) expense indefinitely.
 // ---------------------------------------------------------------------------
 
+import { randomUUID } from "node:crypto";
 import { runInvestigation } from "./agent_delegate.js";
 import { loadCheckpoint, saveCheckpoint } from "./agent_checkpoint.js";
 import { publishAgentStep, verifyQStashSignature } from "./qstash_client.js";
@@ -87,6 +88,16 @@ export async function handleAgentWorker(req, res) {
     return res.status(400).json({ error: "missing runId" });
   }
 
+  // Invocation id (debugging aid, 2026-09-01): a fresh id per HTTP
+  // invocation of this handler, distinct from runId/afterStep which are
+  // shared across retries/redeliveries of the "same" logical step. Lets
+  // log lines distinguish "one invocation ran long" from "two separate
+  // invocations (a QStash redelivery, or a genuine concurrent duplicate)
+  // both processed the same runId+afterStep" -- something timestamps
+  // alone on the checkpoint can't tell apart. Log-only; no behavior change.
+  const invocationId = randomUUID();
+  console.log(`agent-worker[${invocationId}]: entry runId=${runId} afterStep=${afterStep} retryCount=${retryCount}`);
+
   const checkpoint = await loadCheckpoint(runId);
   if (!checkpoint) {
     // Expired past the 1-hour TTL, never existed, or Redis is unreachable
@@ -94,6 +105,7 @@ export async function handleAgentWorker(req, res) {
     // an error from QStash's point of view (it did its job delivering the
     // message); the run itself is just gone.
     console.warn(`agent-worker: no live checkpoint for runId ${runId} -- dropping message`);
+    console.log(`agent-worker[${invocationId}]: exit status=no-op reason=checkpoint-missing runId=${runId} afterStep=${afterStep}`);
     return res.status(200).json({ status: "no-op", reason: "checkpoint missing or expired" });
   }
 
@@ -102,6 +114,7 @@ export async function handleAgentWorker(req, res) {
     // finalize path, or "failed" via this same file's dead-letter path
     // below) by a prior invocation -- do not touch it again. Also covers a
     // duplicate/late redelivery of a message whose run has since completed.
+    console.log(`agent-worker[${invocationId}]: exit status=no-op reason=status-not-running runId=${runId} afterStep=${afterStep} checkpointStatus=${checkpoint.status}`);
     return res.status(200).json({ status: "no-op", reason: `checkpoint status is "${checkpoint.status}", not "running"` });
   }
 
@@ -110,6 +123,7 @@ export async function handleAgentWorker(req, res) {
     // longer matches the live checkpoint -- another invocation (a QStash
     // redelivery racing this one, most likely) already advanced it.
     // Re-executing here would double-take a step Gemini already took.
+    console.log(`agent-worker[${invocationId}]: exit status=no-op reason=stale-afterStep runId=${runId} afterStep=${afterStep} liveStepsDone=${checkpoint.stepsDone}`);
     return res.status(200).json({ status: "no-op", reason: `stepsDone (${checkpoint.stepsDone}) != afterStep (${afterStep}) -- already advanced by another invocation` });
   }
 
@@ -133,6 +147,7 @@ export async function handleAgentWorker(req, res) {
     finalAnswer: checkpoint.finalAnswer,
     stepStartedAt: Date.now(),
   });
+  console.log(`agent-worker[${invocationId}]: heartbeat written, entering runInvestigation runId=${runId} afterStep=${afterStep}`);
 
   let result;
   try {
@@ -147,6 +162,7 @@ export async function handleAgentWorker(req, res) {
     // dead-letter finalization either.
     result = { steps: checkpoint.stepsDone, failed: true, answer: `(agent-worker: unexpected error advancing runId ${runId}: ${err?.message ?? String(err)})` };
   }
+  console.log(`agent-worker[${invocationId}]: runInvestigation returned steps=${result.steps} failed=${!!result.failed} runId=${runId} afterStep=${afterStep}`);
 
   const advanced = result.steps > afterStep;
   const newRetryCount = advanced ? 0 : retryCount + 1;
@@ -156,6 +172,7 @@ export async function handleAgentWorker(req, res) {
     // Finished this step (a genuine final answer, or the hard-cap finalize
     // path inside runInvestigation) -- both already persist status "done"
     // themselves. Nothing more to chain.
+    console.log(`agent-worker[${invocationId}]: exit status=${latest?.status || "gone"} runId=${runId} afterStep=${afterStep} steps=${result.steps}`);
     return res.status(200).json({ status: latest?.status || "gone", steps: result.steps });
   }
 
@@ -186,6 +203,7 @@ export async function handleAgentWorker(req, res) {
       stepStartedAt: null,
     });
     console.error(`agent-worker: runId ${runId} dead-lettered after ${newRetryCount} consecutive failures on step ${latest.stepsDone + 1}`);
+    console.log(`agent-worker[${invocationId}]: exit status=dead-lettered runId=${runId} afterStep=${afterStep} steps=${latest.stepsDone}`);
     return res.status(200).json({ status: "dead-lettered", steps: latest.stepsDone });
   }
 
@@ -208,8 +226,10 @@ export async function handleAgentWorker(req, res) {
     // failed publish here is not a silent stranding, just a slower recovery
     // path than the chain continuing on its own.
     console.error(`agent-worker: failed to re-chain runId ${runId} after step ${latest.stepsDone}: ${err?.message ?? String(err)}`);
+    console.log(`agent-worker[${invocationId}]: exit status=step-ok-rechain-failed runId=${runId} afterStep=${afterStep} steps=${latest.stepsDone}`);
     return res.status(200).json({ status: "step-ok-rechain-failed", steps: latest.stepsDone });
   }
 
+  console.log(`agent-worker[${invocationId}]: exit status=chained runId=${runId} afterStep=${afterStep} steps=${latest.stepsDone}`);
   return res.status(200).json({ status: "chained", steps: latest.stepsDone });
 }
