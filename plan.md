@@ -171,11 +171,57 @@ A critical review of this branch against `main` (code read in full, not just dif
 ### Confirmed: no test exercises the real resume -> recompaction integration path
 `test/history_compaction_test.js`'s "Checkpoint-round-trip recompaction test" only calls `compactHistoryInPlace` twice directly on hand-built arrays -- it never calls the actual `loadCheckpoint`/`saveCheckpoint`/`runInvestigation` resume path (the FIX A code path that re-runs `compactHistoryInPlace` immediately after `loadCheckpoint`, added specifically to fix bug "Compaction itself never survived a checkpoint resume" above). The fix for that bug is therefore currently unverified by any test that actually resumes a run. Needs an integration-level test (e.g. mocking Redis or using a real test Redis instance) that saves a checkpoint mid-run, calls `runInvestigation` with `resume_run_id`, and asserts the resumed `contents` sent to `providerChat` is already compacted.
 
-### Proposed fix for the `preCompactionResults` checkpoint-bloom issue: side-store, not inline map
+### Fix in progress: `preCompactionResults` checkpoint-bloom, side-store not eviction
+
+**Note (2026-08-31): commit `2eea726` ("Fix #1: Bound preCompactionResults")
+added mid-run eviction in `agent_checkpoint.js`'s `saveCheckpoint`
+(deletes the oldest entries once `preCompactionResults.size > 200`). That
+contradicts "No mid-run eviction, ever" below and reopens the exact
+findUnverifiedClaims/lineIsVerbatimInToolResults false-fail bug fixed
+earlier in this branch, for any run long enough to compact >200 results
+-- i.e. the long `bai` runs this feature targets. That eviction block
+must be removed as part of this fix, not tuned (e.g. by raising the cap
+or changing eviction order) -- any deletion of live verification data
+mid-run is the bug, regardless of threshold.**
 
 Goal: bound checkpoint write cost without shrinking what verification checks
 can see, without re-inflating the compacted history sent to the model, and
 without evicting anything that might still be needed mid-run.
+
+**Implementation steps:**
+
+1. **Remove the `2eea726` eviction block** in `agent_checkpoint.js`'s
+   `saveCheckpoint` (the `if (preCompactionResults.size >
+   MAX_PRE_COMPACTION_RESULTS_ENTRIES)` loop and the now-unused
+   `MAX_PRE_COMPACTION_RESULTS_ENTRIES` constant).
+2. **Add side-store writes**: in `compactHistoryInPlace`
+   (`agent_delegate.js`), when a function-call result is first compacted,
+   write its full original text once to a dedicated Redis key
+   `precompact:{runId}:{id}` via a new helper in `agent_checkpoint.js`
+   (e.g. `savePreCompactionResult(runId, id, text)`), instead of only
+   storing it in the in-memory `preCompactionResults` Map.
+3. **Shrink what goes into `meta`**: `saveCheckpoint` should serialize
+   `preCompactionResults` as just the set of ids that have a side-store
+   entry (not the text), so its write cost is O(new entries this step),
+   matching how `contents` is already append-delta via `RPUSH` rather than
+   a full rewrite.
+4. **Update the verification checks to fetch on demand**: thread a
+   `runId`/fetch-by-id path through `findUnverifiedClaims` and
+   `lineIsVerbatimInToolResults` (new `getPreCompactionResult(runId, id)`
+   helper) so a lookup that misses in the in-memory Map falls back to the
+   side-store, instead of assuming all text is already in memory.
+5. **Garbage-collect only at run completion**: extend
+   `deleteCheckpoint` (or add a sibling function) to batch-delete all
+   `precompact:{runId}:*` keys when a run finishes or its checkpoint is
+   explicitly deleted -- mirroring the existing `contentsKey`/`metaKey`
+   cleanup already in `deleteCheckpoint`.
+6. **Tests**: add/extend `test/history_compaction_test.js` (or the
+   checkpoint-round-trip integration test from `b9d06b2`) to assert (a)
+   the side-store is populated correctly across a save/resume cycle, (b)
+   checkpoint `meta` write size stays flat rather than growing step over
+   step on a long run, and (c) no entry is ever lost mid-run regardless of
+   how many results get compacted -- i.e. the eviction failure mode is
+   gone, not just less likely.
 
 - **Move `preCompactionResults` out of the per-step `meta` blob into a
   separate, append-only side-store** -- one Redis key per compacted
