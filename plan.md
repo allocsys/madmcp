@@ -159,6 +159,18 @@ for**:
   holds under the same `agent_worker.js`-style resume-per-step pattern
   the original bug report was about, not just in unit tests.
 
+  **Second confirmation, same run, run to completion (not just polled
+  mid-flight):** the run above (`6efa567f-8dd5-4e17-beac-c4ee9149481f`)
+  finished cleanly in 5 steps with a synthesized final answer -- no key
+  exhaustion, no truncation. Step 4's repeat call
+  (`github_read_file` on `agent_checkpoint.js`, same file as step 1)
+  again came back tagged `[CACHED]`. The model's own final-answer
+  description of `saveResultCacheEntry`/`getResultCacheEntries`,
+  derived independently from its second read of the file, matches the
+  fix as implemented (key shape, TTL, fail-open contract, call sites in
+  `agent_delegate.js`) with no discrepancy -- an independent read-back
+  check on top of the transcript tag itself.
+
   **Not yet covered:** the `deleteCheckpoint` GC-never-called gap
   documented in "Post-merge spot-check findings" above (originally
   found for `precompact:{runId}:*`) applies identically to the new
