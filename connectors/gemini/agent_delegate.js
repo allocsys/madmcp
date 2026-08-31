@@ -83,6 +83,31 @@ export const BULKY_TOOL_NAMES = new Set([
 //
 // Gated on HISTORY_COMPACTION_PROVIDERS.includes(provider) so non-opted-in
 // providers (like default gemini) remain completely unaffected byte-for-byte.
+
+// `functionResponse.id` only needs to be unique WITHIN a single turn for Gemini's
+// own call/response pairing -- nothing in this codebase or in Gemini's contract
+// guarantees it stays unique ACROSS the whole multi-step run. `compactHistoryInPlace`
+// currently keys `preCompactionResults` directly by that id via a plain `.set()` call;
+// if two different steps' calls ever reused the same id, a later compaction would
+// silently overwrite an earlier turn's saved text, permanently dropping it from
+// `findUnverifiedClaims`'s coverage. This collision-safe helper stores a value
+// under `id` normally, but if `id` already maps to a DIFFERENT existing value,
+// stores the new value under a disambiguated key instead (`${id}#2`, etc.) rather
+// than ever overwriting a differing prior entry.
+function setPreCompactionResult(preCompactionResults, id, text) {
+  if (!preCompactionResults.has(id) || preCompactionResults.get(id) === text) {
+    preCompactionResults.set(id, text);
+    return;
+  }
+  let suffix = 2;
+  let altKey = `${id}#${suffix}`;
+  while (preCompactionResults.has(altKey) && preCompactionResults.get(altKey) !== text) {
+    suffix++;
+    altKey = `${id}#${suffix}`;
+  }
+  preCompactionResults.set(altKey, text);
+}
+
 export function compactHistoryInPlace(contents, currentStep, preCompactionResults, {
   fullDetailSteps = HISTORY_FULL_DETAIL_STEPS,
   charThreshold = COMPACTION_CHAR_THRESHOLD,
@@ -1465,6 +1490,9 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // before this field existed won't have it; fall back to whatever the
     // caller passed (may be undefined) rather than erroring.
     effectiveTask = checkpoint.task || task;
+    // `saveCheckpoint`'s `contents` Redis list is append-only (only new turns since the last save are ever RPUSHed -- see agent_checkpoint.js's own header comment on this) -- it never rewrites a turn already in Redis, even though `compactHistoryInPlace` mutates old turns' functionResponse text in place, in memory only. So a turn that was compacted before a crash comes back from `loadCheckpoint` in its ORIGINAL, uncompacted form, and without re-compacting immediately here, this resumed run's very first `providerChat` call later in the loop would re-send that full, uncompacted history -- exactly the token-bloat failure this feature exists to prevent, and exactly the scenario (the `bai` provider exhausting its API keys mid-run) that makes a caller reach for `resume_run_id` in the first place.
+    // This is idempotent and safe to call unconditionally on every resume: entries already compacted before the crash get their `preCompactionResults` entry re-set to the same original text (now restored, uncompacted, from Redis) and get re-compacted to the same marker text -- no data loss, no double-compaction artifacts -- and entries that hadn't yet aged past the recent-detail window last time may now cross it if `stepsDone` has grown since, so this also correctly catches those.
+    compactHistoryInPlace(contents, startStep - 1, preCompactionResults, { provider: effectiveProvider });
   } else if (resume_run_id && !task) {
     // A resume WAS requested but its checkpoint didn't load -- expired past
     // the 1-hour TTL, Redis unavailable (checkpoint.js is deliberately
