@@ -41,7 +41,7 @@
 import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { formatCascadeLogLine } from "../llm/cascade_log.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./agent_checkpoint.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults } from "./agent_checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
@@ -51,9 +51,135 @@ import { cfAccountRequest } from "../cloudflare/client.js";
 import { context7Request } from "../context7/client.js";
 import { mem0Request } from "../mem/client.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
-import { DEFAULT_OWNER } from "../../config.js";
+import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../config.js";
 
 const HARD_MAX_STEPS = 30;
+export const HISTORY_FULL_DETAIL_STEPS = 3;
+export const COMPACTION_CHAR_THRESHOLD = 500;
+export const BULKY_TOOL_NAMES = new Set([
+  "github_read_file",
+  "github_get_file_at_commit",
+  "github_get_file_tree",
+  "cf_query_logs",
+  "cf_workers_get_worker_code",
+  "github_get_workflow_run_logs",
+  "github_get_job_logs",
+  "context7_get_library_docs",
+  "notion_get_page",
+  "github_get_pull_request",
+  "github_search_issues",
+  "github_diff_files",
+  "github_search_code",
+]);
+
+// History compaction (2026-08-27): reduces token usage on long multi-step
+// investigations by replacing bulky older tool results with short summary
+// pointers in place.
+//
+// Hard constraints:
+// 1. Do NOT delete, reorder, or remove any turns/messages from contents.
+// 2. Do NOT break functionCall/functionResponse id pairing or role alternation.
+// 3. Only edit the text inside an existing functionResponse part in place.
+//
+// Gated on HISTORY_COMPACTION_PROVIDERS.includes(provider) so non-opted-in
+// providers (like default gemini) remain completely unaffected byte-for-byte.
+
+// `functionResponse.id` only needs to be unique WITHIN a single turn for Gemini's
+// own call/response pairing -- nothing in this codebase or in Gemini's contract
+// guarantees it stays unique ACROSS the whole multi-step run. `compactHistoryInPlace`
+// currently keys `preCompactionResults` directly by that id via a plain `.set()` call;
+// if two different steps' calls ever reused the same id, a later compaction would
+// silently overwrite an earlier turn's saved text, permanently dropping it from
+// `findUnverifiedClaims`'s coverage. This collision-safe helper stores a value
+// under `id` normally, but if `id` already maps to a DIFFERENT existing value,
+// stores the new value under a disambiguated key instead (`${id}#2`, etc.) rather
+// than ever overwriting a differing prior entry.
+function setPreCompactionResult(preCompactionResults, id, text) {
+  if (!preCompactionResults.has(id) || preCompactionResults.get(id) === text) {
+    preCompactionResults.set(id, text);
+    return id;
+  }
+  let suffix = 2;
+  let altKey = `${id}#${suffix}`;
+  while (preCompactionResults.has(altKey) && preCompactionResults.get(altKey) !== text) {
+    suffix++;
+    altKey = `${id}#${suffix}`;
+  }
+  preCompactionResults.set(altKey, text);
+  return altKey;
+}
+
+export async function compactHistoryInPlace(contents, currentStep, preCompactionResults, {
+  fullDetailSteps = HISTORY_FULL_DETAIL_STEPS,
+  charThreshold = COMPACTION_CHAR_THRESHOLD,
+  bulkyTools = BULKY_TOOL_NAMES,
+  provider,
+  runId,
+} = {}) {
+  const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
+  if (!isEnabled || !Array.isArray(contents)) return;
+
+  // Side-store writes (plan.md "Current outstanding issue" step 2): every
+  // first-time compaction below also persists its full text to Redis via
+  // savePreCompactionResult, not just the in-memory `preCompactionResults`
+  // Map -- meta's checkpoint blob only carries the Map, which is what made
+  // the now-removed 2eea726 eviction "necessary" in the first place. The
+  // writes are collected here and fired at the end (see the Promise.all
+  // below) rather than awaited inline, so every synchronous mutation to
+  // `contents`/`preCompactionResults` in the loop below still completes
+  // before this function's first `await` -- callers (and every existing
+  // test, none of which await this call) that only care about those
+  // synchronous mutations keep working unchanged; only callers that want to
+  // know the side-store writes have actually landed need to await this.
+  const sideStoreWrites = [];
+
+  let modelTurnStack = [];
+  let stepIndex = 0;
+  for (const turn of contents) {
+    if (turn.role === "model") {
+      modelTurnStack.push(turn);
+    } else if (turn.role === "user" && Array.isArray(turn.parts)) {
+      const hasFunctionResponses = turn.parts.some((p) => p.functionResponse);
+      if (hasFunctionResponses) {
+        stepIndex++;
+        const recentModelTurn = modelTurnStack[modelTurnStack.length - 1];
+        // At this point in the loop, `contents` holds completed response turns for steps `1..currentStep-1`.
+        // `currentStep` represents the step number about to be attempted (1-indexed).
+        // Since `contents` contains completed turns only up to `currentStep - 1`, we use
+        // `(currentStep - 1)` as the basis to apply the "keep last `fullDetailSteps` steps" rule.
+        if (stepIndex <= (currentStep - 1) - fullDetailSteps) {
+          for (const part of turn.parts) {
+            if (part.functionResponse && bulkyTools.has(part.functionResponse.name)) {
+              const res = part.functionResponse.response;
+              if (res && typeof res.result === "string" && res.result.length > charThreshold) {
+                // Store original text before compacting -- collision-safe, see setPreCompactionResult above.
+                const storedKey = setPreCompactionResult(preCompactionResults, part.functionResponse.id, res.result);
+                if (runId) {
+                  sideStoreWrites.push(savePreCompactionResult(runId, storedKey, res.result));
+                }
+
+                const originalLength = res.result.length;
+                const toolName = part.functionResponse.name;
+                let target = "";
+                if (recentModelTurn && recentModelTurn.parts) {
+                  const call = recentModelTurn.parts.find(p => p.functionCall?.id === part.functionResponse.id);
+                  if (call) {
+                    const args = call.functionCall.args || {};
+                    target = args.path || args.pull_number || args.query || args.run_id || args.job_id || "";
+                  }
+                }
+                const targetDisplay = target ? ` (${target})` : "";
+                res.result = `[Earlier tool result compacted: ${toolName}${targetDisplay}, originally ${originalLength} chars — call the tool again if the exact content is needed; resultCache will serve it without a new network round trip.]`;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (sideStoreWrites.length) await Promise.all(sideStoreWrites);
+}
 
 // 429 (rate limit) and 503 (overloaded/high demand) are the only cases
 // documented as transient -- see client.js's own model-fallback cascade,
@@ -1092,19 +1218,62 @@ function extractMechanicalClaims(answerText) {
   return [...claims];
 }
 
+// Scans `contents` for functionResponse parts whose text has already been
+// replaced by compactHistoryInPlace's marker string, and returns the ids of
+// those that `preCompactionResults` (the in-memory Map) doesn't have text
+// for -- compaction only ever replaces the TEXT of a functionResponse part,
+// never its `id` (see compactHistoryInPlace's hard constraints), so the id
+// is always still readable straight off `contents` even once compacted.
+// This is the exact "ids needed for this pass" set that the side-store
+// fallback (plan.md step 4) batches a single MGET across, instead of
+// fetching speculatively or one id at a time.
+function findCompactedIdsMissingFromMap(contents, preCompactionResults) {
+  const missing = new Set();
+  for (const turn of contents) {
+    if (turn.role !== "user" || !Array.isArray(turn.parts)) continue;
+    for (const part of turn.parts) {
+      if (!part.functionResponse) continue;
+      const result = part.functionResponse.response?.result;
+      if (typeof result === "string" && result.startsWith("[Earlier tool result compacted:")) {
+        const id = part.functionResponse.id;
+        if (id && !preCompactionResults.has(id)) missing.add(id);
+      }
+    }
+  }
+  return [...missing];
+}
+
 // Checks each extracted claim against the RAW tool-result text already
 // gathered this run (functionResponse parts in `contents`) -- deliberately
 // NOT against the model's own prior turns/text, since matching against its
 // own earlier assertions would just let a wrong claim "verify" itself by
 // citing itself. A claim is "verified" only if it appears verbatim in
 // something an actual tool returned.
-function findUnverifiedClaims(claims, contents) {
-  const rawToolText = contents
+//
+// `runId` (plan.md step 4, optional -- omitting it preserves the old
+// Map-only behavior, e.g. for the hand-built-array unit tests that don't
+// go through Redis) enables a side-store fallback for any compacted id
+// `preCompactionResults` doesn't have text for -- a real gap the normal
+// compact-then-verify-same-run flow doesn't hit, but which a caller
+// reconstructing state from a checkpoint's id-only `preCompactionResultIds`
+// without first re-running compactHistoryInPlace would. Batches every
+// missing id into one MGET rather than fetching per id.
+export async function findUnverifiedClaims(claims, contents, preCompactionResults = new Map(), runId = null) {
+  const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
     .map((p) => p.functionResponse.response?.result || "")
     .join("\n");
-  return claims.filter((claim) => !rawToolText.includes(claim));
+  let preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  if (runId) {
+    const missingIds = findCompactedIdsMissingFromMap(contents, preCompactionResults);
+    if (missingIds.length) {
+      const fetched = await getPreCompactionResults(runId, missingIds);
+      if (fetched.size) preCompactionToolText += "\n" + Array.from(fetched.values()).join("\n");
+    }
+  }
+  const allToolText = currentRawToolText + "\n" + preCompactionToolText;
+  return claims.filter((claim) => !allToolText.includes(claim));
 }
 
 // Conditional/comparison-expression claims (2026-08-27, fix for a Run 5
@@ -1147,13 +1316,29 @@ function extractConditionalClaims(answerText) {
 // asking the model itself "is this line real?" would just be another
 // LLM-judgment call with the same miscalibrated-confidence failure mode
 // this whole mechanism exists to route around.
-function lineIsVerbatimInToolResults(quotedLine, contents) {
-  const rawToolText = contents
+//
+// Now also checks pre-compaction text to support long-running investigations
+// where historical tool results have been compacted.
+//
+// `runId` (plan.md step 4, optional, same contract as findUnverifiedClaims
+// above): side-store fallback, batched via one MGET, for any compacted id
+// `preCompactionResults` doesn't have text for.
+export async function lineIsVerbatimInToolResults(quotedLine, contents, preCompactionResults = new Map(), runId = null) {
+  const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
     .map((p) => p.functionResponse.response?.result || "")
     .join("\n");
-  return rawToolText.includes(quotedLine.trim());
+  let preCompactionToolText = Array.from(preCompactionResults.values()).join("\n");
+  if (runId) {
+    const missingIds = findCompactedIdsMissingFromMap(contents, preCompactionResults);
+    if (missingIds.length) {
+      const fetched = await getPreCompactionResults(runId, missingIds);
+      if (fetched.size) preCompactionToolText += "\n" + Array.from(fetched.values()).join("\n");
+    }
+  }
+  const allToolText = currentRawToolText + "\n" + preCompactionToolText;
+  return allToolText.includes(quotedLine.trim());
 }
 
 // Parses `LINE_QUOTE: <text>` markers (see the structural line-quote ask in
@@ -1297,6 +1482,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // mixed with new calls is normal exploration, not a stuck loop).
   let repeatCounts = new Map();
   let resultCache = new Map();
+  let preCompactionResults = new Map();
   let consecutiveAllRepeatSteps = 0;
   // Verification pass (2026-08-27, see VERIFICATION_PROMPT's comment above
   // for the specific failure it targets): true once the model has produced
@@ -1342,6 +1528,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       transcript: checkpoint.transcript,
       runId: resume_run_id,
       task: checkpoint.task,
+      failed: false,
     };
   }
   if (checkpoint) {
@@ -1367,6 +1554,9 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // empty Map rather than erroring, same defensive pattern as
     // `checkpoint.task || task` below.
     repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
+    // Checkpoints saved before this field existed won't have it -- fall back
+    // to an empty Map rather than erroring, same defensive pattern as repeatCounts.
+    preCompactionResults = new Map(Object.entries(checkpoint.preCompactionResults || {}));
     consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
     // Checkpoints saved before this field existed won't have it -- default
     // to false (normal tool-use resumes as before), same defensive pattern
@@ -1382,6 +1572,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // before this field existed won't have it; fall back to whatever the
     // caller passed (may be undefined) rather than erroring.
     effectiveTask = checkpoint.task || task;
+    // `saveCheckpoint`'s `contents` Redis list is append-only (only new turns since the last save are ever RPUSHed -- see agent_checkpoint.js's own header comment on this) -- it never rewrites a turn already in Redis, even though `compactHistoryInPlace` mutates old turns' functionResponse text in place, in memory only. So a turn that was compacted before a crash comes back from `loadCheckpoint` in its ORIGINAL, uncompacted form, and without re-compacting immediately here, this resumed run's very first `providerChat` call later in the loop would re-send that full, uncompacted history -- exactly the token-bloat failure this feature exists to prevent, and exactly the scenario (the `bai` provider exhausting its API keys mid-run) that makes a caller reach for `resume_run_id` in the first place.
+    // This is idempotent and safe to call unconditionally on every resume: entries already compacted before the crash get their `preCompactionResults` entry re-set to the same original text (now restored, uncompacted, from Redis) and get re-compacted to the same marker text -- no data loss, no double-compaction artifacts -- and entries that hadn't yet aged past the recent-detail window last time may now cross it if `stepsDone` has grown since, so this also correctly catches those.
+    // `startStep` is "the step about to run" for this resumed call, exactly matching what the main loop's own call site passes on every other iteration (`step`, not `step - 1`) — passing `startStep - 1` (completed-steps count) here was itself an off-by-one against `compactHistoryInPlace`'s actual formula, which would silently under-compact by one step immediately after a resume (the very case FIX A exists to correctly handle), re-sending one more full-size turn than intended on the resumed run's first providerChat call.
+    await compactHistoryInPlace(contents, startStep, preCompactionResults, { provider: effectiveProvider, runId });
   } else if (resume_run_id && !task) {
     // A resume WAS requested but its checkpoint didn't load -- expired past
     // the 1-hour TTL, Redis unavailable (checkpoint.js is deliberately
@@ -1523,6 +1717,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         stepsDone: step - 1,
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
+        preCompactionResults: Object.fromEntries(preCompactionResults),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -1581,7 +1776,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // generic instruction the model can satisfy by just re-reading its
         // own draft and feeling confident about it again.
         const mechanicalClaims = extractMechanicalClaims(answer);
-        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents);
+        const unverifiedClaims = await findUnverifiedClaims(mechanicalClaims, contents, preCompactionResults, runId);
         const claimNote = unverifiedClaims.length
           ? `\n\n[SPECIFIC ITEMS TO CHECK] The following identifier(s)/snippet(s) in your draft answer do not appear verbatim in any raw tool result you've fetched so far this run: ${unverifiedClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: re-read or re-search the specific file/location it's claimed to come from and confirm it exact-matches what's actually there, THEN either (a) keep the claim only if you can now quote it verbatim from a fresh tool result, or (b) correct it if the fresh read shows something different. Do not restate any of these unchanged based on memory or on the fact that you already wrote it once -- that is exactly the failure mode this check exists to catch. (Note: some of these may be false positives -- ordinary words, or claims already correctly quoted -- but each one still needs a fresh check, not a guess about which category it's in.)`
           : "";
@@ -1606,6 +1801,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           stepsDone: step,
           task: effectiveTask,
           repeatCounts: Object.fromEntries(repeatCounts),
+          preCompactionResults: Object.fromEntries(preCompactionResults),
           consecutiveAllRepeatSteps,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -1632,7 +1828,12 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // own single-fire guard.
       if (answer && pendingVerification && !structuralRecheckUsed && step < cappedSteps) {
         const quotedLines = extractLineQuotes(answer);
-        const badQuotes = quotedLines.filter((q) => !lineIsVerbatimInToolResults(q, contents));
+        // lineIsVerbatimInToolResults is async (plan.md step 4 -- side-store
+        // fallback), so resolve every lookup first via Promise.all, then
+        // filter on the resolved results -- Array.prototype.filter can't
+        // await inside its predicate.
+        const verbatimChecks = await Promise.all(quotedLines.map((q) => lineIsVerbatimInToolResults(q, contents, preCompactionResults, runId)));
+        const badQuotes = quotedLines.filter((_, i) => !verbatimChecks[i]);
         if (badQuotes.length) {
           const correctionNote =
             `[STRUCTURAL LINE-QUOTE CHECK FAILED] The following line(s) you quoted as exact source text could NOT be found verbatim in any raw tool result already in this conversation: ${badQuotes.map((q) => `"${q}"`).join(", ")}. This means at least one quoted line was reconstructed, paraphrased, or misremembered rather than copied exactly, which means the conditional/comparison claim it was meant to support has NOT actually been confirmed. Re-read the actual file or location again right now, copy the REAL line character-for-character (do not paraphrase, reformat whitespace, or reconstruct from memory), and give your corrected final answer along with a corrected LINE_QUOTE: <line> for each expression you're re-checking. This is the last verification round -- give your best, fully corrected final answer this time.`;
@@ -1645,6 +1846,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
             stepsDone: step,
             task: effectiveTask,
             repeatCounts: Object.fromEntries(repeatCounts),
+            preCompactionResults: Object.fromEntries(preCompactionResults),
             consecutiveAllRepeatSteps,
             provider: effectiveProvider,
             model: effectiveModel,
@@ -1679,6 +1881,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           stepsDone: result.steps,
           task: result.task,
           repeatCounts: Object.fromEntries(repeatCounts),
+          preCompactionResults: Object.fromEntries(preCompactionResults),
           consecutiveAllRepeatSteps,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -1689,7 +1892,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           status: "done",
           finalAnswer: result.answer,
         });
-        return result;
+        // Every finishRun call site is a successful completion (the failure
+        // paths elsewhere in this function return their own `failed: true`
+        // shape directly, without going through finishRun) -- explicitly
+        // set `failed: false` rather than leaving it undefined, so callers
+        // that assert on this field (e.g. an integration test resuming a
+        // run) see a real boolean instead of relying on undefined/false
+        // being treated the same by `if (result.failed)` checks downstream.
+        return { failed: false, ...result };
       };
       if (answer) {
         // Strip internal LINE_QUOTE: markers before ever returning an answer
@@ -1872,6 +2082,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         stepsDone: step - 1,
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
+        preCompactionResults: Object.fromEntries(preCompactionResults),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -1919,6 +2130,16 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       });
     }
 
+    // Compact older bulky tool results in contents before appending this step's turns
+    // (or before saving checkpoint / sending next turn), only if provider opted in.
+    // We pass a preCompactionResults map to store text that gets compacted,
+    // so it remains available for findUnverifiedClaims. Passing runId also lets
+    // compactHistoryInPlace side-store each newly-compacted result's full text in
+    // Redis (plan.md "Current outstanding issue" step 2), not just this in-memory
+    // Map -- awaited so a checkpoint saved right after this line never races ahead
+    // of the side-store writes it corresponds to.
+    await compactHistoryInPlace(contents, step, preCompactionResults, { provider: effectiveProvider, runId });
+
     contents.push({ role: "user", parts: responseParts });
 
     // Checkpoint after every fully-completed step, so a failure on the NEXT
@@ -1934,6 +2155,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       stepsDone: step,
       task: effectiveTask,
       repeatCounts: Object.fromEntries(repeatCounts),
+      preCompactionResults: Object.fromEntries(preCompactionResults),
       consecutiveAllRepeatSteps,
       provider: effectiveProvider,
       model: effectiveModel,
@@ -1979,7 +2201,8 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // params for a call site used exactly once).
     await saveCheckpoint(runId, {
       newContents: [], transcript, stepsDone: cappedSteps, task: effectiveTask,
-      repeatCounts: Object.fromEntries(repeatCounts), consecutiveAllRepeatSteps,
+      repeatCounts: Object.fromEntries(repeatCounts), preCompactionResults: Object.fromEntries(preCompactionResults),
+      consecutiveAllRepeatSteps,
       provider: effectiveProvider, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens,
       pendingVerification, structuralRecheckUsed, overallMaxSteps: effectiveOverallMaxSteps, status: "done", finalAnswer: result.answer,
     });
@@ -2028,6 +2251,7 @@ export async function seedRun({ task, provider, model, maxOutputTokens, max_step
     stepsDone: 0,
     task,
     repeatCounts: {},
+    preCompactionResults: {},
     consecutiveAllRepeatSteps: 0,
     provider,
     model,

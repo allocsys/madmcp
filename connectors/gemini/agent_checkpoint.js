@@ -34,6 +34,12 @@ function contentsKey(runId) {
 function metaKey(runId) {
   return `${CHECKPOINT_KEY_PREFIX}${runId}:meta`;
 }
+// Deliberately NOT under CHECKPOINT_KEY_PREFIX -- kept as its own top-level
+// `precompact:` namespace per plan.md, so a future GC pass (plan.md step 5)
+// can batch-delete `precompact:{runId}:*` independently of contents/meta.
+function precompactKey(runId, id) {
+  return `precompact:${runId}:${id}`;
+}
 
 // Persists loop state after a step completes:
 //   - newContents: ONLY the turn(s) added to `contents` since the last
@@ -43,7 +49,7 @@ function metaKey(runId) {
 //     The caller (agent_delegate.js) is responsible for tracking which slice of
 //     its in-memory `contents` array is new; this function has no way to
 //     know that on its own since it never sees the full array.
-//   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
+//   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps/preCompactionResults: the
 //     small stuff, always written in full (cheap regardless of run length).
 //   - status/lastStepAt (added for async delegate_agent work,
 //     Scenario A `waitUntil` and Scenario B QStash self-chaining -- both
@@ -59,7 +65,7 @@ function metaKey(runId) {
 //     here -- a caller-supplied value could be stale by the time the actual
 //     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -82,7 +88,20 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // rather than conditionally spread in, so the shape of a saved
     // checkpoint doesn't vary step-to-step -- consistent with every other
     // field here.
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    // Step 3 fix (plan.md "Current outstanding issue"): store only the IDS
+    // that have a side-store entry, not the text -- see savePreCompactionResult
+    // below, and agent_delegate.js's resume-restore comment for why an
+    // empty-of-text Map on load loses nothing (compactHistoryInPlace
+    // re-derives every still-aged-out id's real text straight from the
+    // pristine `contents` loadCheckpoint returns, before anything else runs).
+    // This is still O(total ids compacted so far), same as every other field
+    // in this blob (meta is rewritten in full every call) -- the win is a far
+    // smaller per-entry cost (one id vs. up to tens of thousands of chars of
+    // text), not a change in growth order.
+    const preCompactionResultIds = preCompactionResults instanceof Map
+      ? [...preCompactionResults.keys()]
+      : Object.keys(preCompactionResults || {});
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
@@ -142,13 +161,84 @@ export async function loadCheckpoint(runId) {
   }
 }
 
+// Side-store for a single compacted-away tool result's full original text
+// (fix for the preCompactionResults checkpoint-bloat issue -- see plan.md's
+// "Current outstanding issue" section). saveCheckpoint's `meta` blob is
+// rewritten in full on every call (unlike `contents`, which is append-delta
+// via RPUSH -- see this file's header), so storing every compacted result's
+// full text inside `preCompactionResults` there means unbounded per-step
+// write cost on exactly the long `bai` runs history compaction targets.
+// This writes the text ONCE, to its own key, the first time a given id is
+// compacted -- compactHistoryInPlace (agent_delegate.js) is responsible for
+// only calling this on first-time compaction of an id, not on every step
+// that id happens to still be in the aged-out window.
+// Fails open -- never throws, same contract as every other function here.
+export async function savePreCompactionResult(runId, id, text) {
+  const client = getRedis();
+  if (!client) return;
+  try {
+    await client.set(precompactKey(runId, id), text, { ex: CHECKPOINT_TTL_SECONDS });
+  } catch {
+    // best-effort -- see file header
+  }
+}
+
+// Batched fetch-on-demand for compacted results' full text (plan.md
+// "Current outstanding issue" step 4). findUnverifiedClaims and
+// lineIsVerbatimInToolResults (agent_delegate.js) read primarily from the
+// in-memory `preCompactionResults` Map, which the normal compact-then-
+// verify-same-run flow keeps fully populated -- this is the side-store
+// fallback for the id(s) that Map doesn't have (e.g. state reconstructed
+// from a checkpoint's `preCompactionResultIds` without a preceding
+// `compactHistoryInPlace` recompaction pass).
+// Takes the full list of ids a verification pass needs and does ONE round
+// trip (MGET) for all of them, not a GET per id -- a naive per-id fetch is
+// a real added latency cost on exactly the long `bai` runs compacting 200+
+// results, which is what this feature targets in the first place.
+// Fails open -- returns an empty Map on any error or missing Redis, same
+// contract as every other function in this file. Never throws.
+export async function getPreCompactionResults(runId, ids) {
+  const idList = [...new Set((ids || []).filter(Boolean))];
+  const found = new Map();
+  if (!idList.length) return found;
+  const client = getRedis();
+  if (!client) return found;
+  try {
+    const values = await client.mget(...idList.map((id) => precompactKey(runId, id)));
+    idList.forEach((id, i) => {
+      if (values[i] != null) found.set(id, values[i]);
+    });
+  } catch {
+    // best-effort -- see file header
+  }
+  return found;
+}
+
 // Deletes a checkpoint once a run finishes (a final answer, or the model
-// stops issuing function calls) -- nothing left to resume. Clears both keys.
+// stops issuing function calls) -- nothing left to resume. Clears the
+// contents/meta keys, plus (plan.md step 5) every precompact:{runId}:*
+// side-store key savePreCompactionResult wrote during the run -- those
+// live outside CHECKPOINT_KEY_PREFIX (see precompactKey's comment), so
+// they wouldn't be swept up by deleting contents/meta alone and would
+// otherwise just sit until their own CHECKPOINT_TTL_SECONDS TTL expires.
+// The id list isn't passed in -- it's read back from meta's own
+// preCompactionResultIds (fetched before meta is deleted), since that's
+// the only record of which ids exist; this deliberately avoids relying on
+// Redis KEYS/SCAN (not guaranteed available/cheap on every provider this
+// runs against -- same fail-open, provider-agnostic contract as the rest
+// of this file).
 export async function deleteCheckpoint(runId) {
   const client = getRedis();
   if (!client) return;
   try {
-    await Promise.all([client.del(contentsKey(runId)), client.del(metaKey(runId))]);
+    const rawMeta = await client.get(metaKey(runId));
+    const meta = rawMeta ? (typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta) : null;
+    const ids = (meta && meta.preCompactionResultIds) || [];
+    await Promise.all([
+      client.del(contentsKey(runId)),
+      client.del(metaKey(runId)),
+      ...ids.map((id) => client.del(precompactKey(runId, id))),
+    ]);
   } catch {
     // best-effort
   }
