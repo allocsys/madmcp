@@ -12,5 +12,5 @@
       "debug/*": false
     }
   },
-  "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(README\\.md|demo\\.html|test/.*|\\.github/.*)$\"'"
+  "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(.*\\.md|demo\\.html|test/.*|\\.github/.*)$\"'"
 }
