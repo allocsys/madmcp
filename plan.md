@@ -56,20 +56,50 @@ reaching that point — but it did surface two things worth tracking:
   Run did not survive long enough to observe compaction actually
   triggering (`HISTORY_FULL_DETAIL_STEPS = 3` should engage by step 4+).
 
+### Follow-up small `bai` run (2026-08-31, live `delegate_agent`,
+`max_steps: 4`, task: read config.js, summarize
+HISTORY_COMPACTION_PROVIDERS + BAI_MODEL)
+
+Completed cleanly in 4 steps, no key exhaustion — confirms the earlier
+failure really was B.AI quota/capacity exhaustion at the time, not a
+code bug; a small task on the same keys went through fine shortly after.
+Also double-checked the resume-provider question this session raised:
+read `runInvestigation`'s resume path directly —
+`effectiveProvider = checkpoint.provider || provider` (agent_delegate.js)
+makes the checkpoint's own recorded provider authoritative on resume,
+not whatever the caller passes. Confirmed in practice too: every resume
+call on the earlier failed run was made without a `provider` arg, and
+both failures came back as B.AI errors (key timeouts/429s), not Gemini
+errors — so the run correctly stayed on `bai` throughout. The
+`checkpoint.provider || provider` fallback only matters for checkpoints
+saved before the `provider` field existed; every checkpoint from this
+feature onward always has it set, so that fallback branch is effectively
+dead code going forward. Not a gap.
+
+New item surfaced by this run's own answer, unrelated to compaction:
+`config.js`'s comment on `BAI_MODEL`'s default (`"glm-5.3-flash"`) says
+it is **not yet live-verified** — B.AI's docs never state the literal
+model-ID string, so the default is a guess from their doc URL slug, not
+confirmed against `GET https://api.b.ai/v1/models` with a real key.
+
 Remaining work — **not started, out of scope unless explicitly asked
 for**:
 - Manual validation: a real multi-step `bai` run, comparing input
   tokens/step and answer quality against an uncompacted baseline, plus
-  confirming a parallel `gemini` run is fully unaffected. (Attempted
-  once above; failed on key exhaustion before completing — needs a
-  retry once keys are off cooldown, and ideally the repeat-call
-  question above resolved first since it may be inflating the very
-  quota usage this feature is meant to reduce.)
+  confirming a parallel `gemini` run is fully unaffected. (Two attempts
+  so far: the first multi-file run failed on key exhaustion before
+  completing; a smaller follow-up completed cleanly but was too short
+  to exercise compaction or produce a real token comparison. Still
+  needs a proper multi-step run that survives long enough to compare
+  against an uncompacted baseline.)
 - Threshold tuning (`HISTORY_FULL_DETAIL_STEPS`, the char threshold) —
   current values are starting guesses, meant to be revisited only after
   the manual validation above.
 - Investigate whether `resultCache` is missing the repeat calls
-  observed in the live `bai` run above.
+  observed in the first live `bai` run above.
+- Verify `BAI_MODEL`'s default (`"glm-5.3-flash"`) against a real
+  `GET https://api.b.ai/v1/models` call — currently unconfirmed per
+  config.js's own comment.
 
 ## Context
 
