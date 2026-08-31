@@ -43,7 +43,7 @@ function metaKey(runId) {
 //     The caller (agent_delegate.js) is responsible for tracking which slice of
 //     its in-memory `contents` array is new; this function has no way to
 //     know that on its own since it never sees the full array.
-//   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps: the
+//   - transcript/stepsDone/task/repeatCounts/consecutiveAllRepeatSteps/preCompactionResults: the
 //     small stuff, always written in full (cheap regardless of run length).
 //   - status/lastStepAt (added for async delegate_agent work,
 //     Scenario A `waitUntil` and Scenario B QStash self-chaining -- both
@@ -59,7 +59,7 @@ function metaKey(runId) {
 //     here -- a caller-supplied value could be stale by the time the actual
 //     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -82,7 +82,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // rather than conditionally spread in, so the shape of a saved
     // checkpoint doesn't vary step-to-step -- consistent with every other
     // field here.
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
