@@ -34,6 +34,12 @@ function contentsKey(runId) {
 function metaKey(runId) {
   return `${CHECKPOINT_KEY_PREFIX}${runId}:meta`;
 }
+// Deliberately NOT under CHECKPOINT_KEY_PREFIX -- kept as its own top-level
+// `precompact:` namespace per plan.md, so a future GC pass (plan.md step 5)
+// can batch-delete `precompact:{runId}:*` independently of contents/meta.
+function precompactKey(runId, id) {
+  return `precompact:${runId}:${id}`;
+}
 
 // Persists loop state after a step completes:
 //   - newContents: ONLY the turn(s) added to `contents` since the last
@@ -142,6 +148,28 @@ export async function loadCheckpoint(runId) {
   } catch (err) {
     console.warn(`loadCheckpoint(${runId}) failed -- treating as no checkpoint:`, err?.message ?? err);
     return null;
+  }
+}
+
+// Side-store for a single compacted-away tool result's full original text
+// (fix for the preCompactionResults checkpoint-bloat issue -- see plan.md's
+// "Current outstanding issue" section). saveCheckpoint's `meta` blob is
+// rewritten in full on every call (unlike `contents`, which is append-delta
+// via RPUSH -- see this file's header), so storing every compacted result's
+// full text inside `preCompactionResults` there means unbounded per-step
+// write cost on exactly the long `bai` runs history compaction targets.
+// This writes the text ONCE, to its own key, the first time a given id is
+// compacted -- compactHistoryInPlace (agent_delegate.js) is responsible for
+// only calling this on first-time compaction of an id, not on every step
+// that id happens to still be in the aged-out window.
+// Fails open -- never throws, same contract as every other function here.
+export async function savePreCompactionResult(runId, id, text) {
+  const client = getRedis();
+  if (!client) return;
+  try {
+    await client.set(precompactKey(runId, id), text, { ex: CHECKPOINT_TTL_SECONDS });
+  } catch {
+    // best-effort -- see file header
   }
 }
 
