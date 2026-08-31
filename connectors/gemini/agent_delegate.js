@@ -1107,8 +1107,8 @@ function findUnverifiedClaims(claims, contents) {
   return claims.filter((claim) => !rawToolText.includes(claim));
 }
 
-// Conditional/comparison-expression claims (2026-08-27, fix for the Run 5
-// gap documented in plan.md: extractMechanicalClaims/findUnverifiedClaims
+// Conditional/comparison-expression claims (2026-08-27, fix for a Run 5
+// gap: extractMechanicalClaims/findUnverifiedClaims
 // check whether each individual identifier TOKEN appears verbatim in raw
 // tool output, but not whether the specific COMBINATION/relationship
 // asserted between two real tokens (e.g. "step is compared against
@@ -1181,9 +1181,9 @@ function stripLineQuoteMarkers(answerText) {
 
 // One-time self-check appended after the model's first draft final answer
 // (see the verification-pass logic in the loop below). Targets a specific,
-// observed failure (plan.md, 2026-08-27: "gave a verifiably wrong answer...
-// appears to have trusted a later, narrower github_search_code result...
-// over the complete file it had already read") that the SYSTEM_PREAMBLE
+// observed failure (2026-08-27: gave a verifiably wrong answer that
+// appears to have trusted a later, narrower github_search_code result
+// over the complete file it had already read) that the SYSTEM_PREAMBLE
 // rules above are meant to prevent DURING synthesis -- this is the backstop
 // for when they don't: a forced second pass, after the draft answer already
 // exists as concrete text to check claim-by-claim, rather than trusting the
@@ -1194,7 +1194,7 @@ function stripLineQuoteMarkers(answerText) {
 // 2026-08-27 fix) -- an earlier no-tools version of this prompt asked the
 // model to catch its own mechanical mistakes purely by re-reading scrollback
 // from memory, which is the same failure mode in miniature: a live test
-// (plan.md "Live verification test", runs 2-3) found it confidently
+// ("Live verification test", runs 2-3) found it confidently
 // re-asserting the WRONG one of two similar constants during a no-tools
 // verification pass, rather than catching the error. Explicitly telling the
 // model to re-fetch when unsure, instead of just re-reading its own
@@ -1323,7 +1323,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   let contentsCheckpointedUpTo = 0;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
-  // Async delegate_agent (plan.md, Scenario A/B groundwork): a checkpoint
+  // Async delegate_agent (Scenario A/B groundwork): a checkpoint
   // whose last save recorded status "done" already has a final answer sitting
   // in Redis (see the completion path near the end of this function, which
   // now PERSISTS a done checkpoint instead of deleting it, specifically so
@@ -1496,7 +1496,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // and the fix for "misremembered" is letting it look again, not asking
     // it to recall harder from a long scrollback transcript -- that's the
     // same failure mode in a smaller box. Confirmed live (2026-08-27, see
-    // plan.md "Live verification test" runs 2-3): a no-tools verification
+    // "Live verification test" runs 2-3): a no-tools verification
     // pass confidently asserted the wrong constant (HARD_MAX_STEPS instead
     // of the actual cappedSteps) gated a condition, i.e. it re-affirmed a
     // wrong answer from memory instead of catching it. Tool access lets the
@@ -1658,7 +1658,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         }
       }
 
-      // Async delegate_agent (plan.md groundwork): persist a "done" checkpoint
+      // Async delegate_agent (groundwork): persist a "done" checkpoint
       // (status + finalAnswer) here instead of unconditionally deleting the
       // checkpoint the way this used to. A resume_run_id caller polling a
       // background/worker-driven run (see the checkpoint.status === "done"
@@ -1951,7 +1951,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     contentsCheckpointedUpTo = contents.length;
   }
 
-  // Async delegate_agent (plan.md groundwork): reaching THIS caller's
+  // Async delegate_agent (groundwork): reaching THIS caller's
   // max_steps ceiling is not necessarily the end of the run -- a caller
   // (notably the QStash worker, which deliberately calls with
   // max_steps: stepsDone + 1 to take exactly one step per invocation, see
@@ -1993,7 +1993,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
 
 // Seeds a fresh checkpoint (status "running", stepsDone 0, no steps taken
 // yet) WITHOUT running any part of the investigation loop -- used by
-// agent_tools.js's async-start path (plan.md Scenario B) to return a runId
+// agent_tools.js's async-start path (Scenario B) to return a runId
 // immediately and let the QStash worker (agent_worker.js) take step 1 in
 // the background, rather than this call itself blocking on step 1
 // synchronously before returning (which would defeat the "returns almost
