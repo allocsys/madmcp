@@ -7,12 +7,12 @@
 | History compaction (bai token-bloat) | Done — PR #119, merged `main`@`e0a8ee3` |
 | `resultCache` not persisted on resume | Fixed — PR #120, merged `main`@`b48e57f` |
 | Async poll could silently drive 20 steps | Fixed — PR #121, merged `main` |
-| Heartbeat / in-flight step tracking | Merged — PR #123, merged `main`@`95e83a7` (step 5 live validation still pending) |
+| Heartbeat / in-flight step tracking | Done — PR #123, merged `main`@`95e83a7`, live-validated 2026-09-01 |
 | `deleteCheckpoint` GC never called in prod path | Open, undecided |
 | Visible reasoning text not compacted | Open, try prompt fix first |
 | Manual token-count validation vs baseline | Not completed |
 
-## Merged, pending live validation: Heartbeat / in-flight step tracking
+## Resolved: Heartbeat / in-flight step tracking
 
 ### Problem
 
@@ -72,12 +72,18 @@ one bai key-rotation retry (~55s) plus normal step time.
    stale via the new long ceiling despite a fresh-looking
    `stepStartedAt`; duplicate-delivery race doesn't clobber a real
    in-flight heartbeat.
-5. [ ] Live validation: reproduce the 2026-09-01 101s-gap scenario again
+5. [x] Live validation: reproduce the 2026-09-01 101s-gap scenario again
    with the fix in place and confirm no false "stalled" report.
 
 Merged via PR #123 (`main`@`95e83a7`). Full suite passing at merge:
-473/473 tests. Step 5 requires a real production run and is left open
-until that's observed.
+473/473 tests. Live-validated 2026-09-01: a real `bai`-provider
+delegate_agent run (run_id `7131e62e-acbe-45a5-a6f4-e799298d1489`) hit
+a 40+s idle gap between steps 4 and 5 (bai key-rotation/latency, the
+same class of gap as the original 101s repro) — polled repeatedly
+through the gap and every poll correctly reported "still running" via
+the `stepStartedAt` heartbeat, never a false "stalled." Run completed
+normally (5 steps, ~104s wall clock) with a valid final answer. All
+five implementation steps now closed.
 
 ## Condensed changelog (resolved)
 
