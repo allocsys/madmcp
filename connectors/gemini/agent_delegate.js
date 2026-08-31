@@ -1375,6 +1375,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // mixed with new calls is normal exploration, not a stuck loop).
   let repeatCounts = new Map();
   let resultCache = new Map();
+  let preCompactionResults = new Map();
   let consecutiveAllRepeatSteps = 0;
   // Verification pass (2026-08-27, see VERIFICATION_PROMPT's comment above
   // for the specific failure it targets): true once the model has produced
@@ -1445,6 +1446,9 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // empty Map rather than erroring, same defensive pattern as
     // `checkpoint.task || task` below.
     repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
+    // Checkpoints saved before this field existed won't have it -- fall back
+    // to an empty Map rather than erroring, same defensive pattern as repeatCounts.
+    preCompactionResults = new Map(Object.entries(checkpoint.preCompactionResults || {}));
     consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
     // Checkpoints saved before this field existed won't have it -- default
     // to false (normal tool-use resumes as before), same defensive pattern
@@ -1601,6 +1605,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         stepsDone: step - 1,
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
+        preCompactionResults: Object.fromEntries(preCompactionResults),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -1659,7 +1664,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // generic instruction the model can satisfy by just re-reading its
         // own draft and feeling confident about it again.
         const mechanicalClaims = extractMechanicalClaims(answer);
-        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents, resultCache);
+        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents, preCompactionResults);
         const claimNote = unverifiedClaims.length
           ? `\n\n[SPECIFIC ITEMS TO CHECK] The following identifier(s)/snippet(s) in your draft answer do not appear verbatim in any raw tool result you've fetched so far this run: ${unverifiedClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: re-read or re-search the specific file/location it's claimed to come from and confirm it exact-matches what's actually there, THEN either (a) keep the claim only if you can now quote it verbatim from a fresh tool result, or (b) correct it if the fresh read shows something different. Do not restate any of these unchanged based on memory or on the fact that you already wrote it once -- that is exactly the failure mode this check exists to catch. (Note: some of these may be false positives -- ordinary words, or claims already correctly quoted -- but each one still needs a fresh check, not a guess about which category it's in.)`
           : "";
@@ -1684,6 +1689,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           stepsDone: step,
           task: effectiveTask,
           repeatCounts: Object.fromEntries(repeatCounts),
+          preCompactionResults: Object.fromEntries(preCompactionResults),
           consecutiveAllRepeatSteps,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -1723,6 +1729,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
             stepsDone: step,
             task: effectiveTask,
             repeatCounts: Object.fromEntries(repeatCounts),
+            preCompactionResults: Object.fromEntries(preCompactionResults),
             consecutiveAllRepeatSteps,
             provider: effectiveProvider,
             model: effectiveModel,
@@ -1757,6 +1764,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           stepsDone: result.steps,
           task: result.task,
           repeatCounts: Object.fromEntries(repeatCounts),
+          preCompactionResults: Object.fromEntries(preCompactionResults),
           consecutiveAllRepeatSteps,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -1950,6 +1958,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         stepsDone: step - 1,
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
+        preCompactionResults: Object.fromEntries(preCompactionResults),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -2001,7 +2010,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // (or before saving checkpoint / sending next turn), only if provider opted in.
     // We pass a preCompactionResults map to store text that gets compacted,
     // so it remains available for findUnverifiedClaims.
-    compactHistoryInPlace(contents, step, resultCache, { provider: effectiveProvider });
+    compactHistoryInPlace(contents, step, preCompactionResults, { provider: effectiveProvider });
 
     contents.push({ role: "user", parts: responseParts });
 
@@ -2018,6 +2027,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       stepsDone: step,
       task: effectiveTask,
       repeatCounts: Object.fromEntries(repeatCounts),
+      preCompactionResults: Object.fromEntries(preCompactionResults),
       consecutiveAllRepeatSteps,
       provider: effectiveProvider,
       model: effectiveModel,
@@ -2063,7 +2073,8 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // params for a call site used exactly once).
     await saveCheckpoint(runId, {
       newContents: [], transcript, stepsDone: cappedSteps, task: effectiveTask,
-      repeatCounts: Object.fromEntries(repeatCounts), consecutiveAllRepeatSteps,
+      repeatCounts: Object.fromEntries(repeatCounts), preCompactionResults: Object.fromEntries(preCompactionResults),
+      consecutiveAllRepeatSteps,
       provider: effectiveProvider, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens,
       pendingVerification, structuralRecheckUsed, overallMaxSteps: effectiveOverallMaxSteps, status: "done", finalAnswer: result.answer,
     });
@@ -2112,6 +2123,7 @@ export async function seedRun({ task, provider, model, maxOutputTokens, max_step
     stepsDone: 0,
     task,
     repeatCounts: {},
+    preCompactionResults: {},
     consecutiveAllRepeatSteps: 0,
     provider,
     model,
