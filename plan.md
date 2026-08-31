@@ -180,7 +180,45 @@ for**:
   never calls `deleteCheckpoint` anywhere in its production path, so
   cleanup for both key families relies entirely on the shared 1hr TTL.
   Same open decision as before, now covering two side-stores instead
-  of one.
+  of one. Still open, tracked here, not yet picked up.
+
+### Fixed (2026-08-31): async poll could silently drive real steps (PR #121, merged, `agent_tools.js`)
+
+Found while validating the resultCache fix above, via a user report while
+polling a live `bai` run: `resume_run_id` polls in async/QStash mode are
+documented as status checks, but `agent_tools.js`'s stale-checkpoint
+fallback (`lastStepAt` older than `AGENT_ASYNC_POLL_FRESH_SECONDS`, meaning
+the background worker chain likely broke) unconditionally fell through to
+a synchronous `runInvestigation(..., max_steps, ...)` call — and
+`max_steps` defaulted to 20 whether or not the caller passed one. A caller
+doing nothing but a routine "is this done yet" poll (no `max_steps`,
+exactly what checking status looks like) could, purely from bad timing
+(worker chain happened to be stale at that exact poll), trigger up to 20
+real steps as a side effect — indistinguishable up front from an
+intentional "push this forward" call, and provider-agnostic (applies
+equally to `gemini` and `bai` runs, since the branching has no
+provider-specific logic).
+
+Fix: `agent_tools.js` now tracks whether the caller explicitly passed
+`max_steps` (`rawMaxSteps !== undefined`), separately from the effective
+defaulted value. In the stale-checkpoint branch: no explicit `max_steps`
+→ stays poll-only, reports the stall (steps done, time since last
+activity, transcript) and tells the caller to pass an explicit `max_steps`
+to push forward, instead of doing so unasked. Explicit `max_steps` given
+→ unchanged, falls through to a synchronous resume as before. Does not
+reintroduce the "run can be stranded" risk the original fallback existed
+to prevent — the checkpoint is untouched either way, and the very next
+call with an explicit `max_steps` still resumes it synchronously. Scoped
+correctly to async/QStash mode only — synchronous mode has no separate
+poll state at all, `resume_run_id` there has always meant "continue now"
+regardless of `max_steps`, and that's unchanged.
+
+Tests: `test/agent-tools-async.test.js`'s old single "stale checkpoint
+always falls through" test split into two — no `max_steps` stays
+poll-only and reports the stall; explicit `max_steps` still pushes the
+run forward via `runInvestigation`. Tool/param descriptions
+(`delegate_agent`'s description, `max_steps`'s own description) updated
+to document the poll-vs-push contract. CI green, merged to `main`.
 
 ## Context
 
