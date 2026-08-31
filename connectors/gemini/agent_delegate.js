@@ -1471,12 +1471,39 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // times each exact (function name + JSON-stringified args) signature has
   // been called THIS RUN, persisted across resumes (see checkpoint.js) so a
   // resumed run doesn't forget what it already tried. resultCache holds the
-  // actual result text per signature -- deliberately NOT persisted in the
-  // checkpoint (only counts are, to keep checkpoint writes small per fix
-  // #5): on a resume, an exact-repeat call that was cached in a prior
-  // in-memory run simply re-executes once more and gets re-cached, which is
-  // a correctness no-op (same call, same result), not worth the extra
-  // checkpoint weight of persisting every cached result string.
+  // actual result text per signature, keyed the same way.
+  //
+  // FIX (2026-08-31, debug/resultcache-not-persisted-on-resume -- see
+  // plan.md for the full writeup): this comment used to say resultCache was
+  // deliberately NOT persisted, on the theory that a resumed run's repeat
+  // call would just re-execute once more -- a correctness no-op, not worth
+  // the checkpoint weight. That held for a rare, exceptional resume, but
+  // agent_worker.js's QStash self-chaining path calls runInvestigation with
+  // resume_run_id + singleStep: true ONCE PER STEP as its normal unit of
+  // execution -- resultCache was therefore wiped every single step under
+  // ordinary async operation, and any repeat call spanning a step boundary
+  // silently re-executed for real (repeatCounts correctly reported
+  // isRepeat: true, but the serve-from-cache check needs BOTH isRepeat and
+  // resultCache.has(signature), and the latter was always false in a fresh
+  // invocation).
+  //
+  // Fixed via the same side-store pattern as preCompactionResults
+  // (savePreCompactionResult/getPreCompactionResult below): a signature's
+  // result text is written once, the first time it's computed, to its own
+  // Redis key (saveResultCacheEntry) -- never inlined into the checkpoint's
+  // `meta` blob, which would reopen the exact unbounded-growth problem
+  // preCompactionResults' own side-store fix was for. Unlike
+  // preCompactionResults (which restores every aged-out entry up front via
+  // compactHistoryInPlace, since each one WILL be needed for verification),
+  // resultCache entries are fetched lazily, on demand, right before
+  // executing each step's function calls -- only for signatures repeatCounts
+  // already knows are a repeat AND that this fresh invocation's empty
+  // in-memory Map doesn't have yet, batched via one MGET per step rather
+  // than one round trip per call (see the pre-pass right before the
+  // `Promise.all(functionCalls.map(...))` call below). `resultCacheIds` in
+  // the checkpoint's meta blob (ids only, mirroring preCompactionResultIds)
+  // exists purely for deleteCheckpoint's GC sweep, not for restoring
+  // in-memory state on resume.
   // consecutiveAllRepeatSteps counts how many steps IN A ROW consisted
   // ENTIRELY of repeat calls -- the real stuck-loop signal (a single repeat
   // mixed with new calls is normal exploration, not a stuck loop).
