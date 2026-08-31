@@ -40,6 +40,15 @@ function metaKey(runId) {
 function precompactKey(runId, id) {
   return `precompact:${runId}:${id}`;
 }
+// Same reasoning as precompactKey above, mirrored for resultCache (fix for
+// the 2026-08-31 resultcache-not-persisted-on-resume bug -- see
+// saveResultCacheEntry/getResultCacheEntries below and plan.md). Its own
+// top-level `resultcache:` namespace, independent of both
+// CHECKPOINT_KEY_PREFIX and precompactKey's own namespace, so a GC pass can
+// batch-delete `resultcache:{runId}:*` on its own.
+function resultCacheKey(runId, signature) {
+  return `resultcache:${runId}:${signature}`;
+}
 
 // Persists loop state after a step completes:
 //   - newContents: ONLY the turn(s) added to `contents` since the last
@@ -65,7 +74,7 @@ function precompactKey(runId, id) {
 //     here -- a caller-supplied value could be stale by the time the actual
 //     Redis write lands, defeating the freshness check.
 // Fails open -- never throws.
-export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
+export async function saveCheckpoint(runId, { newContents = [], transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, resultCache, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status = "running", finalAnswer }) {
   const client = getRedis();
   if (!client) return;
   try {
@@ -101,7 +110,17 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     const preCompactionResultIds = preCompactionResults instanceof Map
       ? [...preCompactionResults.keys()]
       : Object.keys(preCompactionResults || {});
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    // Fix for the 2026-08-31 resultcache-not-persisted-on-resume bug: ids
+    // only, same rationale as preCompactionResultIds above -- the actual
+    // result text lives in its own side-store key (saveResultCacheEntry),
+    // never inlined here. This list exists purely so deleteCheckpoint can
+    // GC every resultcache:{runId}:* key a run wrote; nothing restores
+    // in-memory resultCache state from this list on load (see
+    // agent_delegate.js's lazy fetch-on-demand for why that's unnecessary).
+    const resultCacheIds = resultCache instanceof Map
+      ? [...resultCache.keys()]
+      : Object.keys(resultCache || {});
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, resultCacheIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
@@ -214,6 +233,54 @@ export async function getPreCompactionResults(runId, ids) {
   return found;
 }
 
+// Side-store for a single tool call's cached result text, keyed by the
+// same normalized-call signature agent_delegate.js's resultCache Map uses
+// in memory (fix for the 2026-08-31 resultcache-not-persisted-on-resume
+// bug -- see plan.md). Mirrors savePreCompactionResult immediately above in
+// shape and contract (write once, on first computation of a given key;
+// fails open; never throws), but keyed by call signature instead of a
+// functionResponse id, and written on EVERY fresh (non-cached) tool call
+// agent_delegate.js executes -- not just ones that later get compacted --
+// since any of them could turn out to be repeated across a resume/step
+// boundary.
+export async function saveResultCacheEntry(runId, signature, text) {
+  const client = getRedis();
+  if (!client) return;
+  try {
+    await client.set(resultCacheKey(runId, signature), text, { ex: CHECKPOINT_TTL_SECONDS });
+  } catch {
+    // best-effort -- see file header
+  }
+}
+
+// Batched fetch-on-demand for cached result text (fix for the 2026-08-31
+// resultcache-not-persisted-on-resume bug -- see plan.md). Mirrors
+// getPreCompactionResults immediately above: a fresh runInvestigation
+// invocation's in-memory resultCache Map starts empty regardless of
+// whether this is a resume, so before executing a step's function calls,
+// agent_delegate.js collects every signature that repeatCounts (which IS
+// restored from the checkpoint) already knows is a repeat but the local
+// Map doesn't have yet, and fetches all of them here in ONE round trip
+// (MGET) rather than one GET per signature.
+// Fails open -- returns an empty Map on any error or missing Redis, same
+// contract as every other function in this file. Never throws.
+export async function getResultCacheEntries(runId, signatures) {
+  const sigList = [...new Set((signatures || []).filter(Boolean))];
+  const found = new Map();
+  if (!sigList.length) return found;
+  const client = getRedis();
+  if (!client) return found;
+  try {
+    const values = await client.mget(...sigList.map((sig) => resultCacheKey(runId, sig)));
+    sigList.forEach((sig, i) => {
+      if (values[i] != null) found.set(sig, values[i]);
+    });
+  } catch {
+    // best-effort -- see file header
+  }
+  return found;
+}
+
 // Deletes a checkpoint once a run finishes (a final answer, or the model
 // stops issuing function calls) -- nothing left to resume. Clears the
 // contents/meta keys, plus (plan.md step 5) every precompact:{runId}:*
@@ -234,10 +301,17 @@ export async function deleteCheckpoint(runId) {
     const rawMeta = await client.get(metaKey(runId));
     const meta = rawMeta ? (typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta) : null;
     const ids = (meta && meta.preCompactionResultIds) || [];
+    // Same reasoning as `ids` above, mirrored for resultCache (fix for the
+    // 2026-08-31 resultcache-not-persisted-on-resume bug) -- resultCacheIds
+    // lives outside CHECKPOINT_KEY_PREFIX in its own `resultcache:`
+    // namespace (see resultCacheKey), so it needs its own explicit sweep
+    // here too, same as precompact:{runId}:* does.
+    const resultCacheIds = (meta && meta.resultCacheIds) || [];
     await Promise.all([
       client.del(contentsKey(runId)),
       client.del(metaKey(runId)),
       ...ids.map((id) => client.del(precompactKey(runId, id))),
+      ...resultCacheIds.map((sig) => client.del(resultCacheKey(runId, sig))),
     ]);
   } catch {
     // best-effort

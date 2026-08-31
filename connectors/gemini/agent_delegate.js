@@ -41,7 +41,7 @@
 import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { formatCascadeLogLine } from "../llm/cascade_log.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults } from "./agent_checkpoint.js";
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults, saveResultCacheEntry, getResultCacheEntries } from "./agent_checkpoint.js";
 import { isRedisConfigured } from "./cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
@@ -1471,12 +1471,39 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // times each exact (function name + JSON-stringified args) signature has
   // been called THIS RUN, persisted across resumes (see checkpoint.js) so a
   // resumed run doesn't forget what it already tried. resultCache holds the
-  // actual result text per signature -- deliberately NOT persisted in the
-  // checkpoint (only counts are, to keep checkpoint writes small per fix
-  // #5): on a resume, an exact-repeat call that was cached in a prior
-  // in-memory run simply re-executes once more and gets re-cached, which is
-  // a correctness no-op (same call, same result), not worth the extra
-  // checkpoint weight of persisting every cached result string.
+  // actual result text per signature, keyed the same way.
+  //
+  // FIX (2026-08-31, debug/resultcache-not-persisted-on-resume -- see
+  // plan.md for the full writeup): this comment used to say resultCache was
+  // deliberately NOT persisted, on the theory that a resumed run's repeat
+  // call would just re-execute once more -- a correctness no-op, not worth
+  // the checkpoint weight. That held for a rare, exceptional resume, but
+  // agent_worker.js's QStash self-chaining path calls runInvestigation with
+  // resume_run_id + singleStep: true ONCE PER STEP as its normal unit of
+  // execution -- resultCache was therefore wiped every single step under
+  // ordinary async operation, and any repeat call spanning a step boundary
+  // silently re-executed for real (repeatCounts correctly reported
+  // isRepeat: true, but the serve-from-cache check needs BOTH isRepeat and
+  // resultCache.has(signature), and the latter was always false in a fresh
+  // invocation).
+  //
+  // Fixed via the same side-store pattern as preCompactionResults
+  // (savePreCompactionResult/getPreCompactionResult below): a signature's
+  // result text is written once, the first time it's computed, to its own
+  // Redis key (saveResultCacheEntry) -- never inlined into the checkpoint's
+  // `meta` blob, which would reopen the exact unbounded-growth problem
+  // preCompactionResults' own side-store fix was for. Unlike
+  // preCompactionResults (which restores every aged-out entry up front via
+  // compactHistoryInPlace, since each one WILL be needed for verification),
+  // resultCache entries are fetched lazily, on demand, right before
+  // executing each step's function calls -- only for signatures repeatCounts
+  // already knows are a repeat AND that this fresh invocation's empty
+  // in-memory Map doesn't have yet, batched via one MGET per step rather
+  // than one round trip per call (see the pre-pass right before the
+  // `Promise.all(functionCalls.map(...))` call below). `resultCacheIds` in
+  // the checkpoint's meta blob (ids only, mirroring preCompactionResultIds)
+  // exists purely for deleteCheckpoint's GC sweep, not for restoring
+  // in-memory state on resume.
   // consecutiveAllRepeatSteps counts how many steps IN A ROW consisted
   // ENTIRELY of repeat calls -- the real stuck-loop signal (a single repeat
   // mixed with new calls is normal exploration, not a stuck loop).
@@ -1718,6 +1745,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
         preCompactionResults: Object.fromEntries(preCompactionResults),
+        resultCache: Object.fromEntries(resultCache),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -1802,6 +1830,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           task: effectiveTask,
           repeatCounts: Object.fromEntries(repeatCounts),
           preCompactionResults: Object.fromEntries(preCompactionResults),
+          resultCache: Object.fromEntries(resultCache),
           consecutiveAllRepeatSteps,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -1847,6 +1876,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
             task: effectiveTask,
             repeatCounts: Object.fromEntries(repeatCounts),
             preCompactionResults: Object.fromEntries(preCompactionResults),
+            resultCache: Object.fromEntries(resultCache),
             consecutiveAllRepeatSteps,
             provider: effectiveProvider,
             model: effectiveModel,
@@ -1882,6 +1912,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           task: result.task,
           repeatCounts: Object.fromEntries(repeatCounts),
           preCompactionResults: Object.fromEntries(preCompactionResults),
+          resultCache: Object.fromEntries(resultCache),
           consecutiveAllRepeatSteps,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -1981,6 +2012,41 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // source of noisier per-call failures under heavier batching that's
       // worth watching for in practice rather than something this change
       // guards against.
+      // Fix for the 2026-08-31 resultcache-not-persisted-on-resume bug (see
+      // this loop's own comment above, and plan.md): a fresh runInvestigation
+      // invocation's in-memory `resultCache` Map starts empty regardless of
+      // whether this is a resume, but `repeatCounts` IS restored from the
+      // checkpoint -- so before executing anything below, identify every
+      // signature this step's calls need that repeatCounts already knows is
+      // a repeat but the local Map doesn't have text for yet, and fetch all
+      // of them from the Redis side-store in ONE round trip (MGET) rather
+      // than a per-call fetch inside the Promise.all below. A no-op (empty
+      // fetch list) on every step of a fresh, never-resumed run, and on any
+      // step of a resumed run whose repeats were already re-fetched earlier
+      // in the same invocation.
+      if (runId) {
+        const missingCachedSignatures = [];
+        for (const part of functionCalls) {
+          const { name, args } = part.functionCall;
+          const signature = normalizedSignature(name, args);
+          if (repeatCounts.has(signature) && !resultCache.has(signature)) {
+            missingCachedSignatures.push(signature);
+          }
+        }
+        if (missingCachedSignatures.length) {
+          const fetched = await getResultCacheEntries(runId, missingCachedSignatures);
+          for (const [sig, text] of fetched) resultCache.set(sig, text);
+        }
+      }
+
+      // Side-store writes for this step's freshly-computed (non-cached)
+      // results, collected here and awaited once after the Promise.all below
+      // -- same pattern compactHistoryInPlace uses for its own side-store
+      // writes, so a synchronous mutation to resultCache/repeatCounts inside
+      // the map callback below never waits on a Redis round trip before the
+      // next call in the same step can proceed.
+      const resultCacheWrites = [];
+
       const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
         // Stuck-loop detection (fix #4): a signature identifies an exact
@@ -1999,7 +2065,11 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           // Exact repeat -- don't re-execute at all, just return what this
           // same call returned last time. This is the free win: no network
           // call, no wasted budget, regardless of whether the run as a
-          // whole turns out to be stuck (see allRepeatsThisStep below).
+          // whole turns out to be stuck (see allRepeatsThisStep below). On a
+          // resumed/singleStep invocation, resultCache.has(signature) being
+          // true here means the pre-pass above already fetched it from the
+          // side-store -- this branch doesn't need to know or care whether
+          // the hit came from this same in-memory run or a prior invocation.
           resultText = resultCache.get(signature);
           servedFromCache = true;
         } else {
@@ -2031,9 +2101,16 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
             resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
           }
           resultCache.set(signature, resultText);
+          // Persist this fresh result to the side-store too (fix for the
+          // 2026-08-31 bug) -- without this, a resumed/singleStep invocation
+          // later in the SAME run would still have nothing to fetch in the
+          // pre-pass above, and would silently re-execute the repeat exactly
+          // as before this fix.
+          if (runId) resultCacheWrites.push(saveResultCacheEntry(runId, signature, resultText));
         }
         return { name, args, id, resultText, isRepeat, servedFromCache };
       }));
+      if (resultCacheWrites.length) await Promise.all(resultCacheWrites);
 
       for (const r of results) {
         const cacheNote = r.servedFromCache ? " [CACHED -- identical call already made this run, not re-executed]" : "";
@@ -2083,6 +2160,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         task: effectiveTask,
         repeatCounts: Object.fromEntries(repeatCounts),
         preCompactionResults: Object.fromEntries(preCompactionResults),
+        resultCache: Object.fromEntries(resultCache),
         consecutiveAllRepeatSteps,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -2156,6 +2234,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       task: effectiveTask,
       repeatCounts: Object.fromEntries(repeatCounts),
       preCompactionResults: Object.fromEntries(preCompactionResults),
+      resultCache: Object.fromEntries(resultCache),
       consecutiveAllRepeatSteps,
       provider: effectiveProvider,
       model: effectiveModel,
@@ -2202,6 +2281,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     await saveCheckpoint(runId, {
       newContents: [], transcript, stepsDone: cappedSteps, task: effectiveTask,
       repeatCounts: Object.fromEntries(repeatCounts), preCompactionResults: Object.fromEntries(preCompactionResults),
+      resultCache: Object.fromEntries(resultCache),
       consecutiveAllRepeatSteps,
       provider: effectiveProvider, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens,
       pendingVerification, structuralRecheckUsed, overallMaxSteps: effectiveOverallMaxSteps, status: "done", finalAnswer: result.answer,
@@ -2252,6 +2332,7 @@ export async function seedRun({ task, provider, model, maxOutputTokens, max_step
     task,
     repeatCounts: {},
     preCompactionResults: {},
+    resultCache: {},
     consecutiveAllRepeatSteps: 0,
     provider,
     model,
