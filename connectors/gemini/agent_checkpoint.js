@@ -40,6 +40,15 @@ function metaKey(runId) {
 function precompactKey(runId, id) {
   return `precompact:${runId}:${id}`;
 }
+// Same reasoning as precompactKey above, mirrored for resultCache (fix for
+// the 2026-08-31 resultcache-not-persisted-on-resume bug -- see
+// saveResultCacheEntry/getResultCacheEntries below and plan.md). Its own
+// top-level `resultcache:` namespace, independent of both
+// CHECKPOINT_KEY_PREFIX and precompactKey's own namespace, so a GC pass can
+// batch-delete `resultcache:{runId}:*` on its own.
+function resultCacheKey(runId, signature) {
+  return `resultcache:${runId}:${signature}`;
+}
 
 // Persists loop state after a step completes:
 //   - newContents: ONLY the turn(s) added to `contents` since the last
