@@ -21,6 +21,7 @@
 import { geminiChat } from "../gemini/client.js";
 import { glmChat } from "../glm/client.js";
 import { groqChat } from "../groq/client.js";
+import { baiChat } from "../bai/client.js";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../openai_shape/adapter.js";
 import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
 
@@ -47,6 +48,18 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     const messages = toOpenAIMessages(contents);
     const openAITools = tools ? toOpenAITools(tools) : undefined;
     const choice = await groqChat(messages, { model, tools: openAITools, maxOutputTokens: maxOutputTokens ?? GROQ_DEFAULT_MAX_OUTPUT_TOKENS });
+    return fromOpenAIChoice(choice);
+  }
+  if (provider === "bai") {
+    // No forced maxOutputTokens default, unlike the glm/groq branches above
+    // -- see config.js's comment on BAI_API_KEYS for why (B.AI's
+    // GLM-5.3-Flash is free, so there's no equivalent cost-runaway risk to
+    // guard against). A caller-supplied value is still honored exactly;
+    // omitted, B.AI's own model default applies, same as the gemini branch
+    // below.
+    const messages = toOpenAIMessages(contents);
+    const openAITools = tools ? toOpenAITools(tools) : undefined;
+    const choice = await baiChat(messages, { tools: openAITools, maxOutputTokens });
     return fromOpenAIChoice(choice);
   }
   // default / "gemini" -- maxOutputTokens passed through as-is, no forced

@@ -39,6 +39,10 @@ None of these providers support auto-injecting the key back into our env — you
 [![Create Groq API Key](https://img.shields.io/badge/Create-Groq_API_Key-F55036?style=for-the-badge)](https://console.groq.com/keys)
 > Comma-separated list — same reasoning as `EXA_API_KEYS`/`OPENROUTER_API_KEYS` above. Backs the optional `provider: "groq"` mode of `delegate_agent` — free-tier request/token-rate-limited rather than credit-balance-gated (unlike OpenRouter/GLM), so it's the practical free alternative while `provider: "glm"` is blocked on account credit. Leave unset to stick with the default Gemini provider.
 
+### B.AI — `BAI_API_KEYS`
+[![Create B.AI API Key](https://img.shields.io/badge/Create-B.AI_API_Key-00A67E?style=for-the-badge)](https://chat.b.ai/chat)
+> Comma-separated list — same reasoning as `EXA_API_KEYS`/`OPENROUTER_API_KEYS`/`GROQ_API_KEYS` above (rate-limit headroom + account isolation). Backs the optional `provider: "bai"` mode of `delegate_agent` — key-rotation-only cascade over multiple keys with deliberately NO model-fallback cascade, currently wired to the free GLM-5.3-Flash model only. Leave unset to stick with the default Gemini provider.
+
 ### Context7 — `CONTEXT7_API_KEY` (optional)
 Works unauthenticated at low rate limits — only provision this if you're hitting limits.
 
