@@ -376,4 +376,131 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
       vi.spyOn(routerModule, "providerChat").mockImplementation(originalProviderChat);
     }
   });
+
+  it("deleteCheckpoint GCs precompact:{runId}:* side-store keys, not just contents/meta (plan.md step 5)", async () => {
+    const { saveCheckpoint, loadCheckpoint, deleteCheckpoint, getPreCompactionResults } = await import("../connectors/gemini/agent_checkpoint.js");
+    const runId = "test-gc-precompact-keys";
+    const originalTextA = "GC_TEST_TEXT_A_" + "Q".repeat(600);
+    const originalTextB = "GC_TEST_TEXT_B_" + "Q".repeat(600);
+
+    const contents = [
+      { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "a" }, id: "call_a" } }] },
+      { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_a", response: { result: originalTextA } } }] },
+      { role: "model", parts: [{ functionCall: { name: "github_read_file", args: { path: "b" }, id: "call_b" } }] },
+      { role: "user", parts: [{ functionResponse: { name: "github_read_file", id: "call_b", response: { result: originalTextB } } }] },
+    ];
+    const preCompactionResults = new Map();
+    // Persists both compacted results to the side-store via
+    // savePreCompactionResult (runId passed through), same as a real run.
+    await compactHistoryInPlace(contents, 10, preCompactionResults, { provider: "bai", runId });
+
+    await saveCheckpoint(runId, {
+      newContents: contents,
+      transcript: [],
+      stepsDone: 2,
+      task: "t",
+      repeatCounts: {},
+      consecutiveAllRepeatSteps: 0,
+      provider: "bai",
+      preCompactionResults,
+    });
+
+    const loaded = await loadCheckpoint(runId);
+    const ids = loaded.preCompactionResultIds;
+    expect(ids.length).toBe(2);
+
+    // Sanity: side-store genuinely has both entries before GC runs.
+    const beforeGc = await getPreCompactionResults(runId, ids);
+    expect(beforeGc.size).toBe(2);
+    expect(beforeGc.get("call_a")).toBe(originalTextA);
+    expect(beforeGc.get("call_b")).toBe(originalTextB);
+
+    await deleteCheckpoint(runId);
+
+    // The checkpoint itself is gone...
+    expect(await loadCheckpoint(runId)).toBeNull();
+    // ...and so are the side-store entries -- deleteCheckpoint swept them up
+    // rather than leaving them to expire on their own TTL.
+    const afterGc = await getPreCompactionResults(runId, ids);
+    expect(afterGc.size).toBe(0);
+  });
+
+  it("checkpoint meta write persists only preCompactionResult ids, not the bulky text -- write size stays flat as compacted text grows (plan.md step 6)", async () => {
+    const { saveCheckpoint, loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+    const runId = "test-meta-flat-size";
+    const preCompactionResults = new Map();
+    const BULKY_CHAR = "V";
+    const ENTRY_COUNT = 20;
+    const TEXT_LEN = 5000;
+    for (let i = 0; i < ENTRY_COUNT; i++) {
+      preCompactionResults.set(`call_${i}`, BULKY_CHAR.repeat(TEXT_LEN));
+    }
+
+    await saveCheckpoint(runId, {
+      newContents: [],
+      transcript: [],
+      stepsDone: ENTRY_COUNT,
+      task: "t",
+      repeatCounts: {},
+      consecutiveAllRepeatSteps: 0,
+      provider: "bai",
+      preCompactionResults,
+    });
+
+    // Inspect the literal raw bytes saveCheckpoint actually wrote for the
+    // meta key -- stronger than only checking loadCheckpoint's parsed
+    // return shape, which confirms the round-trip but not that the bulky
+    // text was never serialized into the blob in the first place.
+    const rawMetaKey = [...fakeRedis._strings.keys()].find((k) => k.includes(runId) && k.endsWith(":meta"));
+    expect(rawMetaKey).toBeDefined();
+    const rawMeta = fakeRedis._strings.get(rawMetaKey);
+
+    // Total original text was ENTRY_COUNT * TEXT_LEN = 100,000 chars; the
+    // written meta blob should be orders of magnitude smaller -- its size
+    // tracks the number of ids, not the size of what they point to.
+    expect(rawMeta.length).toBeLessThan((ENTRY_COUNT * TEXT_LEN) / 10);
+    expect(rawMeta).not.toContain(BULKY_CHAR.repeat(50));
+
+    const loaded = await loadCheckpoint(runId);
+    expect(loaded.preCompactionResultIds.length).toBe(ENTRY_COUNT);
+    expect(loaded.preCompactionResults).toBeUndefined();
+  });
+
+  it("no preCompactionResults entry is lost mid-run even past the old 200-entry eviction threshold (regression guard against re-adding 2eea726-style eviction)", async () => {
+    const { saveCheckpoint, loadCheckpoint, getPreCompactionResults, savePreCompactionResult } = await import("../connectors/gemini/agent_checkpoint.js");
+    const runId = "test-no-eviction-past-200";
+    const preCompactionResults = new Map();
+    // Past the old MAX_PRE_COMPACTION_RESULTS_ENTRIES (200) the now-removed
+    // 2eea726 eviction block used to cap at -- exactly the long-run case
+    // the side-store fix (plan.md "Current outstanding issue") targets.
+    const ENTRY_COUNT = 250;
+    for (let i = 0; i < ENTRY_COUNT; i++) {
+      const id = `call_${i}`;
+      const text = `BULKY_RESULT_${i}_` + "Z".repeat(600);
+      preCompactionResults.set(id, text);
+      // Mirrors what compactHistoryInPlace does on first-time compaction of
+      // an id -- side-store write plus in-memory Map entry.
+      await savePreCompactionResult(runId, id, text);
+    }
+
+    await saveCheckpoint(runId, {
+      newContents: [],
+      transcript: [],
+      stepsDone: ENTRY_COUNT,
+      task: "t",
+      repeatCounts: {},
+      consecutiveAllRepeatSteps: 0,
+      provider: "bai",
+      preCompactionResults,
+    });
+
+    const loaded = await loadCheckpoint(runId);
+    expect(loaded.preCompactionResultIds.length).toBe(ENTRY_COUNT);
+
+    const sideStore = await getPreCompactionResults(runId, loaded.preCompactionResultIds);
+    expect(sideStore.size).toBe(ENTRY_COUNT);
+    for (let i = 0; i < ENTRY_COUNT; i++) {
+      expect(sideStore.get(`call_${i}`)).toBe(`BULKY_RESULT_${i}_` + "Z".repeat(600));
+    }
+  });
 });
