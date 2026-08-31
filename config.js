@@ -173,6 +173,18 @@ export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POL
 // spot where a worker dies mid-step and leaves stepStartedAt set indefinitely.
 export const AGENT_ASYNC_STEP_DEAD_SECONDS = Number(process.env.AGENT_ASYNC_STEP_DEAD_SECONDS) || 120;
 export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
+// Per-invocation debug logging in agent_worker.js (randomUUID() invocationId
+// logged at every entry/exit point of handleAgentWorker -- added 2026-09-01,
+// commit 2aad526, to diagnose a worker-chain stall). Default OFF: once the
+// 2026-09-01 stall was diagnosed (sustained B.AI rate-limiting driving the
+// existing retry/re-chain path, not a concurrent-duplicate idempotency bug --
+// see plan.md's Open items), the ongoing per-invocation log volume on
+// /api/agent-worker stops earning its keep on every step of every run.
+// Kept behind this flag rather than deleted so it can be flipped back on
+// quickly if a similar stall resurfaces. Same default-on-unless-"false"
+// pattern as EDITOR_AGENT_ENABLED above, but inverted (default OFF, not ON)
+// since this is a debug aid, not a feature.
+export const DEBUG_AGENT_WORKER = process.env.DEBUG_AGENT_WORKER === "true";
 
 export const EXA_API_KEYS = (process.env.EXA_API_KEYS || "")
   .split(",")
