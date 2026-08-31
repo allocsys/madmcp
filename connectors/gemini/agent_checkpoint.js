@@ -88,10 +88,20 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // rather than conditionally spread in, so the shape of a saved
     // checkpoint doesn't vary step-to-step -- consistent with every other
     // field here.
-    const serializablePreCompactionResults = preCompactionResults instanceof Map
-      ? Object.fromEntries(preCompactionResults)
-      : preCompactionResults;
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults: serializablePreCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    // Step 3 fix (plan.md "Current outstanding issue"): store only the IDS
+    // that have a side-store entry, not the text -- see savePreCompactionResult
+    // below, and agent_delegate.js's resume-restore comment for why an
+    // empty-of-text Map on load loses nothing (compactHistoryInPlace
+    // re-derives every still-aged-out id's real text straight from the
+    // pristine `contents` loadCheckpoint returns, before anything else runs).
+    // This is still O(total ids compacted so far), same as every other field
+    // in this blob (meta is rewritten in full every call) -- the win is a far
+    // smaller per-entry cost (one id vs. up to tens of thousands of chars of
+    // text), not a change in growth order.
+    const preCompactionResultIds = preCompactionResults instanceof Map
+      ? [...preCompactionResults.keys()]
+      : Object.keys(preCompactionResults || {});
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResultIds, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
