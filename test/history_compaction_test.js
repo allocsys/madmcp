@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { compactHistoryInPlace, findUnverifiedClaims, lineIsVerbatimInToolResults, BULKY_TOOL_NAMES } from "../connectors/gemini/agent_delegate.js";
+import { compactHistoryInPlace, findUnverifiedClaims, BULKY_TOOL_NAMES, lineIsVerbatimInToolResults } from "../connectors/gemini/agent_delegate.js";
 
 describe("History Compaction Feature & Verification (agent_delegate.js)", () => {
   it("compacts older bulky tool results and uses dedicated store", () => {
