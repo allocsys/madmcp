@@ -143,32 +143,35 @@ five implementation steps now closed.
        state on whichever write lands last.
   All 13 connector subfolders had already been read by step 19, so the
   run was close to done regardless. Not yet resumed/diagnosed further.
-  **How to actually pinpoint this** (not yet done): the heartbeat/stall
-  detection is inherently blind to *why* — it only sees
-  timestamps on one checkpoint blob, not individual invocation attempts.
-  To distinguish (1) vs (2) needs either:
-    - **Per-attempt logging in `agent_worker.js`**: log an
-      invocation-scoped id (e.g. QStash's own message id, or a fresh
-      `randomUUID()` generated at handler entry) alongside `runId` and
-      `afterStep` on entry AND exit of `handleAgentWorker`. Two log
-      lines with different invocation ids but the same `runId`+`afterStep`
-      overlapping in time would confirm (2); a single invocation id with
-      a gap between entry and a much-later exit (or an entry with no
-      matching exit) would point to (1).
-    - **Cloudflare/Vercel function invocation logs** for this specific
-      runId's timeframe — `cf_workers_observability_query`/
-      `cf_workers_get_worker` style tooling already exists in this repo
-      (`connectors/cloudflare/observability.js`) and could be pointed at
-      whatever Worker/Function hosts `/api/agent-worker` to check for
-      overlapping invocations or a crash/restart in that window, without
-      adding new code.
-    - **QStash's own dashboard/API** (Upstash) for delivery attempts
-      against this runId's message — would directly show whether QStash
-      redelivered (supporting (1)) or whether only one delivery was ever
-      made (which would instead implicate something else entirely, e.g.
-      a Redis race on `saveCheckpoint`).
-  None of these have been done yet; this is a live open question, not a
-  fix in progress.
+  **How to actually pinpoint this:**
+  - [x] **Per-attempt logging in `agent_worker.js`** — DONE, commit
+    `2aad526` on `main` (log-only, no behavior change; 473/473 tests
+    still passing after). A fresh `randomUUID()` invocationId is now
+    generated at handler entry and logged at every entry/exit point of
+    `handleAgentWorker`, including right where the `stepStartedAt`
+    heartbeat is written (the exact point two concurrent invocations on
+    the same `runId`+`afterStep` would race). Next occurrence: two log
+    lines with different invocation ids but the same `runId`+`afterStep`
+    overlapping in time confirms (2) concurrent duplicate; one
+    invocation id with a gap between entry and a much-later exit (or an
+    entry with no matching exit followed by a fresh entry later)
+    confirms (1) dead-and-QStash-retried. **Instrumentation is live but
+    unused so far — needs the stall to recur to actually read anything.**
+  - [ ] **Cloudflare/Vercel function invocation logs** for this specific
+    runId's timeframe — not yet checked. `cf_workers_observability_query`/
+    `cf_workers_get_worker` style tooling already exists in this repo
+    (`connectors/cloudflare/observability.js`) and could be pointed at
+    whatever Worker/Function hosts `/api/agent-worker` to check for
+    overlapping invocations or a crash/restart in that window, without
+    adding new code.
+  - [ ] **QStash's own dashboard/API** (Upstash) for delivery attempts
+    against this runId's message — not yet checked. Would directly show
+    whether QStash redelivered (supporting (1)) or whether only one
+    delivery was ever made (which would instead implicate something
+    else entirely, e.g. a Redis race on `saveCheckpoint`).
+  Root cause is still open; only the logging groundwork is done. Next
+  step is waiting for (or deliberately reproducing) another stall and
+  reading the new `agent-worker[<id>]:` log lines.
 - `deleteCheckpoint`'s side-store GC is correct in isolation but never
   called anywhere in the production path (`agent_delegate.js`,
   `agent_worker.js`, `qstash_client.js`, `agent_tools.js`) — cleanup
