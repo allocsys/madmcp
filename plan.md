@@ -60,6 +60,24 @@ This was chosen over two rejected/deferred alternatives:
   worth doing on top of the compaction approach below once it's proven
   out, not instead of it.
 
+## Decision: switchable per-provider, default only "bai"
+
+Gemini's native context window is large and there's no evidence it needs
+this compaction -- applying it universally is unnecessary risk for zero
+proven benefit there. Instead of a blanket rollout, this ships as an
+opt-in switch, config-driven per provider:
+
+- New `config.js` export, e.g. `HISTORY_COMPACTION_PROVIDERS` -- a
+  comma-separated env-driven list (same `.split/map/filter` pattern as
+  `BAI_API_KEYS` etc.), default value `"bai"` only.
+- `agent_delegate.js`'s compaction step (see below) checks whether the
+  current run's `provider` is in that set before doing any compaction;
+  if not, behavior is 100% unchanged from today (full history, as now).
+- This means Gemini/GLM/Groq runs are provider-untouched by default, and
+  `bai` gets compaction on immediately. Any provider can be added to or
+  removed from the list later purely via config, no code change, once
+  we have real before/after data per provider.
+
 ## Steps
 
 1. **Identify "bulky" tool types to compact** — start narrow:
