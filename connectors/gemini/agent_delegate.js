@@ -102,13 +102,14 @@ export function compactHistoryInPlace(contents, currentStep, preCompactionResult
       if (hasFunctionResponses) {
         stepIndex++;
         const recentModelTurn = modelTurnStack[modelTurnStack.length - 1];
-        if (stepIndex <= currentStep - fullDetailSteps) {
+        // At this point in the loop, `contents` holds completed response turns for steps `1..step-1` only (this step's own response hasn't been pushed yet, that happens a couple lines below) -- `compactHistoryInPlace`'s `currentStep` parameter means "how many completed steps currently exist in `contents`", so passing the raw current step number here was an off-by-one that silently compacted one step earlier than `HISTORY_FULL_DETAIL_STEPS` actually promises, shrinking the "full detail" window from the documented 3 steps down to 2 in practice. Note that this must use the exact same "number of completed steps" convention as the new call added in FIX A above, for consistency.
+        if (stepIndex <= currentStep - 1 - fullDetailSteps) {
           for (const part of turn.parts) {
             if (part.functionResponse && bulkyTools.has(part.functionResponse.name)) {
               const res = part.functionResponse.response;
               if (res && typeof res.result === "string" && res.result.length > charThreshold) {
-                // Store original text before compacting
-                preCompactionResults.set(part.functionResponse.id, res.result);
+                // Store original text before compacting -- collision-safe, see setPreCompactionResult above.
+                setPreCompactionResult(preCompactionResults, part.functionResponse.id, res.result);
 
                 const originalLength = res.result.length;
                 const toolName = part.functionResponse.name;
