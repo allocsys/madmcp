@@ -158,7 +158,34 @@ describe("agent_tools.js — delegate_agent async branching", () => {
     expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
   });
 
-  it("poll with a stale checkpoint (status running, lastStepAt past the fresh window): falls through to synchronous runInvestigation instead of just polling", async () => {
+  // Fix (2026-08-31): a stale checkpoint used to ALWAYS fall through to a
+  // synchronous runInvestigation call regardless of caller intent -- meaning
+  // a plain status check (no max_steps, exactly what "just polling" looks
+  // like) could silently trigger real additional steps the moment the
+  // background worker chain happened to be stale. Split into two cases below:
+  // no max_steps stays poll-only even when stale (reports the stall instead),
+  // an explicit max_steps still pushes the run forward as before.
+  it("poll with a stale checkpoint AND no max_steps passed: stays poll-only, reports the stall instead of falling through to runInvestigation", async () => {
+    const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25 });
+    mockIsQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 3,
+      lastStepAt: Date.now() - 60000, // 60s ago, past the 25s fresh window
+      transcript: ["github_get_repo_topics(a, b)"],
+    });
+
+    const result = await delegate_agent({ resume_run_id: "run-poll-2" });
+
+    expect(mockRunInvestigation).not.toHaveBeenCalled();
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/stalled/);
+    expect(result.content[0].text).toContain("3 step(s)");
+    expect(result.content[0].text).toMatch(/explicit max_steps/);
+    expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
+  });
+
+  it("poll with a stale checkpoint AND an explicit max_steps: falls through to synchronous runInvestigation, pushing the run forward", async () => {
     const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25 });
     mockIsQStashConfigured.mockReturnValue(true);
     mockLoadCheckpoint.mockResolvedValue({
@@ -169,10 +196,10 @@ describe("agent_tools.js — delegate_agent async branching", () => {
     });
     mockRunInvestigation.mockResolvedValue({ answer: "resumed synchronously", steps: 4, transcript: [], runId: "run-poll-2" });
 
-    const result = await delegate_agent({ resume_run_id: "run-poll-2" });
+    const result = await delegate_agent({ resume_run_id: "run-poll-2", max_steps: 10 });
 
     expect(mockRunInvestigation).toHaveBeenCalledWith(
-      expect.objectContaining({ resume_run_id: "run-poll-2" })
+      expect.objectContaining({ resume_run_id: "run-poll-2", max_steps: 10 })
     );
     expect(result.content[0].text).toContain("resumed synchronously");
   });
