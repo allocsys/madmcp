@@ -31,7 +31,17 @@ export function register(server) {
         .describe(`Caps the per-turn (not whole-conversation) output token budget for each Gemini call in the investigation loop. Default: none set (Gemini's own API default applies, no cap sent). Raise this if answers are getting cut off mid-response. ` +
           `RESUME RULE: same as model -- if resume_run_id resolves to a checkpoint that recorded a value, that recorded value is always used and this argument is ignored. If the checkpoint has no recorded value, this argument is used as a fallback instead of erroring.`),
     },
-    async ({ task, max_steps = 20, log_to_notion = false, resume_run_id, show_transcript = false, provider, model, maxOutputTokens }) => {
+    async ({ task, max_steps: rawMaxSteps, log_to_notion = false, resume_run_id, show_transcript = false, provider, model, maxOutputTokens }) => {
+      // Distinct from the old `max_steps = 20` default-via-destructuring:
+      // maxStepsProvided records whether the CALLER actually passed a value,
+      // separately from the effective number used once defaulted -- the
+      // stale-checkpoint poll branch below needs to tell "caller explicitly
+      // wants to push the investigation forward" apart from "caller is just
+      // checking status and happened to get 20 by default". See that
+      // branch's comment for why this distinction matters.
+      const maxStepsProvided = rawMaxSteps !== undefined;
+      const max_steps = maxStepsProvided ? rawMaxSteps : 20;
+
       // task is only genuinely optional when resuming a live checkpoint --
       // runInvestigation ignores task entirely in that branch (it rebuilds
       // `contents` straight from the saved checkpoint). On a fresh run (no
@@ -51,7 +61,9 @@ export function register(server) {
       // executes when cappedSteps < startStep -- silently "succeeding" with
       // zero Gemini calls made and a confusing "reached the step cap of 0"
       // answer instead of surfacing that the input itself was invalid.
-      if (max_steps !== undefined && (!Number.isInteger(max_steps) || max_steps < 1)) {
+      // Checked against maxStepsProvided (the caller's raw input), not just
+      // "defined", since max_steps is always defined now post-default.
+      if (maxStepsProvided && (!Number.isInteger(max_steps) || max_steps < 1)) {
         return {
           content: [{ type: "text", text: `Invalid max_steps: ${max_steps}. Must be a positive integer (at least 1); the hard cap is 30 regardless of a larger value.` }],
           isError: true,
@@ -119,10 +131,40 @@ export function register(server) {
             };
           }
           // Stale lastStepAt -- the QStash chain likely broke (a failed
-          // publish, a dropped/undelivered message). Fall through to the
-          // ordinary synchronous runInvestigation call below, which resumes
-          // the loop IN THIS CALL -- this is what guarantees a run can never
-          // be stranded.
+          // publish, a dropped/undelivered message).
+          //
+          // Fix (2026-08-31): this used to fall through to a synchronous
+          // runInvestigation call unconditionally, regardless of whether the
+          // caller actually wanted to push the run forward. That meant a
+          // caller doing nothing but a routine status check -- resume_run_id
+          // with no max_steps, exactly what "just polling" looks like -- could
+          // silently trigger real additional steps (up to the default max_steps
+          // of 20) the moment the background worker chain happened to be
+          // stale, with no visible difference in the request from an
+          // intentional "push this forward" call. A poll should never be able
+          // to drive real work as a side effect of bad luck in timing.
+          //
+          // Now: only fall through to a synchronous resume if the caller
+          // explicitly passed max_steps -- that's the one signal that
+          // distinguishes "just checking progress" from "I want this to make
+          // more progress right now". A plain status check on a stalled run
+          // instead reports the stall and tells the caller how to push it
+          // forward, rather than doing so unasked. This does NOT reintroduce
+          // the "run can be stranded" risk the original fallback existed to
+          // prevent -- the checkpoint is untouched either way, and the very
+          // next call with an explicit max_steps resumes it synchronously
+          // exactly as before.
+          if (!maxStepsProvided) {
+            return {
+              content: [{ type: "text", text:
+                `Investigation appears stalled (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
+                `Call delegate_agent again with resume_run_id: "${resume_run_id}" and an explicit max_steps to resume the investigation synchronously from where it left off.` +
+                (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
+            };
+          }
+          // Explicit max_steps given -- caller wants to push forward: fall
+          // through to the ordinary synchronous runInvestigation call below,
+          // which resumes the loop IN THIS CALL.
         }
         // checkpoint missing (expired/never existed), or status "done" --
         // fall through to runInvestigation below, which already handles
