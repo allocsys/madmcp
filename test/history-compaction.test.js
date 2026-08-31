@@ -215,10 +215,10 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     expect(contents[2].parts[0].functionResponse.response.result).not.toContain(exactLine);
 
     // Assert lineIsVerbatimInToolResults returns true with preCompactionResults
-    expect(lineIsVerbatimInToolResults(exactLine, contents, preCompactionResults)).toBe(true);
+    expect(await lineIsVerbatimInToolResults(exactLine, contents, preCompactionResults)).toBe(true);
 
     // Assert lineIsVerbatimInToolResults returns false with NO third argument (empty Map / pre-fix behavior)
-    expect(lineIsVerbatimInToolResults(exactLine, contents)).toBe(false);
+    expect(await lineIsVerbatimInToolResults(exactLine, contents)).toBe(false);
   });
 
   it("lineIsVerbatimInToolResults: still correctly flags a fabricated quote as unverifiable after compaction (true-positive still works)", () => {
@@ -234,7 +234,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     compactHistoryInPlace(contents, 5, preCompactionResults, { provider: "bai" });
 
     // Assert fabricated quote is correctly flagged as false (unverifiable) even with preCompactionResults
-    expect(lineIsVerbatimInToolResults("this line was never in any tool result", contents, preCompactionResults)).toBe(false);
+    expect(await lineIsVerbatimInToolResults("this line was never in any tool result", contents, preCompactionResults)).toBe(false);
   });
 
   it("integration test: checkpoint save/load correctly round-trips contents and preCompactionResults", async () => {
