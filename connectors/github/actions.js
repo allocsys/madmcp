@@ -10,7 +10,8 @@ export function register(server) {
 
   server.tool(
     "list_workflow_runs",
-    "List recent GitHub Actions workflow runs for a repository.",
+    "List recent GitHub Actions workflow runs for a repository.\n" +
+    "DO NOT POLL REPEATEDLY: a queued/in-progress run takes real wall-clock time to finish (queue time plus job runtime -- often 30s to several minutes, not instant) -- calling this again immediately in a tight loop to watch a run complete does not make it finish faster, it just burns calls for the same unchanged status. Check once; if the run you care about is still queued/in_progress, space out the next check meaningfully (do other work, or end your turn and check back later) instead of re-calling this right away.",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
