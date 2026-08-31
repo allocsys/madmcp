@@ -173,6 +173,79 @@ five implementation steps now closed.
   step is waiting for (or deliberately reproducing) another stall and
   reading the new `agent-worker[<id>]:` log lines.
 
+  **Update (2026-09-01, later same day): stall reproduced, but the log
+  read couldn't happen -- host is Vercel, not Cloudflare.** Re-ran the
+  same repro shape (full `connectors/` audit, provider `bai`, run_id
+  `87ff9356-56a5-4d4a-aaf3-bbaba0f213bd`). It stalled again at **step
+  19** -- same step number as the original incident, which is itself
+  mildly suggestive (13 connector subfolders means step 19 is roughly
+  where a `bai`-provider audit naturally runs out of easy/cheap tool
+  calls and starts hitting heavier files/retries, not obviously a fixed
+  off-by-one, but worth keeping in mind if a third occurrence lands on
+  the same step again).
+
+  Two planned diagnostic avenues turned out to be unavailable in this
+  environment:
+  - `cf_workers_observability_query` (`connectors/cloudflare/observability.js`)
+    was checked, but `cf_workers_list` only returned two Workers
+    (`peak-plastic-4567`, `restless-manager-6789`) unrelated to this
+    project -- **the actual deployment is on Vercel, not Cloudflare**,
+    confirmed directly. No Vercel-equivalent logs/observability tool
+    exists in this toolset, so the `agent-worker[<id>]:` invocation-id
+    log lines from commit `2aad526` could not actually be read this
+    time either. This blocks a direct confirmation either way on the
+    concurrent-duplicate-vs-dead-retry question.
+  - No QStash dashboard/API tool exists in this toolset -- delivery-attempt
+    history for the stalled message remains unchecked, as noted below.
+
+  However, resuming the stalled run (`resume_run_id` with explicit
+  `max_steps: 21`) surfaced a concrete, mundane error instead of another
+  silent gap: **all 3 configured `BAI_API_KEYS` were rate-limited (429)
+  at step 19 simultaneously** -- two returned "model service busy,
+  reduce request frequency," one returned an account-level rate-limit
+  message. This is a real, well-supported alternative explanation worth
+  weighing alongside the original two hypotheses:
+    3. **Sustained B.AI rate-limiting driving the existing retry/re-chain
+       path -- not a bug, the designed behavior working as intended.**
+       `agent_worker.js` already re-publishes to QStash with a fresh
+       heartbeat on any failed-but-under-`AGENT_WORKER_MAX_CONSECUTIVE_FAILURES`
+       step (see its "Still running and under the retry cap" branch). If
+       B.AI's 429s are the actual bottleneck on a long `bai`-provider
+       audit, each retry attempt legitimately writes a fresh
+       `stepStartedAt` before failing again -- producing exactly the
+       "154s idle, then a later poll shows 59s" heartbeat-drop signature
+       from the original incident, with **no QStash redelivery bug and
+       no concurrent-duplicate race required.** This doesn't retroactively
+       prove the original incident was this and not (1) or (2) -- without
+       the invocation-id logs there's no way to fully distinguish them --
+       but it's a plausible, simpler explanation that fits the observed
+       symptom just as well, and is consistent with `bai` being the
+       provider on both occurrences (free-tier GLM-5.3-Flash, only 3 keys,
+       no model-fallback cascade -- see `connectors/bai/client.js`,
+       `config.js`'s `BAI_API_KEYS` section).
+  Given this, root cause is still open but now has a credible non-bug
+  candidate in addition to the two original hypotheses. **Do not gate
+  the invocation-id logging behind `DEBUG_AGENT_WORKER` yet** -- the
+  original task's instruction to only do that "once diagnosed" hasn't
+  been met; this update narrows the space of explanations but doesn't
+  close it, and the logging is still the only planned way to fully
+  settle (1)/(2)/(3) if a Vercel-log-capable path becomes available
+  later. Next steps, in rough priority order:
+  - If/when Vercel function-log access becomes available (a Vercel
+    MCP connector, dashboard export, or similar), read the
+    `agent-worker[<id>]:` lines for this run_id's step-19 timeframe --
+    same diagnostic logic as originally planned, just needs the right
+    tool.
+  - Consider whether B.AI's 429 responses are transient-looking enough
+    (they don't literally say "429" as an HTTP status in two of the
+    three messages, just prose) that `agent_delegate.js`'s own
+    transient-vs-permanent classification (the "This does not look like
+    a transient error" check on resume) might be miscategorizing a
+    genuinely-transient B.AI rate-limit as permanent -- worth a separate
+    look independent of the QStash question, since it changes whether
+    resuming a stalled `bai` run is even the right recovery step vs.
+    just waiting out the rate limit.
+
   **Follow-up once diagnosed: gate the invocation-id logging, don't
   leave it unconditional forever.** It's log-only and cheap (a
   `randomUUID()` plus a handful of `console.log` calls per invocation,
