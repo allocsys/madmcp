@@ -90,7 +90,11 @@ opt-in switch, config-driven per provider:
    3`, named/tuned alongside the existing `HARD_MAX_STEPS = 30`) in
    `connectors/gemini/agent_delegate.js`.
 
-3. **Compact on write, not on read** — before appending a new step's
+3. **Compact on write, not on read, and only when the provider opts in**
+   — check `HISTORY_COMPACTION_PROVIDERS.includes(provider)` first; if
+   the current run's provider isn't in the list, skip compaction
+   entirely and behave exactly as today. When it IS enabled, before
+   appending a new step's
    turns to `contents`, walk back over turns older than the recent
    window and, for any `functionResponse` part whose tool name is in the
    bulky list and whose stored text exceeds a small threshold (e.g. 500
@@ -109,16 +113,21 @@ opt-in switch, config-driven per provider:
    out of budget re-fetching" failure mode.
 
 5. **Tests** — add cases to whatever exercises `agent_delegate.js`'s loop
-   (or a new focused test) covering: a bulky result stays full within
-   the recent window, gets compacted once it ages out, non-bulky results
-   are never compacted, and a compacted-then-re-requested file is served
-   from `resultCache` rather than re-fetched.
+   (or a new focused test) covering: with `provider: "bai"` (compaction
+   on) a bulky result stays full within the recent window, gets
+   compacted once it ages out, non-bulky results are never compacted,
+   and a compacted-then-re-requested file is served from `resultCache`
+   rather than re-fetched; AND with `provider: "gemini"` (compaction
+   off, default) confirm history is untouched -- same behavior as before
+   this change, byte-for-byte.
 
 6. **Manual validation** — run a real multi-step `delegate_agent`
-   investigation that reads several large files, and confirm (a) total
-   input tokens per step levels off instead of growing linearly step
-   over step, and (b) the final answer's quality/accuracy is unaffected
-   versus an uncompacted baseline run on the same task.
+   investigation with `provider: "bai"` that reads several large files,
+   and confirm (a) total input tokens per step levels off instead of
+   growing linearly step over step, and (b) the final answer's
+   quality/accuracy is unaffected versus an uncompacted baseline run on
+   the same task. Separately confirm a `provider: "gemini"` run on the
+   same task is completely unaffected (compaction never triggers).
 
 ## Open questions going into implementation
 
