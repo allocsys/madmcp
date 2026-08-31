@@ -6,7 +6,10 @@
       "feature/*": false,
       "fix/*": false,
       "test/*": false,
-      "chore/*": false
+      "chore/*": false,
+      "feat/*": false,
+      "bug/*": false,
+      "debug/*": false
     }
   },
   "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(README\\.md|demo\\.html|test/.*|\\.github/.*)$\"'"
