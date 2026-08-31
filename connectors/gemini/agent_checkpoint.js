@@ -301,10 +301,17 @@ export async function deleteCheckpoint(runId) {
     const rawMeta = await client.get(metaKey(runId));
     const meta = rawMeta ? (typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta) : null;
     const ids = (meta && meta.preCompactionResultIds) || [];
+    // Same reasoning as `ids` above, mirrored for resultCache (fix for the
+    // 2026-08-31 resultcache-not-persisted-on-resume bug) -- resultCacheIds
+    // lives outside CHECKPOINT_KEY_PREFIX in its own `resultcache:`
+    // namespace (see resultCacheKey), so it needs its own explicit sweep
+    // here too, same as precompact:{runId}:* does.
+    const resultCacheIds = (meta && meta.resultCacheIds) || [];
     await Promise.all([
       client.del(contentsKey(runId)),
       client.del(metaKey(runId)),
       ...ids.map((id) => client.del(precompactKey(runId, id))),
+      ...resultCacheIds.map((sig) => client.del(resultCacheKey(runId, sig))),
     ]);
   } catch {
     // best-effort
