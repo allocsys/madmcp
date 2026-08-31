@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS, BAI_DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
 
 // Mock all provider clients and the shared adapter so this test is
 // purely about router.js's dispatch logic.
@@ -179,7 +179,7 @@ describe("connectors/llm/router.js — providerChat", () => {
     await expect(providerChat(contents, { provider: "groq" })).rejects.toThrow("Groq API error (503): overloaded");
   });
 
-  it("dispatches to bai: adapts contents/tools in, adapts the choice back out", async () => {
+  it("dispatches to bai: adapts contents/tools in, adapts the choice back out, with NO forced maxOutputTokens default", async () => {
     mockBaiChat.mockResolvedValueOnce({ message: { content: "b.ai says hi" }, finish_reason: "stop" });
     const contents = [{ role: "user", parts: [{ text: "hello" }] }];
     const tools = [{ functionDeclarations: [{ name: "x" }] }];
@@ -188,9 +188,13 @@ describe("connectors/llm/router.js — providerChat", () => {
 
     expect(mockToOpenAIMessages).toHaveBeenCalledWith(contents);
     expect(mockToOpenAITools).toHaveBeenCalledWith(tools);
+    // Unlike glm/groq, bai has no BAI_DEFAULT_MAX_OUTPUT_TOKENS -- B.AI's
+    // GLM-5.3-Flash is free, so there's no cost-runaway risk to guard
+    // against (see config.js's comment). maxOutputTokens passes through
+    // untouched, same contract as the gemini path.
     expect(mockBaiChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
-      { tools: [{ type: "function", function: { name: "adapted_tool" } }], maxOutputTokens: BAI_DEFAULT_MAX_OUTPUT_TOKENS }
+      { tools: [{ type: "function", function: { name: "adapted_tool" } }], maxOutputTokens: undefined }
     );
     expect(mockFromOpenAIChoice).toHaveBeenCalledWith({ message: { content: "b.ai says hi" }, finish_reason: "stop" });
     expect(mockGeminiChat).not.toHaveBeenCalled();
@@ -208,11 +212,11 @@ describe("connectors/llm/router.js — providerChat", () => {
     expect(mockToOpenAITools).not.toHaveBeenCalled();
     expect(mockBaiChat).toHaveBeenCalledWith(
       [{ role: "user", content: "adapted" }],
-      { tools: undefined, maxOutputTokens: BAI_DEFAULT_MAX_OUTPUT_TOKENS }
+      { tools: undefined, maxOutputTokens: undefined }
     );
   });
 
-  it("honors an explicit maxOutputTokens on the bai path instead of the default", async () => {
+  it("passes an explicit maxOutputTokens straight through on the bai path (no default to override)", async () => {
     mockBaiChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
     const contents = [{ role: "user", parts: [{ text: "hello" }] }];
 
