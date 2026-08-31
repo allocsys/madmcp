@@ -183,6 +183,37 @@ export async function savePreCompactionResult(runId, id, text) {
   }
 }
 
+// Batched fetch-on-demand for compacted results' full text (plan.md
+// "Current outstanding issue" step 4). findUnverifiedClaims and
+// lineIsVerbatimInToolResults (agent_delegate.js) read primarily from the
+// in-memory `preCompactionResults` Map, which the normal compact-then-
+// verify-same-run flow keeps fully populated -- this is the side-store
+// fallback for the id(s) that Map doesn't have (e.g. state reconstructed
+// from a checkpoint's `preCompactionResultIds` without a preceding
+// `compactHistoryInPlace` recompaction pass).
+// Takes the full list of ids a verification pass needs and does ONE round
+// trip (MGET) for all of them, not a GET per id -- a naive per-id fetch is
+// a real added latency cost on exactly the long `bai` runs compacting 200+
+// results, which is what this feature targets in the first place.
+// Fails open -- returns an empty Map on any error or missing Redis, same
+// contract as every other function in this file. Never throws.
+export async function getPreCompactionResults(runId, ids) {
+  const idList = [...new Set((ids || []).filter(Boolean))];
+  const found = new Map();
+  if (!idList.length) return found;
+  const client = getRedis();
+  if (!client) return found;
+  try {
+    const values = await client.mget(...idList.map((id) => precompactKey(runId, id)));
+    idList.forEach((id, i) => {
+      if (values[i] != null) found.set(id, values[i]);
+    });
+  } catch {
+    // best-effort -- see file header
+  }
+  return found;
+}
+
 // Deletes a checkpoint once a run finishes (a final answer, or the model
 // stops issuing function calls) -- nothing left to resume. Clears both keys.
 export async function deleteCheckpoint(runId) {
