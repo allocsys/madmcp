@@ -51,9 +51,78 @@ import { cfAccountRequest } from "../cloudflare/client.js";
 import { context7Request } from "../context7/client.js";
 import { mem0Request } from "../mem/client.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
-import { DEFAULT_OWNER } from "../../config.js";
+import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../config.js";
 
 const HARD_MAX_STEPS = 30;
+export const HISTORY_FULL_DETAIL_STEPS = 3;
+export const COMPACTION_CHAR_THRESHOLD = 500;
+export const BULKY_TOOL_NAMES = new Set([
+  "github_read_file",
+  "github_get_file_at_commit",
+  "github_get_file_tree",
+  "cf_query_logs",
+  "cf_workers_get_worker_code",
+  "github_get_workflow_run_logs",
+  "github_get_job_logs",
+  "context7_get_library_docs",
+  "notion_get_page",
+  "github_get_pull_request",
+  "github_search_issues",
+  "github_diff_files",
+  "github_search_code",
+]);
+
+// History compaction (2026-08-27): reduces token usage on long multi-step
+// investigations by replacing bulky older tool results with short summary
+// pointers in place.
+//
+// Hard constraints:
+// 1. Do NOT delete, reorder, or remove any turns/messages from contents.
+// 2. Do NOT break functionCall/functionResponse id pairing or role alternation.
+// 3. Only edit the text inside an existing functionResponse part in place.
+//
+// Gated on HISTORY_COMPACTION_PROVIDERS.includes(provider) so non-opted-in
+// providers (like default gemini) remain completely unaffected byte-for-byte.
+export function compactHistoryInPlace(contents, currentStep, {
+  fullDetailSteps = HISTORY_FULL_DETAIL_STEPS,
+  charThreshold = COMPACTION_CHAR_THRESHOLD,
+  bulkyTools = BULKY_TOOL_NAMES,
+  provider,
+} = {}) {
+  const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
+  if (!isEnabled || !Array.isArray(contents)) return;
+
+  // We scan contents for model turns (which carry step/turn context) and user turns
+  // (which carry functionResponse parts).
+  // A turn is "older than fullDetailSteps" if its step < currentStep - fullDetailSteps + 1
+  // or equivalently if the number of completed steps since that turn exceeds fullDetailSteps.
+  // We track the step number of tool turns based on the structure: each step consists of
+  // a model turn followed by a user turn (functionResponse).
+  // More directly: user turns with functionResponses appear in order corresponding to step 1, 2, ...
+  let stepIndex = 0;
+  for (const turn of contents) {
+    if (turn.role === "user" && Array.isArray(turn.parts)) {
+      const hasFunctionResponses = turn.parts.some((p) => p.functionResponse);
+      if (hasFunctionResponses) {
+        stepIndex++;
+        // If this step is older than the recent window (i.e. older than currentStep - fullDetailSteps + 1)
+        if (stepIndex <= currentStep - fullDetailSteps) {
+          for (const part of turn.parts) {
+            if (part.functionResponse && bulkyTools.has(part.functionResponse.name)) {
+              const res = part.functionResponse.response;
+              if (res && typeof res.result === "string" && res.result.length > charThreshold) {
+                const originalLength = res.result.length;
+                const toolName = part.functionResponse.name;
+                // Find target if possible by inspecting preceding model call or keeping a succinct note
+                res.result = `[Earlier tool result compacted: ${toolName}, originally ${originalLength} chars — call the tool again if the exact content is needed; resultCache will serve it without a new network round trip.]`;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 // 429 (rate limit) and 503 (overloaded/high demand) are the only cases
 // documented as transient -- see client.js's own model-fallback cascade,
@@ -1918,6 +1987,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} If you cannot fully complete the task -- including any specific format requested (e.g. an exhaustive table, per-item breakdown) -- in the remaining budget, say so explicitly and describe what's missing, rather than presenting a partial or reformatted-for-brevity answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
       });
     }
+
+    // Compact older bulky tool results in contents before appending this step's turns
+    // (or before saving checkpoint / sending next turn), only if provider opted in.
+    compactHistoryInPlace(contents, step, { provider: effectiveProvider });
 
     contents.push({ role: "user", parts: responseParts });
 
