@@ -26,28 +26,40 @@ import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
 
-// Build the MCP server once at startup and reuse it across all requests.
-const mcpServer = new McpServer({
-  name: "madmcp-server",
-  version: "2.1.0",
-});
+// Factory function to build a fresh McpServer instance with all connectors registered.
+// On Vercel, serverless functions reuse warm containers across separate requests/invocations.
+// Calling server.connect() a second time on a shared module-level singleton instance throws
+// "Already connected to a transport. Call close() before connecting to a new transport, or use a separate Protocol instance per connection."
+// Therefore, handleMcp calls createMcpServer() per request, while module-load instantiation
+// is retained for single-connect tests (e.g. test/mcp-integration.test.js).
+function createMcpServer() {
+  const server = new McpServer({
+    name: "madmcp-server",
+    version: "2.1.0",
+  });
 
-github.register(mcpServer);
-resource.register(mcpServer);
-notion.register(mcpServer);
-mem0.register(mcpServer);
-fetch.register(mcpServer);
-cloudflare.register(mcpServer);
-context7.register(mcpServer);
-agent.register(mcpServer);
-research.register(mcpServer);
-frontend.register(mcpServer);
-sync.register(mcpServer);
-jules.register(mcpServer);
+  github.register(server);
+  resource.register(server);
+  notion.register(server);
+  mem0.register(server);
+  fetch.register(server);
+  cloudflare.register(server);
+  context7.register(server);
+  agent.register(server);
+  research.register(server);
+  frontend.register(server);
+  sync.register(server);
+  jules.register(server);
+
+  return server;
+}
+
+// Build the MCP server once at module load time for tests and single-connect use cases.
+const mcpServer = createMcpServer();
 
 // Adding a new connector:
 //   import * as myThing from "./connectors/myThing/tools.js";
-//   myThing.register(mcpServer);
+//   myThing.register(server); // inside createMcpServer()
 
 // --- IP allowlist -----------------------------------------------------
 // Restricts inbound requests to known client CIDR ranges (e.g. Anthropic's
@@ -151,6 +163,7 @@ app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 async function handleMcp(req, res) {
   try {
+    const mcpServer = createMcpServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => { transport.close(); });
     await mcpServer.connect(transport);
