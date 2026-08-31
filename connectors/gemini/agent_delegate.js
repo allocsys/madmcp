@@ -2008,6 +2008,41 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // source of noisier per-call failures under heavier batching that's
       // worth watching for in practice rather than something this change
       // guards against.
+      // Fix for the 2026-08-31 resultcache-not-persisted-on-resume bug (see
+      // this loop's own comment above, and plan.md): a fresh runInvestigation
+      // invocation's in-memory `resultCache` Map starts empty regardless of
+      // whether this is a resume, but `repeatCounts` IS restored from the
+      // checkpoint -- so before executing anything below, identify every
+      // signature this step's calls need that repeatCounts already knows is
+      // a repeat but the local Map doesn't have text for yet, and fetch all
+      // of them from the Redis side-store in ONE round trip (MGET) rather
+      // than a per-call fetch inside the Promise.all below. A no-op (empty
+      // fetch list) on every step of a fresh, never-resumed run, and on any
+      // step of a resumed run whose repeats were already re-fetched earlier
+      // in the same invocation.
+      if (runId) {
+        const missingCachedSignatures = [];
+        for (const part of functionCalls) {
+          const { name, args } = part.functionCall;
+          const signature = normalizedSignature(name, args);
+          if (repeatCounts.has(signature) && !resultCache.has(signature)) {
+            missingCachedSignatures.push(signature);
+          }
+        }
+        if (missingCachedSignatures.length) {
+          const fetched = await getResultCacheEntries(runId, missingCachedSignatures);
+          for (const [sig, text] of fetched) resultCache.set(sig, text);
+        }
+      }
+
+      // Side-store writes for this step's freshly-computed (non-cached)
+      // results, collected here and awaited once after the Promise.all below
+      // -- same pattern compactHistoryInPlace uses for its own side-store
+      // writes, so a synchronous mutation to resultCache/repeatCounts inside
+      // the map callback below never waits on a Redis round trip before the
+      // next call in the same step can proceed.
+      const resultCacheWrites = [];
+
       const results = await Promise.all(functionCalls.map(async (part) => {
         const { name, args, id } = part.functionCall;
         // Stuck-loop detection (fix #4): a signature identifies an exact
@@ -2026,7 +2061,11 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           // Exact repeat -- don't re-execute at all, just return what this
           // same call returned last time. This is the free win: no network
           // call, no wasted budget, regardless of whether the run as a
-          // whole turns out to be stuck (see allRepeatsThisStep below).
+          // whole turns out to be stuck (see allRepeatsThisStep below). On a
+          // resumed/singleStep invocation, resultCache.has(signature) being
+          // true here means the pre-pass above already fetched it from the
+          // side-store -- this branch doesn't need to know or care whether
+          // the hit came from this same in-memory run or a prior invocation.
           resultText = resultCache.get(signature);
           servedFromCache = true;
         } else {
@@ -2058,9 +2097,16 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
             resultText = `Error: ${name} returned a non-string result (${typeof resultText}); this is a bug in the function's execute().`;
           }
           resultCache.set(signature, resultText);
+          // Persist this fresh result to the side-store too (fix for the
+          // 2026-08-31 bug) -- without this, a resumed/singleStep invocation
+          // later in the SAME run would still have nothing to fetch in the
+          // pre-pass above, and would silently re-execute the repeat exactly
+          // as before this fix.
+          if (runId) resultCacheWrites.push(saveResultCacheEntry(runId, signature, resultText));
         }
         return { name, args, id, resultText, isRepeat, servedFromCache };
       }));
+      if (resultCacheWrites.length) await Promise.all(resultCacheWrites);
 
       for (const r of results) {
         const cacheNote = r.servedFromCache ? " [CACHED -- identical call already made this run, not re-executed]" : "";
