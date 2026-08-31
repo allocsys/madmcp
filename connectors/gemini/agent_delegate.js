@@ -1776,7 +1776,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // generic instruction the model can satisfy by just re-reading its
         // own draft and feeling confident about it again.
         const mechanicalClaims = extractMechanicalClaims(answer);
-        const unverifiedClaims = findUnverifiedClaims(mechanicalClaims, contents, preCompactionResults);
+        const unverifiedClaims = await findUnverifiedClaims(mechanicalClaims, contents, preCompactionResults, runId);
         const claimNote = unverifiedClaims.length
           ? `\n\n[SPECIFIC ITEMS TO CHECK] The following identifier(s)/snippet(s) in your draft answer do not appear verbatim in any raw tool result you've fetched so far this run: ${unverifiedClaims.map((c) => `"${c}"`).join(", ")}. For EACH one: re-read or re-search the specific file/location it's claimed to come from and confirm it exact-matches what's actually there, THEN either (a) keep the claim only if you can now quote it verbatim from a fresh tool result, or (b) correct it if the fresh read shows something different. Do not restate any of these unchanged based on memory or on the fact that you already wrote it once -- that is exactly the failure mode this check exists to catch. (Note: some of these may be false positives -- ordinary words, or claims already correctly quoted -- but each one still needs a fresh check, not a guess about which category it's in.)`
           : "";
@@ -1828,7 +1828,12 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // own single-fire guard.
       if (answer && pendingVerification && !structuralRecheckUsed && step < cappedSteps) {
         const quotedLines = extractLineQuotes(answer);
-        const badQuotes = quotedLines.filter((q) => !lineIsVerbatimInToolResults(q, contents, preCompactionResults));
+        // lineIsVerbatimInToolResults is async (plan.md step 4 -- side-store
+        // fallback), so resolve every lookup first via Promise.all, then
+        // filter on the resolved results -- Array.prototype.filter can't
+        // await inside its predicate.
+        const verbatimChecks = await Promise.all(quotedLines.map((q) => lineIsVerbatimInToolResults(q, contents, preCompactionResults, runId)));
+        const badQuotes = quotedLines.filter((_, i) => !verbatimChecks[i]);
         if (badQuotes.length) {
           const correctionNote =
             `[STRUCTURAL LINE-QUOTE CHECK FAILED] The following line(s) you quoted as exact source text could NOT be found verbatim in any raw tool result already in this conversation: ${badQuotes.map((q) => `"${q}"`).join(", ")}. This means at least one quoted line was reconstructed, paraphrased, or misremembered rather than copied exactly, which means the conditional/comparison claim it was meant to support has NOT actually been confirmed. Re-read the actual file or location again right now, copy the REAL line character-for-character (do not paraphrase, reformat whitespace, or reconstruct from memory), and give your corrected final answer along with a corrected LINE_QUOTE: <line> for each expression you're re-checking. This is the last verification round -- give your best, fully corrected final answer this time.`;
