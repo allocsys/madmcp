@@ -23,7 +23,7 @@ import { glmChat } from "../glm/client.js";
 import { groqChat } from "../groq/client.js";
 import { baiChat } from "../bai/client.js";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../openai_shape/adapter.js";
-import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS, BAI_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
 
 export async function providerChat(contents, { provider = "gemini", tools, model, maxOutputTokens } = {}) {
   if (provider === "glm") {
