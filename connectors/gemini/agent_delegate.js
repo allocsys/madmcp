@@ -1147,6 +1147,14 @@ const SYSTEM_PREAMBLE =
   "turns. When you have enough information, respond with a final plain-text answer and no further " +
   "function calls. Be specific and cite what you found (file paths, commit SHAs, log entries, page " +
   "titles) rather than speculating.\n\n" +
+  "IMPORTANT -- no visible reasoning outside the answer itself: do not narrate your reasoning, plans, " +
+  "or step-by-step thinking in the visible text of any turn -- neither alongside a function call (just " +
+  "make the call, with no accompanying explanation of why) nor as a preamble before your final answer " +
+  "(lead with the answer itself, not a walkthrough of how you got there). Every turn's visible text is " +
+  "resent in full on every subsequent step for the rest of this investigation, so a reasoning preamble " +
+  "repeated turn after turn compounds into wasted tokens without adding anything a caller reading only " +
+  "the final answer needs. Think through the problem as needed, but only write down the function call " +
+  "itself or the concluding answer -- not the thinking that produced it.\n\n" +
   "IMPORTANT -- cross-check, don't just aggregate: when the task touches more than one source " +
   "(e.g. a GitHub PR's status vs. a Notion tracking page, or a repo file vs. what a database row " +
   "claims), actively look for contradictions between them rather than reporting each source's claim " +
