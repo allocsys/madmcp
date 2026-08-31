@@ -1455,6 +1455,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       transcript: checkpoint.transcript,
       runId: resume_run_id,
       task: checkpoint.task,
+      failed: false,
     };
   }
   if (checkpoint) {
@@ -1813,7 +1814,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
           status: "done",
           finalAnswer: result.answer,
         });
-        return result;
+        // Every finishRun call site is a successful completion (the failure
+        // paths elsewhere in this function return their own `failed: true`
+        // shape directly, without going through finishRun) -- explicitly
+        // set `failed: false` rather than leaving it undefined, so callers
+        // that assert on this field (e.g. an integration test resuming a
+        // run) see a real boolean instead of relying on undefined/false
+        // being treated the same by `if (result.failed)` checks downstream.
+        return { failed: false, ...result };
       };
       if (answer) {
         // Strip internal LINE_QUOTE: markers before ever returning an answer
