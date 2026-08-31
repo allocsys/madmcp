@@ -1174,7 +1174,7 @@ function extractMechanicalClaims(answerText) {
 // own earlier assertions would just let a wrong claim "verify" itself by
 // citing itself. A claim is "verified" only if it appears verbatim in
 // something an actual tool returned.
-function findUnverifiedClaims(claims, contents, preCompactionResults) {
+export function findUnverifiedClaims(claims, contents, preCompactionResults = new Map()) {
   const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
     .filter((p) => p.functionResponse)
