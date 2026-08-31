@@ -167,7 +167,7 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 export const DELEGATE_AGENT_ASYNC = process.env.DELEGATE_AGENT_ASYNC || "sync";
-export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POLL_FRESH_SECONDS) || 25;
+export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POLL_FRESH_SECONDS) || 60;
 export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
 
 export const EXA_API_KEYS = (process.env.EXA_API_KEYS || "")
