@@ -123,6 +123,10 @@ export const GEMINI_API     = "https://generativelanguage.googleapis.com/v1beta"
 // renames/retires Gemini model IDs periodically, so don't assume this stays
 // current without checking https://ai.google.dev/gemini-api/docs/models.
 export const GEMINI_MODEL   = process.env.GEMINI_MODEL || "gemini-flash-latest";
+export const HISTORY_COMPACTION_PROVIDERS = (process.env.HISTORY_COMPACTION_PROVIDERS || "bai")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 // Fallback model cascade for rate-limit (429) errors. Free-tier Gemini quotas
 // are tracked PER MODEL, so a different model has its own separate RPM
