@@ -171,5 +171,44 @@ A critical review of this branch against `main` (code read in full, not just dif
 ### Confirmed: no test exercises the real resume -> recompaction integration path
 `test/history_compaction_test.js`'s "Checkpoint-round-trip recompaction test" only calls `compactHistoryInPlace` twice directly on hand-built arrays -- it never calls the actual `loadCheckpoint`/`saveCheckpoint`/`runInvestigation` resume path (the FIX A code path that re-runs `compactHistoryInPlace` immediately after `loadCheckpoint`, added specifically to fix bug "Compaction itself never survived a checkpoint resume" above). The fix for that bug is therefore currently unverified by any test that actually resumes a run. Needs an integration-level test (e.g. mocking Redis or using a real test Redis instance) that saves a checkpoint mid-run, calls `runInvestigation` with `resume_run_id`, and asserts the resumed `contents` sent to `providerChat` is already compacted.
 
+### Proposed fix for the `preCompactionResults` checkpoint-bloom issue: side-store, not inline map
+
+Goal: bound checkpoint write cost without shrinking what verification checks
+can see, without re-inflating the compacted history sent to the model, and
+without evicting anything that might still be needed mid-run.
+
+- **Move `preCompactionResults` out of the per-step `meta` blob into a
+  separate, append-only side-store** -- one Redis key per compacted
+  function-call id (e.g. `precompact:{runId}:{id}`), written once, at the
+  moment that entry is first compacted. The `meta` blob keeps only small
+  references (the set of ids that have a side-store entry), not the full
+  original text. This makes `saveCheckpoint`'s `meta` write cost O(new
+  entries this step), not O(total entries ever), matching how `contents`
+  is already append-delta via `RPUSH` rather than a full rewrite.
+- **`findUnverifiedClaims` / `lineIsVerbatimInToolResults` fetch from the
+  side-store on demand** instead of from an in-memory Map -- same
+  correctness guarantee (full original text always available for
+  verification), just a different storage location. No change to what
+  the model itself receives each step: it still only ever sees the
+  compacted pointer text, exactly as today, so this does not re-add
+  context bloat on the model-facing side.
+- **No mid-run eviction, ever.** Nothing is deleted while a run is still
+  active, so there's no risk of trimming something a later verification
+  check needs -- this fixes the storage-cost problem without touching the
+  hallucination/verbatim-quote safety net at all.
+- **Garbage-collect only at run completion**: when a run finishes (or its
+  checkpoint is explicitly deleted), batch-delete all `precompact:{runId}:*`
+  keys for that run in one pass. Bounds total storage to "one run's worth"
+  instead of growing across the run's lifetime or across resumes.
+- **Add the missing integration test** (see confirmed issue above) as part
+  of this fix, not separately -- it should assert both that the side-store
+  is populated correctly across a resume AND that checkpoint write size
+  stays flat rather than growing step over step.
+
+This directly addresses the confirmed checkpoint-bloom issue above without
+reopening any of the five bugs already fixed during implementation review
+(anti-hallucination check, verbatim-quote check, checkpoint-resume
+recompaction, off-by-one window, or id-collision safety).
+
 ### False alarm, already checked -- do not re-flag without new evidence
 An initial review pass raised a concern that `setPreCompactionResult`'s collision-suffixing (`#2`, `#3`) could misalign after a `preCompactionResults` round-trip through `Object.fromEntries` -> JSON -> `Object.entries` -> `Map`, on the theory that JS object key ordering isn't guaranteed to survive that round-trip. On inspection this does not hold: `setPreCompactionResult` resolves collisions via explicit `.has()`/`.get()` lookups on specific string keys (`id`, `id#2`, `id#3`, ...), never by Map/object iteration order, so key-ordering behavior is irrelevant to its correctness. No fix needed here.
