@@ -241,7 +241,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     // Uses this file's own fakeRedis mock (see top of file) via the real
     // saveCheckpoint/loadCheckpoint persistence functions -- not manually
     // invoked compaction on hand-built arrays like the tests above.
-    const { saveCheckpoint, loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+    const { saveCheckpoint, loadCheckpoint, getPreCompactionResults } = await import("../connectors/gemini/agent_checkpoint.js");
     
     const originalText = "BULKY_PAYLOAD_CONTENT_" + "X".repeat(600);
     const runId = "test-integration-compaction-roundtrip";
@@ -264,10 +264,16 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     // Load
     const loaded = await loadCheckpoint(runId);
     
-    // Check round-trip
+    // Check round-trip. `meta` only carries the compacted IDS now (plan.md
+    // step 3, "Shrink meta") -- the actual text lives in the side-store,
+    // written once by compactHistoryInPlace's savePreCompactionResult call
+    // (step 2), and read back here via the batched getPreCompactionResults
+    // fetch-on-demand helper (step 4) rather than expecting it inline on
+    // the checkpoint blob.
     expect(loaded.contents).toEqual(contents);
-    expect(loaded.preCompactionResults).toEqual(Object.fromEntries(preCompactionResults));
-    expect(loaded.preCompactionResults["c1"]).toBe(originalText);
+    expect(loaded.preCompactionResultIds).toEqual([...preCompactionResults.keys()]);
+    const sideStore = await getPreCompactionResults(runId, loaded.preCompactionResultIds);
+    expect(sideStore.get("c1")).toBe(originalText);
   });
 
   it("integration test: resume -> recompaction code path in runInvestigation exercises re-compaction and populates preCompactionResults", async () => {
@@ -339,14 +345,21 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
       // Wait, where is preCompactionResults captured? Let's check how runInvestigation uses it or how we can test it.
       // In runInvestigation, preCompactionResults is passed to compactHistoryInPlace and persisted in checkpoints.
       // Let's load the checkpoint saved after runInvestigation completed or check if we can verify via findUnverifiedClaims.
-      const { loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+      // `meta` only carries the compacted id now (plan.md step 3) -- read
+      // the actual text back via the side-store (step 2's write, step 4's
+      // batched fetch), same as the round-trip test above.
+      const { loadCheckpoint, getPreCompactionResults } = await import("../connectors/gemini/agent_checkpoint.js");
       const savedCheckpointAfterRun = await loadCheckpoint(resumeRunId);
-      expect(savedCheckpointAfterRun.preCompactionResults["call_aged_1"]).toBe(bulkyToolResponseText);
+      expect(savedCheckpointAfterRun.preCompactionResultIds).toContain("call_aged_1");
+      const sideStore = await getPreCompactionResults(resumeRunId, savedCheckpointAfterRun.preCompactionResultIds);
+      expect(sideStore.get("call_aged_1")).toBe(bulkyToolResponseText);
 
-      // Also test that lineIsVerbatimInToolResults / findUnverifiedClaims work correctly with the re-populated preCompactionResults map
-      const restoredPreCompactionMap = new Map(Object.entries(savedCheckpointAfterRun.preCompactionResults));
-      expect(lineIsVerbatimInToolResults("AGED_OUT_BULKY_TOOL_RESULT_CONTENT_", capturedContentsPassedToChat, restoredPreCompactionMap)).toBe(true);
-      
+      // Exercises the fetch-on-demand fallback itself (plan.md step 4): an
+      // EMPTY in-memory Map forces a Map miss, so this only passes if
+      // lineIsVerbatimInToolResults actually falls back to the side-store
+      // via runId rather than silently returning false.
+      expect(await lineIsVerbatimInToolResults("AGED_OUT_BULKY_TOOL_RESULT_CONTENT_", capturedContentsPassedToChat, new Map(), resumeRunId)).toBe(true);
+
     } finally {
       // Restore providerChat
       vi.spyOn(routerModule, "providerChat").mockImplementation(originalProviderChat);
