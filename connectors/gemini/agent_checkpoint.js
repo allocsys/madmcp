@@ -91,7 +91,10 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
         preCompactionResults.delete(keys[i]);
       }
     }
-    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
+    const serializablePreCompactionResults = preCompactionResults instanceof Map
+      ? Object.fromEntries(preCompactionResults)
+      : preCompactionResults;
+    const meta = JSON.stringify({ transcript, stepsDone, task, repeatCounts, consecutiveAllRepeatSteps, preCompactionResults: serializablePreCompactionResults, provider, model, maxOutputTokens, pendingVerification, structuralRecheckUsed, overallMaxSteps, status, finalAnswer, lastStepAt: Date.now() });
     ops.push(client.set(metaKey(runId), meta, { ex: CHECKPOINT_TTL_SECONDS }));
     await Promise.all(ops);
   } catch {
