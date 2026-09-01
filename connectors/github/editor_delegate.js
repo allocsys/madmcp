@@ -50,7 +50,7 @@ import { formatCascadeLogLine } from "../llm/cascade_log.js";
 import { readFile, writeFile, assertNotDefaultBranch } from "./editor_tool_functions.js";
 import { validateByExtension } from "./editor_validate.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./editor_checkpoint.js";
-import { isRedisConfigured } from "../gemini/cooldown.js";
+import { isRedisConfigured } from "../shared/cooldown.js";
 import {
   EDITOR_ALLOWED_EXTENSIONS,
   EDITOR_ALLOWED_PATH_PREFIXES,
