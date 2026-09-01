@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { GEMINI_API_KEYS, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, GEMINI_REQUEST_TIMEOUT_MS } from "../../config.js";
-import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "./cooldown.js";
+import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
 
 async function callGenerateContentOnce(body, model, apiKey) {
   if (!apiKey) throw new Error("No Gemini API key available. Set GEMINI_API_KEYS (or the legacy GEMINI_API_KEY) as an environment variable on the madmcp server.");
