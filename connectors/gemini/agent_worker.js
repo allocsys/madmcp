@@ -57,10 +57,9 @@ import { AGENT_WORKER_MAX_CONSECUTIVE_FAILURES, DEBUG_AGENT_WORKER } from "../..
 // 2026-09-01 (commit 2aad526) to diagnose a worker-chain stall. Default OFF
 // (DEBUG_AGENT_WORKER) once that stall was diagnosed as sustained B.AI
 // rate-limiting driving the existing retry/re-chain path, not a
-// concurrent-duplicate idempotency bug -- see plan.md's Open items and
-// config.js's DEBUG_AGENT_WORKER comment for the full history. Kept, not
-// deleted, so it can be flipped back on (DEBUG_AGENT_WORKER=true) quickly if
-// a similar stall resurfaces.
+// concurrent-duplicate idempotency bug -- see config.js's DEBUG_AGENT_WORKER
+// comment for the full history. Kept, not deleted, so it can be flipped
+// back on (DEBUG_AGENT_WORKER=true) quickly if a similar stall resurfaces.
 function debugLog(message) {
   if (DEBUG_AGENT_WORKER) console.log(message);
 }
