@@ -271,6 +271,31 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
 
+  // Async delegate_editor (plan.md Step 7 needs this): a checkpoint whose
+  // last save recorded status "done" already has a final answer sitting in
+  // Redis (see the completion path near the end of this function). Return
+  // it directly rather than re-entering the loop, which would otherwise
+  // treat `contents` as still mid-conversation and either try to take more
+  // (nonsensical) steps against a finished run, or -- worse -- silently
+  // re-call the model on the same contents and produce a second, possibly
+  // different "final answer" for a run that already committed its changes
+  // and reported a result. This is also what makes resume_run_id usable as
+  // a cheap poll handle for a background/worker-driven run: polling a
+  // finished run is now a Redis read, not a re-run. Mirrors
+  // connectors/gemini/agent_delegate.js's runInvestigation, which has the
+  // same short-circuit for the same reason.
+  if (checkpoint && checkpoint.status === "done") {
+    return {
+      answer: checkpoint.finalAnswer,
+      steps: checkpoint.stepsDone,
+      transcript: checkpoint.transcript,
+      runId: resume_run_id,
+      task: checkpoint.task,
+      writtenFiles: checkpoint.writtenFiles || [],
+      failed: false,
+    };
+  }
+
   if (checkpoint) {
     contents = checkpoint.contents;
     transcript = checkpoint.transcript;
