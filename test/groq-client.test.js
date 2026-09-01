@@ -12,7 +12,7 @@ const mockConfig = vi.hoisted(() => ({
 vi.mock("../config.js", () => mockConfig);
 
 // Mock the cooldown module (shared with Gemini/GLM, see
-// connectors/gemini/cooldown.js) rather than @upstash/redis directly --
+// connectors/shared/cooldown.js) rather than @upstash/redis directly --
 // groq/client.js only ever talks to cooldown.js's exported functions.
 const mockIsModelCoolingDown = vi.fn();
 const mockSetModelCooldown = vi.fn();
@@ -20,7 +20,7 @@ const mockParseRetryDelaySeconds = vi.fn((message) => {
   const match = /retry in ([\d.]+)\s*s/i.exec(message || "");
   return match ? Math.ceil(parseFloat(match[1])) : null;
 });
-vi.mock("../connectors/gemini/cooldown.js", () => ({
+vi.mock("../connectors/shared/cooldown.js", () => ({
   isModelCoolingDown: mockIsModelCoolingDown,
   setModelCooldown: mockSetModelCooldown,
   parseRetryDelaySeconds: mockParseRetryDelaySeconds,
