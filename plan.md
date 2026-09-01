@@ -1,14 +1,15 @@
-# Findings: B.AI provider testing (2026-09-02)
+# Findings: B.AI provider testing + max_steps bug (2026-09-02)
 
 Context: `connectors/bai/client.js`'s bounded 2-pass key-rotation retry
 loop (`MAX_KEY_ROTATION_PASSES = 2`) and the Gemini model-first cascade
 reorder (`connectors/gemini/client.js`, PR #137 / commit `befdcda`) were
 merged to `main` in prior sessions. This session re-tested the bai path
-via `delegate_agent({ provider: "bai" })` against this repo.
+via `delegate_agent({ provider: "bai" })`, which led to finding and
+root-causing an unrelated `max_steps` enforcement bug.
 
 ---
 
-## 1. Code-level verification (confirmed)
+## 1. bai key-rotation retry loop: code-level verification (confirmed)
 
 Read `connectors/bai/client.js` directly on `main` and confirmed the
 described retry loop is actually present as specified:
@@ -21,7 +22,7 @@ described retry loop is actually present as specified:
 - 429 -> cooldown via `parseRetryDelaySeconds`; 503/timeout -> cooldown via
   `DEFAULT_COOLDOWN_SECONDS` fallback (added in commit `27449d5`, same day).
 - 401/403 (bad key) does NOT `break` the inner loop -- correctly falls
-  through to the next key, since bai has no inner model loop to fall out of.
+  through to the next key.
 - Early-exit: if a whole pass makes zero live attempts (every key already
   cooling), the loop stops without wasting a second pass.
 - Aggregate exhaustion error tags `.transient = true` only if every
@@ -35,98 +36,129 @@ re-thrown immediately, and `_fallbackKeyIndex` tagging.
 
 ---
 
-## 2. Live-run verification (inconclusive by design, not by bug)
+## 2. bai key-rotation: live-run verification (inconclusive by design)
 
-Ran a real `delegate_agent({ provider: "bai", max_steps: 15 })`
-investigation task (20 steps, all bai-backed). It completed cleanly with
-no rate-limit/cooldown activity visible in the transcript -- no key ever
-hit pass 2, no `_fallbackKeyIndex` tagging appeared.
-
-This confirms the bai path works end-to-end under normal conditions, but
-it does **not** exercise the specific "a key's cooldown clears mid-call
-and gets retried on pass 2" scenario, since no key was ever rate-limited
-during this run. That scenario can't be forced from outside the process
-(no control over B.AI's live rate-limit state), so live runs are not a
-reliable way to confirm it -- the existing mocked unit tests in
-`test/bai-client.test.js` are the actual source of confidence here, not
-this session's live run.
+A real `delegate_agent({ provider: "bai", max_steps: 15 })` run (20 steps,
+all bai-backed) completed cleanly with no rate-limit/cooldown activity --
+no key ever hit pass 2. This confirms the bai path works end-to-end under
+normal conditions but does not exercise the "cooldown clears mid-call"
+scenario, which can't be forced from outside the process. The mocked unit
+tests in `test/bai-client.test.js` remain the real source of confidence
+for that specific mechanism, not a live run.
 
 ---
 
-## 3. Bug found: `max_steps` not enforced on `bai`-provider runs
+## 3. BUG (ROOT-CAUSED): `max_steps` silently ignored on async fresh-start `delegate_agent` calls
 
-While stress-testing with a deliberately heavy task and `max_steps: 3`,
-the run blew through the cap. Observed progression across repeated polls
-of the same `resume_run_id`: **14 steps -> 15 steps -> 19 steps**, still
-running, against a requested ceiling of 3. Per `delegate_agent`'s own
-tool description, `max_steps` is supposed to cap tool-use turns before
-the run is forced to answer (default 20, hard cap 30 regardless of the
-passed value) -- 3 was neither honored nor did the hard-cap-independent
-behavior kick in as documented.
+**File:** `connectors/gemini/agent_tools.js`, async fresh-start branch of
+the `delegate_agent` tool handler.
 
-**Not yet root-caused.** Open questions for the next session:
+**Root cause:** the fresh-start call site never passes `max_steps` through
+to `seedRun`:
 
-- Is `max_steps` actually threaded through to the bai-provider branch of
-  the agent loop (`agent_delegate.js` / wherever provider dispatch
-  happens), or does the bai path silently ignore it and fall back to some
-  other default/hard-cap?
-- Is this bai-specific, or would the same test against `provider: "gemini"`
-  also blow past a `max_steps: 3` cap? (Not yet tested -- needed to
-  isolate whether this is a provider-dispatch bug or a general step-budget
-  bug that happens to have been noticed on the bai path.)
-- Given the plan.md history (now replaced by this file) around
-  `singleStep` vs. `max_steps: stepsDone + 1` NOT being equivalent for the
-  editor's async port -- worth checking whether `agent_delegate.js`'s own
-  step-counting has a similar off-by-logic gap that only manifests for
-  certain providers or call shapes.
+```js
+runId = await seedRun({ task, provider, model, maxOutputTokens });
+await publishAgentStep({ runId, afterStep: 0 });
+```
 
-**Why this matters beyond the immediate test:** if step budgets are this
-loose, it suggests the enforcement mechanism itself may be unreliable
-more broadly (cost control, runaway-loop protection, dead-letter/retry
-budget interactions), not just a cosmetic mismatch between requested and
-actual step count on this one call.
+`seedRun`'s signature is `seedRun({ task, provider, model, maxOutputTokens,
+max_steps = 20 })` (`connectors/gemini/agent_delegate.js`). Since the
+caller omits `max_steps` entirely, it silently defaults to `20` on every
+async fresh-start call, **regardless of what the caller actually
+requested**. That default becomes `overallMaxSteps` in the seeded
+checkpoint (`const overallMaxSteps = Math.min(max_steps, HARD_MAX_STEPS)`
+inside `seedRun`), and every subsequent worker-driven `singleStep` resume
+reads its step ceiling from the checkpoint's `overallMaxSteps` -- not from
+anything the original caller passed -- so the run proceeds against a
+ceiling of 20, not whatever `max_steps` the caller specified.
+
+**Scope of the bug:** this is specific to the **async fresh-start path**
+(`DELEGATE_AGENT_ASYNC === "qstash"` enabled, no `resume_run_id`). The
+synchronous path in the same file (`runInvestigation({ task, max_steps,
+resume_run_id, provider, model, maxOutputTokens })`, later in the same
+handler) DOES pass `max_steps` correctly -- confirmed by reading
+`runInvestigation`'s own step-loop logic (`cappedSteps = Math.min(max_steps,
+HARD_MAX_STEPS); effectiveOverallMaxSteps = cappedSteps;` when not
+`singleStep`), which correctly bounds a normal synchronous call. So a
+synchronous `max_steps: 3` call would very likely behave correctly; it was
+only the async/QStash worker-chained path that dropped the value.
+
+**How this was found:** requested `max_steps: 3` on a fresh `delegate_agent`
+call with `provider: "bai"`. The run (async, since it returned a
+`run_id` immediately rather than blocking) proceeded past 3 steps on every
+subsequent poll -- observed step counts across repeated polls of the same
+`resume_run_id`: 14 -> 15 -> 19, consistent with heading toward the
+silently-defaulted ceiling of 20 rather than stopping at 3.
+
+**Confirmed NOT the cause:** `editor_delegate.js`'s equivalent async path
+(`seedEditorRun`) was not checked in this session, so it's unknown whether
+the same class of bug exists there -- worth checking, since the two files
+are structurally parallel (see the old `plan.md`, now replaced, which
+ported the async pattern from `agent_*` to `editor_*`).
+
+**Fix (not yet implemented):** pass `max_steps` through in the fresh-start
+call:
+```js
+runId = await seedRun({ task, provider, model, maxOutputTokens, max_steps });
+```
+A regression test should assert that a fresh async call with an explicit
+`max_steps` produces a checkpoint whose `overallMaxSteps` matches the
+requested value, not the default of 20.
+
+**Why this matters beyond the immediate test:** this confirms the original
+suspicion from earlier in this session -- "if step budgets are this loose,
+the enforcement mechanism itself may be unreliable more broadly" -- was
+correct, but the actual defect is much narrower and more mundane than a
+step-counting logic bug: it's a missed parameter at a single call site,
+not a flaw in the step-budget mechanism itself (which, per the code read
+in `runInvestigation`/`seedRun`, is otherwise soundly designed -- checkpoint-
+persisted `overallMaxSteps`, `HARD_MAX_STEPS` clamping, `isFinalStep`
+tool-withholding, etc. all work as documented once given the right input).
 
 ---
 
-## 4. Second observation: possible cache-hit-only stuck loop (same run)
+## 4. Cache-hit repeat calls observed during the same run (likely a symptom of #3, not a separate bug)
 
-On the poll that observed 19 steps (up from 15 on the prior poll), the
-tool response itself was: `"Void (the re-fetch was served from cache, not
-new content)."` Inspecting the transcript, steps 16-18 were exact repeats
-of steps 12-14 (`github_get_file_at_commit` on the same commit + paths),
-all served from cache with nothing new returned.
+During the stuck/over-budget run, steps 16-18 were exact repeats of steps
+12-14 (`github_get_file_at_commit` on the same commit + paths), served from
+`resultCache` and marked `[CACHED -- identical call already made this run,
+not re-executed]` in the transcript.
 
-This suggests the run may not just be ignoring `max_steps` but also
-spinning -- re-issuing identical tool calls that can't produce new
-information, rather than converging toward an answer. This is distinct
-from the `max_steps` bug above and should be tracked separately:
+Having now read `agent_delegate.js` in full: this is **not a bug** in
+itself -- `resultCache`/`repeatCounts` and the `consecutiveAllRepeatSteps`
+stuck-loop guard are an intentional, working mechanism (repeats are served
+from cache for free rather than re-executed; 3 consecutive all-repeat steps
+force a no-tools text-only answer). What's still unexplained is why the run
+appeared to stall completely (two consecutive polls showing identical
+transcript and step count, zero new activity) rather than either continuing
+past the repeats or hitting the `consecutiveAllRepeatSteps >= 3` forced-answer
+path within a few more steps. Possible explanations, not yet checked:
 
-- Does `agent_delegate.js` (the read-only/`delegate_agent` path) have any
-  stuck-loop detection analogous to `editor_delegate.js`'s
-  `consecutiveAllRepeatSteps` mechanism (referenced in this repo's git
-  history for the editor's async port)? If yes, why didn't it trigger
-  here? If no, that's a gap worth closing independently of the
-  `max_steps` bug.
-- Is the cache-hit itself the problem (i.e., the model doesn't see that
-  its own call was a no-op repeat and can't tell it needs to try
-  something different), or is this a downstream symptom of the same
-  root cause as the `max_steps` bug (e.g., the loop's step-counting is
-  broken in a way that also breaks its repeat-detection)?
+- The QStash worker chain (`agent_worker.js`) may have silently stopped
+  re-publishing the next step (a crash, an unhandled rejection, or a
+  dead-letter that didn't update `status` correctly).
+- The repeats may not have been 3 consecutive ALL-repeat steps (mixed with
+  non-repeat calls elsewhere in the same steps), so `consecutiveAllRepeatSteps`
+  never actually hit 3 and the run is still "legitimately" running, just
+  slowly, and our polls happened to land in a quiet gap.
 
-**Status of this specific test run:** left running/unresolved as of this
-writing -- not killed, not confirmed to have self-terminated or
-dead-lettered. Whoever picks this up next should check its current state
-first rather than assume it's still active or already finished.
+**Next step for this specific thread:** re-check `agent_worker.js` (not yet
+read this session) for how it dead-letters / detects a stalled chain, and
+whether `EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES`'s `agent_*` equivalent
+exists and was hit.
 
 ---
 
 ## Next steps
 
-1. Root-cause where `max_steps` is supposed to be read/enforced in the
-   bai dispatch path.
-2. Test whether `provider: "gemini"` has the same `max_steps` gap, to
-   isolate provider-specific vs. general step-budget bug.
-3. Check for stuck-loop/repeat-detection logic in `agent_delegate.js` and
-   whether it should have caught the cache-hit-only loop in finding #4.
-4. Add regression tests pinning both the step cap and repeat-detection
-   once root-caused.
+1. **Fix confirmed bug #3**: add `max_steps` to the `seedRun` call in
+   `connectors/gemini/agent_tools.js`'s async fresh-start branch. Add a
+   regression test pinning `overallMaxSteps` to the caller's requested
+   value on a fresh async call.
+2. Check `connectors/github/editor_delegate.js`'s `seedEditorRun` call site
+   (in `editor_tools.js`) for the same missed-parameter pattern.
+3. Read `agent_worker.js` to understand why the run appeared to stall after
+   the cache-hit repeats rather than progressing or forcing a stop.
+4. Once #3 is fixed, re-run the original bai key-rotation test with a
+   correctly-enforced `max_steps` to confirm the fix doesn't change bai-path
+   behavior.
