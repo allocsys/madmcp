@@ -8,7 +8,7 @@
 // 401/403/429 (bad/exhausted key), inner cascade over GROQ_MODEL +
 // GROQ_FALLBACK_MODELS on 429/503/network-transient. Cooldown is namespaced
 // per (model, key-index) via "groq:<keyIndex>", reusing
-// connectors/gemini/cooldown.js's generic `namespace` param -- no changes
+// connectors/shared/cooldown.js's generic `namespace` param -- no changes
 // needed there, it was already provider-agnostic (verified by direct read
 // when this file was written, not assumed from GLM's integration alone).
 //
@@ -23,7 +23,7 @@
 // ---------------------------------------------------------------------------
 
 import { GROQ_API_KEYS, GROQ_API, GROQ_MODEL, GROQ_FALLBACK_MODELS, GROQ_REQUEST_TIMEOUT_MS } from "../../config.js";
-import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../gemini/cooldown.js";
+import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
 
 async function callChatCompletionOnce(body, model, apiKey) {
   if (!apiKey) throw new Error("No Groq API key available. Set GROQ_API_KEYS as an environment variable on the madmcp server.");
