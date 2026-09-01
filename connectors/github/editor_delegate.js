@@ -585,3 +585,66 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     failed: true,
   };
 }
+
+// Seeds a fresh checkpoint (status "running", stepsDone 0, no steps taken
+// yet) WITHOUT running any part of the editor loop -- mirrors
+// connectors/gemini/agent_delegate.js's seedRun. Meant for the upcoming
+// editor_tools.js async-start path (Step 7) to return a run_id immediately
+// and let the editor worker (Step 4) take step 1 in the background, rather
+// than this call itself blocking on step 1 synchronously before returning.
+//
+// Runs assertNotDefaultBranch up front -- same guardrail #2 check
+// runEditorAgent's own fresh-call branch already does -- BEFORE ever
+// writing a checkpoint, so an invalid branch never gets a run_id at all:
+// there would be nothing useful to resume, and a caller polling a run_id
+// that can never succeed is worse than an immediate, synchronous rejection.
+//
+// Deliberately duplicates the small fresh-run setup already inside
+// runEditorAgent (a UUID + the initial system-preamble turn) rather than
+// calling into runEditorAgent with max_steps: 0, for the same reason
+// seedRun gives for its own equivalent duplication: runEditorAgent's loop
+// simply never executes when cappedSteps < startStep, but the only existing
+// early-return path that covers that case (`checkpoint && startStep >
+// cappedSteps`) assumes a checkpoint ALREADY EXISTS -- reaching it on a
+// genuinely fresh, zero-step call would mean either throwing or bending
+// that guard's contract to serve a second, differently-shaped caller. A
+// small, explicit duplication of the fresh-run setup here is lower-risk.
+//
+// Unlike editor_checkpoint.js's other callers, this writes the whole-blob
+// shape directly (contents/writtenFiles/writesPerFile/validateCounts etc.)
+// rather than through runEditorAgent's saveState closure, since there is no
+// loop-scoped closure to reuse here -- the shape matches saveState's own
+// object exactly, just with the zero-step initial values.
+export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS }) {
+  if (!owner || !repo || !branch || !task) {
+    throw new Error("owner, repo, branch, and task are all required to seed a new run.");
+  }
+
+  await assertNotDefaultBranch(owner, repo, branch);
+
+  const runId = randomUUID();
+  const contents = [{ role: "user", parts: [{ text: buildSystemPreamble({ owner, repo, branch, task }) }] }];
+  // Seeds the run's TRUE overall step ceiling (see runEditorAgent's
+  // effectiveOverallMaxSteps for the full rationale) -- this is what lets
+  // the editor worker's later singleStep resumes know when they've reached
+  // the run's real last step, instead of mistaking their own artificially
+  // shrunk per-call max_steps for it.
+  const overallMaxSteps = Math.min(max_steps, EDITOR_HARD_MAX_STEPS);
+  await saveCheckpoint(runId, {
+    contents,
+    transcript: [],
+    stepsDone: 0,
+    task,
+    owner,
+    repo,
+    branch,
+    writtenFiles: [],
+    writesPerFile: {},
+    validateCounts: {},
+    repeatCounts: {},
+    consecutiveAllRepeatSteps: 0,
+    overallMaxSteps,
+    status: "running",
+  });
+  return runId;
+}
