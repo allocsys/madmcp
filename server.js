@@ -21,6 +21,7 @@ import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
 import * as agent      from "./connectors/gemini/agent_tools.js";
 import { handleAgentWorker } from "./connectors/gemini/agent_worker.js";
+import { handleEditorWorker } from "./connectors/github/editor_worker.js";
 import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
@@ -189,6 +190,18 @@ app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 // see qstash_client.js's file header), which is why it doesn't reuse any
 // of the /mcp middleware stack above.
 app.post("/api/agent-worker", handleAgentWorker);
+
+// QStash-invoked worker for delegate_editor's async self-chaining
+// background loop (plan.md Step 5) -- same reasoning as /api/agent-worker
+// immediately above: deliberately NOT behind requireMcpKey/requireAllowedIp
+// (QStash calls from its own infrastructure, not the MCP client's network)
+// or mcpLimiter (a long chain of legitimate one-step-per-message calls for
+// a single run would otherwise trip a limiter sized for MCP tool-call
+// bursts). Auth for this endpoint is entirely handleEditorWorker's own
+// QStash signature verification (fails closed), which is why it doesn't
+// reuse any of the /mcp middleware stack above. Relies on the same global
+// express.json() verify callback above for req.rawBody.
+app.post("/api/editor-worker", handleEditorWorker);
 
 const PORT = process.env.PORT || 8080;
 // Gated so importing this module (e.g. from tests via supertest, or the MCP
