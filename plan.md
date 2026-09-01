@@ -102,9 +102,11 @@ Mirror `connectors/gemini/agent_worker.js` closely:
   loop.
 - Call `runEditorAgent({ resume_run_id: runId, singleStep: true })`.
 - If still running after the step: re-publish the next step via
-  `publishAgentStep` (reuse as-is — it's generic over `runId`/`afterStep`/
-  `retryCount`, not Gemini-specific) targeting a **new** env var
-  (`EDITOR_WORKER_URL`, see Step 6) rather than `AGENT_WORKER_URL`.
+  `publishEditorStep` (**new** sibling function added to `qstash_client.js`
+  in Step 6 — `publishAgentStep` itself hardcodes `AGENT_WORKER_URL` at
+  module scope with no `url` parameter, so it cannot be retargeted at
+  `EDITOR_WORKER_URL` by the caller; see Step 6 for why this needs a new
+  sibling function rather than reusing the existing one as-is).
 - Dead-letter after `EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES` consecutive
   same-step failures, finalizing `status: "failed"` with `finalAnswer` set
   to the last error — same shape as `agent_worker.js`.
@@ -153,6 +155,43 @@ independently toggleable from `delegate_agent`'s, same way
 **Done when:** all five are exported with sensible defaults and no
 existing config export is disturbed.
 
+### Step 6b — Generalize `qstash_client.js` for the editor worker (required, not optional)
+
+**File:** `connectors/gemini/qstash_client.js`
+
+Verified against the current code: `AGENT_WORKER_URL` is imported at
+module scope and hardcoded directly into `publishAgentStep`'s
+`client.publishJSON({ url: AGENT_WORKER_URL, ... })` call, and
+`isQStashConfigured()` likewise hardcodes the `Boolean(AGENT_WORKER_URL)`
+check. Neither function takes a `url`/target parameter. Every existing
+call site (`agent_tools.js`'s fresh-start branch, `agent_worker.js`'s
+re-chain call) calls them with no such parameter either. So there is no
+way for `editor_worker.js`/`editor_tools.js` to retarget these at
+`EDITOR_WORKER_URL` without a code change here — "reuse as-is" (as an
+earlier draft of this plan claimed) is not achievable.
+
+Fix: add two new sibling functions rather than generalizing the existing
+ones (avoids touching `agent_tools.js`/`agent_worker.js`'s call sites or
+risking a regression on the live Gemini async path):
+
+- `isEditorQStashConfigured()` — same shape as `isQStashConfigured()`, but
+  checks `Boolean(EDITOR_WORKER_URL)` instead of `AGENT_WORKER_URL`.
+- `publishEditorStep({ runId, afterStep, retryCount = 0 })` — same shape
+  and same fail-by-throwing contract as `publishAgentStep`, but publishes
+  to `EDITOR_WORKER_URL` instead of `AGENT_WORKER_URL`.
+
+Both import `EDITOR_WORKER_URL` from `config.js` (added earlier in this
+step). Signature verification (`verifyQStashSignature`/`getReceiver`) is
+unchanged and shared as-is — it's already generic over the caller (it just
+verifies a signature against a body), so no editor-specific variant is
+needed there.
+
+**Done when:** `editor_worker.js` (Step 4) and `editor_tools.js` (Step 7)
+can publish to and check configuration against `EDITOR_WORKER_URL`
+without `AGENT_WORKER_URL` ever being read on the editor path, and the
+existing Gemini `publishAgentStep`/`isQStashConfigured` call sites are
+unchanged (regression check).
+
 ---
 
 ## Step 7 — Async branching in `editor_tools.js`
@@ -161,16 +200,13 @@ existing config export is disturbed.
 
 Mirror `agent_tools.js`'s branching almost exactly:
 
-- Compute `asyncEnabled = EDITOR_AGENT_ASYNC === "qstash" && isQStashConfigured()`.
-  (Reuse `isQStashConfigured()` as-is — it only checks `QSTASH_TOKEN` +
-  `AGENT_WORKER_URL` today, so it'll need a second look: either generalize
-  it to accept which worker-URL env var to check, or add a small
-  `isEditorQStashConfigured()` wrapper that checks `EDITOR_WORKER_URL`
-  instead. Decide during implementation, not in this plan.)
+- Compute `asyncEnabled = EDITOR_AGENT_ASYNC === "qstash" && isEditorQStashConfigured()`,
+  using the new `isEditorQStashConfigured()` from Step 6b (checks
+  `QSTASH_TOKEN` + `EDITOR_WORKER_URL`, not `AGENT_WORKER_URL`).
 - **Fresh call + async enabled:** call `seedEditorRun`, then
-  `publishAgentStep({ runId, afterStep: 0 })` targeting `EDITOR_WORKER_URL`,
-  return the `run_id` message immediately (same wording pattern as
-  `delegate_agent`'s).
+  `publishEditorStep({ runId, afterStep: 0 })` (Step 6b — publishes to
+  `EDITOR_WORKER_URL`), return the `run_id` message immediately (same
+  wording pattern as `delegate_agent`'s).
 - **Resume + async enabled + no `max_steps`:** poll-only — check
   `status` ("failed" → return the stored error; "running" → freshness
   check against `lastStepAt`/`stepStartedAt` using the new
