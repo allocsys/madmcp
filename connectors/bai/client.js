@@ -109,6 +109,13 @@ async function callChatCompletion(body) {
       }
       if (isRateLimited) {
         await setModelCooldown(BAI_MODEL, parseRetryDelaySeconds(err.message), namespace);
+      } else if (isOverloaded || isNetworkTransient) {
+        // No Retry-After-style hint on 503s or timeouts -- pass undefined so
+        // setModelCooldown() falls back to its existing DEFAULT_COOLDOWN_SECONDS
+        // (60s, see cooldown.js). Without this, a chronically slow/overloaded
+        // key got retried live from scratch on every step instead of being
+        // skipped, which is what drove the widening per-step stall gap.
+        await setModelCooldown(BAI_MODEL, undefined, namespace);
       }
     }
   }
