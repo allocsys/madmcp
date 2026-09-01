@@ -119,7 +119,7 @@ export async function compactHistoryInPlace(contents, currentStep, preCompaction
   const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
   if (!isEnabled || !Array.isArray(contents)) return;
 
-  // Side-store writes (plan.md "Current outstanding issue" step 2): every
+  // Side-store writes (addressing state-checkpoint bloat): every
   // first-time compaction below also persists its full text to Redis via
   // savePreCompactionResult, not just the in-memory `preCompactionResults`
   // Map -- meta's checkpoint blob only carries the Map, which is what made
