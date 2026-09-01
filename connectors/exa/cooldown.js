@@ -1,16 +1,16 @@
 // ---------------------------------------------------------------------------
 // connectors/exa/cooldown.js — per-key rate-limit cooldown for the Exa
 // connector, backed by Upstash Redis (Vercel Marketplace integration).
-// Same Redis instance/credentials as connectors/gemini/cooldown.js -- it
+// Same Redis instance/credentials as connectors/shared/cooldown.js -- it
 // just namespaces its keys differently below -- but a SEPARATE client +
 // separate exported functions, not a shared import. See that file's header
 // for why that duplication is deliberate.
 //
 // WHY REDIS, NOT IN-MEMORY / WHY THIS NEVER SLEEPS: identical reasoning to
-// connectors/gemini/cooldown.js -- see that file's header. Not repeated here
+// connectors/shared/cooldown.js -- see that file's header. Not repeated here
 // beyond this pointer, to avoid the comments drifting apart over time.
 //
-// WHY keyIndex ALONE, UNLIKE connectors/gemini/cooldown.js's per-model
+// WHY keyIndex ALONE, UNLIKE connectors/shared/cooldown.js's per-model
 // namespacing: Exa's /answer endpoint has no selectable model for this call
 // shape (see client.js's file header) -- the cascade in client.js is a 1D
 // rotation across EXA_API_KEYS only, so a cooldown only ever needs to be
@@ -30,7 +30,7 @@ const DEFAULT_COOLDOWN_SECONDS = 60;
 let redisClient = null;
 let redisInitAttempted = false;
 
-// Same dual-naming-convention handling as connectors/gemini/cooldown.js's
+// Same dual-naming-convention handling as connectors/shared/cooldown.js's
 // getRedis() -- see that file's comment for the 2026-07-26 discovery this
 // works around (Vercel's own "KV" product exposes the same Upstash REST
 // credentials under KV_REST_API_URL/TOKEN instead of the raw Marketplace
@@ -52,7 +52,7 @@ export function getRedis() {
   return redisClient;
 }
 
-// Same purpose as connectors/gemini/cooldown.js's isRedisConfigured -- lets
+// Same purpose as connectors/shared/cooldown.js's isRedisConfigured -- lets
 // a caller know upfront whether cross-call cooldown memory is actually
 // available this run, rather than discovering it only via silent no-ops.
 export function isRedisConfigured() {
