@@ -1233,8 +1233,8 @@ function extractMechanicalClaims(answerText) {
 // never its `id` (see compactHistoryInPlace's hard constraints), so the id
 // is always still readable straight off `contents` even once compacted.
 // This is the exact "ids needed for this pass" set that the side-store
-// fallback (plan.md step 4) batches a single MGET across, instead of
-// fetching speculatively or one id at a time.
+// fallback batches a single MGET across, instead of fetching speculatively
+// or one id at a time.
 function findCompactedIdsMissingFromMap(contents, preCompactionResults) {
   const missing = new Set();
   for (const turn of contents) {
@@ -1258,14 +1258,14 @@ function findCompactedIdsMissingFromMap(contents, preCompactionResults) {
 // citing itself. A claim is "verified" only if it appears verbatim in
 // something an actual tool returned.
 //
-// `runId` (plan.md step 4, optional -- omitting it preserves the old
-// Map-only behavior, e.g. for the hand-built-array unit tests that don't
-// go through Redis) enables a side-store fallback for any compacted id
-// `preCompactionResults` doesn't have text for -- a real gap the normal
-// compact-then-verify-same-run flow doesn't hit, but which a caller
-// reconstructing state from a checkpoint's id-only `preCompactionResultIds`
-// without first re-running compactHistoryInPlace would. Batches every
-// missing id into one MGET rather than fetching per id.
+// `runId` (optional -- omitting it preserves the old Map-only behavior,
+// e.g. for the hand-built-array unit tests that don't go through Redis)
+// enables a side-store fallback for any compacted id `preCompactionResults`
+// doesn't have text for -- a real gap the normal compact-then-verify-same-run
+// flow doesn't hit, but which a caller reconstructing state from a
+// checkpoint's id-only `preCompactionResultIds` without first re-running
+// compactHistoryInPlace would. Batches every missing id into one MGET rather
+// than fetching per id.
 export async function findUnverifiedClaims(claims, contents, preCompactionResults = new Map(), runId = null) {
   const currentRawToolText = contents
     .flatMap((turn) => turn.parts || [])
@@ -1328,8 +1328,8 @@ function extractConditionalClaims(answerText) {
 // Now also checks pre-compaction text to support long-running investigations
 // where historical tool results have been compacted.
 //
-// `runId` (plan.md step 4, optional, same contract as findUnverifiedClaims
-// above): side-store fallback, batched via one MGET, for any compacted id
+// `runId` (optional, same contract as findUnverifiedClaims above):
+// side-store fallback, batched via one MGET, for any compacted id
 // `preCompactionResults` doesn't have text for.
 export async function lineIsVerbatimInToolResults(quotedLine, contents, preCompactionResults = new Map(), runId = null) {
   const currentRawToolText = contents
@@ -1481,11 +1481,11 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // resumed run doesn't forget what it already tried. resultCache holds the
   // actual result text per signature, keyed the same way.
   //
-  // FIX (2026-08-31, debug/resultcache-not-persisted-on-resume -- see
-  // plan.md for the full writeup): this comment used to say resultCache was
-  // deliberately NOT persisted, on the theory that a resumed run's repeat
-  // call would just re-execute once more -- a correctness no-op, not worth
-  // the checkpoint weight. That held for a rare, exceptional resume, but
+  // FIX (2026-08-31, debug/resultcache-not-persisted-on-resume): this
+  // comment used to say resultCache was deliberately NOT persisted, on the
+  // theory that a resumed run's repeat call would just re-execute once more
+  // -- a correctness no-op, not worth the checkpoint weight. That held for a
+  // rare, exceptional resume, but
   // agent_worker.js's QStash self-chaining path calls runInvestigation with
   // resume_run_id + singleStep: true ONCE PER STEP as its normal unit of
   // execution -- resultCache was therefore wiped every single step under
@@ -1865,10 +1865,10 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // own single-fire guard.
       if (answer && pendingVerification && !structuralRecheckUsed && step < cappedSteps) {
         const quotedLines = extractLineQuotes(answer);
-        // lineIsVerbatimInToolResults is async (plan.md step 4 -- side-store
-        // fallback), so resolve every lookup first via Promise.all, then
-        // filter on the resolved results -- Array.prototype.filter can't
-        // await inside its predicate.
+        // lineIsVerbatimInToolResults is async (side-store fallback), so
+        // resolve every lookup first via Promise.all, then filter on the
+        // resolved results -- Array.prototype.filter can't await inside its
+        // predicate.
         const verbatimChecks = await Promise.all(quotedLines.map((q) => lineIsVerbatimInToolResults(q, contents, preCompactionResults, runId)));
         const badQuotes = quotedLines.filter((_, i) => !verbatimChecks[i]);
         if (badQuotes.length) {
@@ -2021,9 +2021,9 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // worth watching for in practice rather than something this change
       // guards against.
       // Fix for the 2026-08-31 resultcache-not-persisted-on-resume bug (see
-      // this loop's own comment above, and plan.md): a fresh runInvestigation
-      // invocation's in-memory `resultCache` Map starts empty regardless of
-      // whether this is a resume, but `repeatCounts` IS restored from the
+      // this loop's own comment above): a fresh runInvestigation invocation's
+      // in-memory `resultCache` Map starts empty regardless of whether this
+      // is a resume, but `repeatCounts` IS restored from the
       // checkpoint -- so before executing anything below, identify every
       // signature this step's calls need that repeatCounts already knows is
       // a repeat but the local Map doesn't have text for yet, and fetch all
@@ -2221,8 +2221,8 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // We pass a preCompactionResults map to store text that gets compacted,
     // so it remains available for findUnverifiedClaims. Passing runId also lets
     // compactHistoryInPlace side-store each newly-compacted result's full text in
-    // Redis (plan.md "Current outstanding issue" step 2), not just this in-memory
-    // Map -- awaited so a checkpoint saved right after this line never races ahead
+    // Redis (addressing state-checkpoint bloat), not just this in-memory Map
+    // -- awaited so a checkpoint saved right after this line never races ahead
     // of the side-store writes it corresponds to.
     await compactHistoryInPlace(contents, step, preCompactionResults, { provider: effectiveProvider, runId });
 
