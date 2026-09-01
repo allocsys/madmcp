@@ -26,7 +26,7 @@ function makeFakeRedis() {
 }
 
 const fakeRedis = makeFakeRedis();
-vi.mock("../connectors/gemini/cooldown.js", () => ({
+vi.mock("../connectors/shared/cooldown.js", () => ({
   getRedis: () => fakeRedis,
   isRedisConfigured: () => true,
 }));
