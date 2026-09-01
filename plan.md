@@ -49,6 +49,19 @@ to "running" (no behavior change for the current synchronous path).
   time — see Step 3), not from `stepsDone + 1`. This is the exact bug
   `agent_worker.js`'s header warns about avoiding (`singleStep` vs.
   `max_steps: stepsDone + 1` are NOT equivalent).
+- Because `editor_checkpoint.js` is a whole-blob overwrite (Step 1 keeps
+  it that way, unlike `agent_checkpoint.js`'s list+meta split),
+  `overallMaxSteps` cannot be a read-once value the way it might look at
+  first glance. Add it to the checkpoint-restore block inside
+  `runEditorAgent` (alongside `contents`, `transcript`, `writtenFiles`,
+  etc. — mirroring `effectiveOverallMaxSteps` in `agent_delegate.js`) and
+  include it in the object passed to `saveState`/`saveCheckpoint` on
+  **every** call for the rest of the run's life, including the existing
+  per-step save inside the loop. Reading it from the checkpoint only for
+  `isFinalStep` and letting it fall out of subsequent saves would
+  silently drop it the moment a second worker invocation reloads the
+  checkpoint (Step 4 onward) — exactly the multi-hop scenario Steps 4-7
+  exist to enable, and something a single-step unit test would not catch.
 - On completion (real answer, or hard-cap finalize), persist
   `status: "done"` and `finalAnswer` via the checkpoint — mirror
   `agent_delegate.js`'s `finishRun` closure. **Also remove the existing
@@ -82,7 +95,11 @@ against a seeded checkpoint and see it advance exactly one step, the
 existing fully-synchronous (no `singleStep`) call path is provably
 unchanged (existing tests still pass), and a completed run's checkpoint is
 still loadable (with `status: "done"`) immediately after `runEditorAgent`
-returns — i.e. no test relies on the old `deleteCheckpoint` behavior.
+returns — i.e. no test relies on the old `deleteCheckpoint` behavior. Also:
+a test seeds a checkpoint, resumes with `singleStep: true` twice in a row
+(simulating two chained worker hops), and confirms `overallMaxSteps` (and
+therefore `isFinalStep`) is still correct on the second hop — this is the
+case a single-hop test would miss.
 
 ---
 
@@ -121,7 +138,16 @@ Mirror `connectors/gemini/agent_worker.js` closely:
   or if `stepsDone !== afterStep` (idempotency guard, identical reasoning
   to `agent_worker.js`).
 - Write a heartbeat (`stepStartedAt: Date.now()`) before calling into the
-  loop.
+  loop. **Unlike `agent_worker.js`'s heartbeat write, this must save the
+  ENTIRE current checkpoint object** (e.g. spread the loaded `checkpoint`
+  and override just `stepStartedAt`), not a meta-shaped subset of named
+  fields. `agent_worker.js` can get away with a meta-only write because
+  `agent_checkpoint.js` splits `contents` into its own Redis LIST, never
+  touched by that write — `editor_checkpoint.js` has no such split (Step 1
+  deliberately keeps the whole-blob shape), so a meta-only heartbeat write
+  here would silently erase `contents`, `writtenFiles`, `writesPerFile`,
+  `validateCounts`, `owner`/`repo`/`branch`, etc. on the very first worker
+  invocation, before `runEditorAgent` is even called.
 - Call `runEditorAgent({ resume_run_id: runId, singleStep: true })`.
 - If still running after the step: re-publish the next step via
   `publishEditorStep` (**new** sibling function added to `qstash_client.js`
@@ -131,11 +157,17 @@ Mirror `connectors/gemini/agent_worker.js` closely:
   sibling function rather than reusing the existing one as-is).
 - Dead-letter after `EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES` consecutive
   same-step failures, finalizing `status: "failed"` with `finalAnswer` set
-  to the last error — same shape as `agent_worker.js`.
+  to the last error — same shape as `agent_worker.js`. Same full-object
+  caveat as the heartbeat write above applies here: spread the latest
+  loaded checkpoint and override `status`/`finalAnswer`/`stepStartedAt`,
+  don't reconstruct a meta-shaped subset.
 
 **Done when:** a signed test request against a seeded checkpoint advances
 one step and either re-chains or finalizes correctly; an unsigned request
-is rejected with 401 before touching any checkpoint.
+is rejected with 401 before touching any checkpoint. Also: a test asserts
+that after the heartbeat write, `contents`/`writtenFiles`/`writesPerFile`/
+`validateCounts`/`owner`/`repo`/`branch` are all still present on the
+checkpoint (regression check for the whole-blob-overwrite footgun above).
 
 ---
 
