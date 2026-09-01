@@ -288,7 +288,28 @@ export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false"
 // should be independently toggleable from delegate_agent's, same way
 // EDITOR_AGENT_ENABLED above is already independent of anything gating
 // delegate_agent.
-export const EDITOR_WORKER_URL = process.env.EDITOR_WORKER_URL;
+// No dedicated EDITOR_WORKER_URL env var required: both worker endpoints
+// live on the same deployment (server.js registers /api/agent-worker and
+// /api/editor-worker side by side), so this defaults to AGENT_WORKER_URL
+// with the path suffix swapped, riding on the SAME QSTASH_TOKEN +
+// AGENT_WORKER_URL already configured for delegate_agent's async path --
+// no new secret/URL needs to be provisioned just to light up delegate_editor's
+// async worker chain. process.env.EDITOR_WORKER_URL still wins if explicitly
+// set, for the (currently hypothetical) case of routing the editor worker to
+// a different host than the agent worker.
+function deriveEditorWorkerUrl() {
+  if (process.env.EDITOR_WORKER_URL) return process.env.EDITOR_WORKER_URL;
+  if (!AGENT_WORKER_URL) return undefined;
+  if (AGENT_WORKER_URL.includes("/api/agent-worker")) {
+    return AGENT_WORKER_URL.replace("/api/agent-worker", "/api/editor-worker");
+  }
+  // AGENT_WORKER_URL set but doesn't contain the expected path (unusual
+  // override) -- no safe substring to swap, so don't guess; require an
+  // explicit EDITOR_WORKER_URL in that case instead of silently publishing
+  // to a made-up URL.
+  return undefined;
+}
+export const EDITOR_WORKER_URL = deriveEditorWorkerUrl();
 export const EDITOR_AGENT_ASYNC = process.env.EDITOR_AGENT_ASYNC || "qstash";
 // Same default as AGENT_ASYNC_POLL_FRESH_SECONDS -- no reason for the
 // freshness window itself to differ between the two workers.
