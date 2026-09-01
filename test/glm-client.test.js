@@ -11,7 +11,7 @@ const mockConfig = vi.hoisted(() => ({
 
 vi.mock("../config.js", () => mockConfig);
 
-// Mock the cooldown module (shared with Gemini, see connectors/gemini/cooldown.js)
+// Mock the cooldown module (shared with Gemini, see connectors/shared/cooldown.js)
 // rather than @upstash/redis directly -- glm/client.js only ever talks to
 // cooldown.js's exported functions, never to Redis itself.
 const mockIsModelCoolingDown = vi.fn();
