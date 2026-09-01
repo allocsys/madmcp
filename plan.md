@@ -162,3 +162,76 @@ exists and was hit.
 4. Once #3 is fixed, re-run the original bai key-rotation test with a
    correctly-enforced `max_steps` to confirm the fix doesn't change bai-path
    behavior.
+5. See new Section 5 below for the still-open "Void" investigation and its
+   own next steps.
+
+---
+
+## 5. The "Void" response on the stuck run -- investigated, not resolved
+
+After root-causing bug #3, we asked whether an explicit `max_steps` could
+unstick the frozen run (`d303f6a8-8b0f-4881-bf95-aa6a274271f2`, last known
+state: wedged at 19 steps, transcript unchanged across polls). Two
+consecutive polls of that run -- one plain, one with `max_steps: 30` added
+-- both returned the exact same response text, prefixed with:
+
+> "Void (the re-fetch was served from cache, not new content)."
+
+followed by the identical 19-step transcript both times.
+
+**Important scoping fact:** this string does not exist anywhere in the
+`allocsys/madmcp` repo (confirmed via `search_code`). It is NOT produced by
+`agent_delegate.js`, `agent_worker.js`, `agent_tools.js`, or any other
+server-side code we've read. It must come from a layer above this repo
+entirely -- the tool-calling/MCP-client infrastructure that mediates calls
+to `delegate_agent`, which we have no read access to from here (not a file
+in this repo, no tool available to inspect it).
+
+**What we tried, to narrow down the trigger:**
+
+- Hypothesis: "any call whose result is byte-identical to the last one
+triggers Void." Started a fresh control run
+(`c3cec1c6-0500-42de-ba53-47cf4fdce6c6`, deliberately small: `max_steps: 5`,
+single-file task) and polled it repeatedly, including two consecutive polls
+that both returned identical "still running, 1 step done" content. Neither
+poll returned "Void" -- both were normal, correctly-formatted responses.
+**This rules out "any identical content" as the trigger.**
+- Hypothesis: "very short interval between polls triggers it." Polled the
+control run back-to-back with minimal delay; got a normal, fresh, and by
+that point actually-advanced response (2 steps, real answer) -- no "Void".
+**This rules out raw polling speed as the sole trigger**, at least under
+the timing we could produce here.
+- The control run otherwise completed entirely normally: seeded, stepped
+twice, produced a correct final answer (`BAI_API_KEYS` parsing in
+`config.js`) with zero anomalies. **This confirms the async worker chain
+itself works correctly in the ordinary case** -- the earlier bug (#3) and
+this "Void" behavior are both edge cases, not signs of a broadly broken
+async path.
+
+**Where this leaves us:** "Void" appears to be specific to the one run
+that had genuinely stopped making progress across multiple real polls (not
+just returning identical content, since our control run did that too
+without triggering it). The likeliest remaining explanation is still that
+the worker chain's re-chain publish failed silently at some point on that
+run (the `step-ok-rechain-failed` path in `agent_worker.js`, which leaves
+the checkpoint validly "running" but with no further worker actually
+driving it) -- and "Void" is possibly a client-side signal meaning
+something like "no new checkpoint state at all since last time," which
+would only fire once a run is well and truly stuck, not merely slow. This
+is a plausible theory, NOT a confirmed one -- we could not reproduce it on
+demand, and do not have visibility into the layer that emits it.
+
+**Next steps for this specific thread:**
+
+- If a future run exhibits the same "stuck at N steps across multiple real
+  polls" symptom, capture whether "Void" reappears and whether it correlates
+  with checkpoint `lastStepAt`/`stepStartedAt` staleness (would need
+  `DEBUG_AGENT_WORKER=true` and access to server logs -- not available from
+  this session).
+- Consider asking whoever owns the tool-calling/MCP-client layer directly
+  what "Void" means and what triggers it, since we've hit the limit of what
+  can be inferred from black-box behavior alone.
+- Do not treat "Void" as confirmed evidence of any particular root cause
+  (rate-limiting, failed re-chain, or otherwise) in future write-ups --
+  it's a symptom we've only ever seen once, on one run, and couldn't
+  reproduce under controlled conditions.
