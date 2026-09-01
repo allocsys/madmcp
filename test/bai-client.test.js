@@ -153,6 +153,37 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
     await expect(clientModule.baiChat([{ role: "user", content: "hi" }])).rejects.toThrow("B.AI API error (503)");
     // 2 keys x 1 model each = 2 attempts.
     expect(global.fetch).toHaveBeenCalledTimes(2);
+    // Regression coverage for commit 27449d5: a 503 must record a cooldown
+    // for BOTH keys, same as a 429 would -- previously this test exercised
+    // the 503 path without ever checking cooldown behavior, which is how
+    // the original gap (503s never cooling down) went uncaught.
+    expect(mockSetModelCooldown).toHaveBeenCalledWith("glm-5.3-flash", undefined, "bai:0");
+    expect(mockSetModelCooldown).toHaveBeenCalledWith("glm-5.3-flash", undefined, "bai:1");
+  });
+
+  it("rotates to the next key on 503 and records a cooldown (fallback default duration, no Retry-After hint available)", async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, statusText: "Service Unavailable", text: async () => "down" })
+      .mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({ choices: [{ message: { content: "key-b won" }, finish_reason: "stop" }] }) });
+
+    const choice = await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    expect(choice.message.content).toBe("key-b won");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    // undefined seconds -- setModelCooldown() itself falls back to
+    // DEFAULT_COOLDOWN_SECONDS since a 503 has no Retry-After-style hint to parse.
+    expect(mockSetModelCooldown).toHaveBeenCalledWith("glm-5.3-flash", undefined, "bai:0");
+    expect(mockSetModelCooldown).not.toHaveBeenCalledWith("glm-5.3-flash", undefined, "bai:1");
+  });
+
+  it("rotates to the next key on a network/timeout failure and records a cooldown", async () => {
+    global.fetch = vi.fn()
+      .mockRejectedValueOnce({ name: "AbortError", message: "aborted" })
+      .mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({ choices: [{ message: { content: "key-b won" }, finish_reason: "stop" }] }) });
+
+    const choice = await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    expect(choice.message.content).toBe("key-b won");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(mockSetModelCooldown).toHaveBeenCalledWith("glm-5.3-flash", undefined, "bai:0");
   });
 
   it("tags the all-keys-exhausted error as .transient when every key failed with a transient status (429)", async () => {
