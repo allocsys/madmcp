@@ -177,8 +177,8 @@ export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WO
 // logged at every entry/exit point of handleAgentWorker -- added 2026-09-01,
 // commit 2aad526, to diagnose a worker-chain stall). Default OFF: once the
 // 2026-09-01 stall was diagnosed (sustained B.AI rate-limiting driving the
-// existing retry/re-chain path, not a concurrent-duplicate idempotency bug --
-// see plan.md's Open items), the ongoing per-invocation log volume on
+// existing retry/re-chain path, not a concurrent-duplicate idempotency bug),
+// the ongoing per-invocation log volume on
 // /api/agent-worker stops earning its keep on every step of every run.
 // Kept behind this flag rather than deleted so it can be flipped back on
 // quickly if a similar stall resurfaces. Same default-on-unless-"false"

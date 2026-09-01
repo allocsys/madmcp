@@ -35,14 +35,14 @@ function metaKey(runId) {
   return `${CHECKPOINT_KEY_PREFIX}${runId}:meta`;
 }
 // Deliberately NOT under CHECKPOINT_KEY_PREFIX -- kept as its own top-level
-// `precompact:` namespace per plan.md, so a future GC pass (plan.md step 5)
-// can batch-delete `precompact:{runId}:*` independently of contents/meta.
+// `precompact:` namespace, so a future GC pass can batch-delete
+// `precompact:{runId}:*` independently of contents/meta.
 function precompactKey(runId, id) {
   return `precompact:${runId}:${id}`;
 }
 // Same reasoning as precompactKey above, mirrored for resultCache (fix for
 // the 2026-08-31 resultcache-not-persisted-on-resume bug -- see
-// saveResultCacheEntry/getResultCacheEntries below and plan.md). Its own
+// saveResultCacheEntry/getResultCacheEntries below). Its own
 // top-level `resultcache:` namespace, independent of both
 // CHECKPOINT_KEY_PREFIX and precompactKey's own namespace, so a GC pass can
 // batch-delete `resultcache:{runId}:*` on its own.
@@ -97,7 +97,7 @@ export async function saveCheckpoint(runId, { newContents = [], transcript, step
     // rather than conditionally spread in, so the shape of a saved
     // checkpoint doesn't vary step-to-step -- consistent with every other
     // field here.
-    // Step 3 fix (plan.md "Current outstanding issue"): store only the IDS
+    // Step 3 fix (addressing state-checkpoint bloat): store only the IDS
     // that have a side-store entry, not the text -- see savePreCompactionResult
     // below, and agent_delegate.js's resume-restore comment for why an
     // empty-of-text Map on load loses nothing (compactHistoryInPlace
@@ -185,12 +185,12 @@ export async function loadCheckpoint(runId) {
 }
 
 // Side-store for a single compacted-away tool result's full original text
-// (fix for the preCompactionResults checkpoint-bloat issue -- see plan.md's
-// "Current outstanding issue" section). saveCheckpoint's `meta` blob is
-// rewritten in full on every call (unlike `contents`, which is append-delta
-// via RPUSH -- see this file's header), so storing every compacted result's
-// full text inside `preCompactionResults` there means unbounded per-step
-// write cost on exactly the long `bai` runs history compaction targets.
+// (fix for the preCompactionResults checkpoint-bloat issue). saveCheckpoint's
+// `meta` blob is rewritten in full on every call (unlike `contents`, which is
+// append-delta via RPUSH -- see this file's header), so storing every
+// compacted result's full text inside `preCompactionResults` there means
+// unbounded per-step write cost on exactly the long `bai` runs history
+// compaction targets.
 // This writes the text ONCE, to its own key, the first time a given id is
 // compacted -- compactHistoryInPlace (agent_delegate.js) is responsible for
 // only calling this on first-time compaction of an id, not on every step
@@ -206,14 +206,13 @@ export async function savePreCompactionResult(runId, id, text) {
   }
 }
 
-// Batched fetch-on-demand for compacted results' full text (plan.md
-// "Current outstanding issue" step 4). findUnverifiedClaims and
-// lineIsVerbatimInToolResults (agent_delegate.js) read primarily from the
-// in-memory `preCompactionResults` Map, which the normal compact-then-
-// verify-same-run flow keeps fully populated -- this is the side-store
-// fallback for the id(s) that Map doesn't have (e.g. state reconstructed
-// from a checkpoint's `preCompactionResultIds` without a preceding
-// `compactHistoryInPlace` recompaction pass).
+// Batched fetch-on-demand for compacted results' full text.
+// findUnverifiedClaims and lineIsVerbatimInToolResults (agent_delegate.js)
+// read primarily from the in-memory `preCompactionResults` Map, which the
+// normal compact-then-verify-same-run flow keeps fully populated -- this is
+// the side-store fallback for the id(s) that Map doesn't have (e.g. state
+// reconstructed from a checkpoint's `preCompactionResultIds` without a
+// preceding `compactHistoryInPlace` recompaction pass).
 // Takes the full list of ids a verification pass needs and does ONE round
 // trip (MGET) for all of them, not a GET per id -- a naive per-id fetch is
 // a real added latency cost on exactly the long `bai` runs compacting 200+
@@ -240,13 +239,12 @@ export async function getPreCompactionResults(runId, ids) {
 // Side-store for a single tool call's cached result text, keyed by the
 // same normalized-call signature agent_delegate.js's resultCache Map uses
 // in memory (fix for the 2026-08-31 resultcache-not-persisted-on-resume
-// bug -- see plan.md). Mirrors savePreCompactionResult immediately above in
-// shape and contract (write once, on first computation of a given key;
-// fails open; never throws), but keyed by call signature instead of a
-// functionResponse id, and written on EVERY fresh (non-cached) tool call
-// agent_delegate.js executes -- not just ones that later get compacted --
-// since any of them could turn out to be repeated across a resume/step
-// boundary.
+// bug). Mirrors savePreCompactionResult immediately above in shape and
+// contract (write once, on first computation of a given key; fails open;
+// never throws), but keyed by call signature instead of a functionResponse
+// id, and written on EVERY fresh (non-cached) tool call agent_delegate.js
+// executes -- not just ones that later get compacted -- since any of them
+// could turn out to be repeated across a resume/step boundary.
 export async function saveResultCacheEntry(runId, signature, text) {
   const client = getRedis();
   if (!client) return;
@@ -258,14 +256,14 @@ export async function saveResultCacheEntry(runId, signature, text) {
 }
 
 // Batched fetch-on-demand for cached result text (fix for the 2026-08-31
-// resultcache-not-persisted-on-resume bug -- see plan.md). Mirrors
-// getPreCompactionResults immediately above: a fresh runInvestigation
-// invocation's in-memory resultCache Map starts empty regardless of
-// whether this is a resume, so before executing a step's function calls,
-// agent_delegate.js collects every signature that repeatCounts (which IS
-// restored from the checkpoint) already knows is a repeat but the local
-// Map doesn't have yet, and fetches all of them here in ONE round trip
-// (MGET) rather than one GET per signature.
+// resultcache-not-persisted-on-resume bug). Mirrors getPreCompactionResults
+// immediately above: a fresh runInvestigation invocation's in-memory
+// resultCache Map starts empty regardless of whether this is a resume, so
+// before executing a step's function calls, agent_delegate.js collects every
+// signature that repeatCounts (which IS restored from the checkpoint)
+// already knows is a repeat but the local Map doesn't have yet, and fetches
+// all of them here in ONE round trip (MGET) rather than one GET per
+// signature.
 // Fails open -- returns an empty Map on any error or missing Redis, same
 // contract as every other function in this file. Never throws.
 export async function getResultCacheEntries(runId, signatures) {
@@ -287,11 +285,11 @@ export async function getResultCacheEntries(runId, signatures) {
 
 // Deletes a checkpoint once a run finishes (a final answer, or the model
 // stops issuing function calls) -- nothing left to resume. Clears the
-// contents/meta keys, plus (plan.md step 5) every precompact:{runId}:*
-// side-store key savePreCompactionResult wrote during the run -- those
-// live outside CHECKPOINT_KEY_PREFIX (see precompactKey's comment), so
-// they wouldn't be swept up by deleting contents/meta alone and would
-// otherwise just sit until their own CHECKPOINT_TTL_SECONDS TTL expires.
+// contents/meta keys, plus every precompact:{runId}:* side-store key
+// savePreCompactionResult wrote during the run -- those live outside
+// CHECKPOINT_KEY_PREFIX (see precompactKey's comment), so they wouldn't be
+// swept up by deleting contents/meta alone and would otherwise just sit
+// until their own CHECKPOINT_TTL_SECONDS TTL expires.
 // The id list isn't passed in -- it's read back from meta's own
 // preCompactionResultIds (fetched before meta is deleted), since that's
 // the only record of which ids exist; this deliberately avoids relying on
