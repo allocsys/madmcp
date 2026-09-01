@@ -1,6 +1,18 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/cooldown.js — per-model rate-limit cooldown, backed by
+// connectors/shared/cooldown.js — per-model rate-limit cooldown, backed by
 // Upstash Redis (Vercel Marketplace integration).
+//
+// SHARED ACROSS PROVIDERS: this module has no Gemini-specific logic (it's
+// pure model/namespace -> cooldown-until bookkeeping) and lives here, not
+// under connectors/gemini/, because Gemini, GLM, Groq, and B.AI's clients
+// (connectors/gemini/client.js, connectors/glm/client.js,
+// connectors/groq/client.js, connectors/bai/client.js) all import it
+// directly, plus connectors/gemini/agent_checkpoint.js and
+// connectors/gemini/agent_delegate.js for Redis config checks, and the
+// frontend/github delegate+checkpoint pairs for the same. Each provider
+// namespaces its own keys (see DEFAULT_NAMESPACE below and each caller's
+// own namespace argument) so a cooldown recorded for one provider/key never
+// bleeds into another's.
 //
 // WHY REDIS, NOT IN-MEMORY: Vercel serverless functions don't guarantee a
 // warm/reused instance between invocations (especially on the Hobby plan,
@@ -32,11 +44,12 @@
 import { Redis } from "@upstash/redis";
 
 // Default namespace, preserved for every existing (Gemini) call site that
-// doesn't pass one. GLM cooldown tracking (connectors/glm/client.js) passes
-// its own namespace (e.g. "glm:<keyIndex>", folding the OpenRouter key
-// index in rather than adding a third parameter) so a 429 on one
-// model/key pair doesn't cool down a different key's quota for that same
-// model.
+// doesn't pass one. Every other provider that shares this module (GLM, Groq,
+// B.AI -- see connectors/glm/client.js, connectors/groq/client.js,
+// connectors/bai/client.js) passes its own namespace instead (e.g.
+// "glm:<keyIndex>", "bai:<keyIndex>", folding the key index in rather than
+// adding a third parameter) so a 429 on one provider/key pair doesn't cool
+// down a different provider or key's quota for that same model name.
 const DEFAULT_NAMESPACE = "gemini";
 function cooldownKey(model, namespace = DEFAULT_NAMESPACE) {
   return `${namespace}:cooldown:${model}`;
