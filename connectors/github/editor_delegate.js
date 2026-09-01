@@ -49,7 +49,7 @@ import { providerChat } from "../llm/router.js";
 import { formatCascadeLogLine } from "../llm/cascade_log.js";
 import { readFile, writeFile, assertNotDefaultBranch } from "./editor_tool_functions.js";
 import { validateByExtension } from "./editor_validate.js";
-import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./editor_checkpoint.js";
+import { saveCheckpoint, loadCheckpoint } from "./editor_checkpoint.js";
 import { isRedisConfigured } from "../shared/cooldown.js";
 import {
   EDITOR_ALLOWED_EXTENSIONS,
@@ -235,8 +235,21 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
 // values are ignored -- same resume contract as designer_delegate.js (see
 // its comments for why `task` specifically must never be trusted over the
 // checkpoint's own record of it on a live resume).
-export async function runEditorAgent({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, resume_run_id }) {
-  const cappedSteps = Math.min(max_steps, EDITOR_HARD_MAX_STEPS);
+export async function runEditorAgent({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, resume_run_id, singleStep = false }) {
+  // The run's TRUE overall step ceiling -- distinct from cappedSteps (this
+  // particular invocation's own loop bound). For a fresh run or a manual
+  // synchronous resume the two are the same value. They diverge for a
+  // worker-driven singleStep resume (the upcoming editor_worker.js), which
+  // deliberately passes a shrunk per-call bound (startStep, so the shared
+  // loop takes exactly one step) that must NOT be mistaken for "the run's
+  // real last step" when deciding whether to withhold tools -- see
+  // isFinalStep below. Restored from the checkpoint on a singleStep resume;
+  // established fresh (or updated, on a manual resume with a new max_steps)
+  // otherwise. Persisted in every checkpoint write below so it survives a
+  // resume -- same split as connectors/gemini/agent_delegate.js's
+  // runInvestigation.
+  let effectiveOverallMaxSteps;
+  let cappedSteps;
 
   let runId = resume_run_id;
   let contents;
@@ -257,6 +270,31 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   let consecutiveAllRepeatSteps = 0;
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
+
+  // Async delegate_editor (plan.md Step 7 needs this): a checkpoint whose
+  // last save recorded status "done" already has a final answer sitting in
+  // Redis (see the completion path near the end of this function). Return
+  // it directly rather than re-entering the loop, which would otherwise
+  // treat `contents` as still mid-conversation and either try to take more
+  // (nonsensical) steps against a finished run, or -- worse -- silently
+  // re-call the model on the same contents and produce a second, possibly
+  // different "final answer" for a run that already committed its changes
+  // and reported a result. This is also what makes resume_run_id usable as
+  // a cheap poll handle for a background/worker-driven run: polling a
+  // finished run is now a Redis read, not a re-run. Mirrors
+  // connectors/gemini/agent_delegate.js's runInvestigation, which has the
+  // same short-circuit for the same reason.
+  if (checkpoint && checkpoint.status === "done") {
+    return {
+      answer: checkpoint.finalAnswer,
+      steps: checkpoint.stepsDone,
+      transcript: checkpoint.transcript,
+      runId: resume_run_id,
+      task: checkpoint.task,
+      writtenFiles: checkpoint.writtenFiles || [],
+      failed: false,
+    };
+  }
 
   if (checkpoint) {
     contents = checkpoint.contents;
@@ -280,6 +318,15 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
         ? `resume_run_id "${resume_run_id}" has no live checkpoint -- it may have expired (1 hour TTL) or the id may be wrong. Start a new run with owner/repo/branch/task instead.`
         : `resume_run_id "${resume_run_id}" has no live checkpoint -- and Redis is NOT configured in this environment, so no checkpoint could ever have been saved. Start a new run with owner/repo/branch/task instead.`
     );
+  } else if (singleStep) {
+    // singleStep always implies a resume in practice (the worker's whole
+    // purpose is chaining one-step resumes) -- the branch above already
+    // throws a clearer, more specific error when resume_run_id was given but
+    // its checkpoint failed to load. Guard here too so a future caller
+    // invoking singleStep with neither a resume_run_id nor a live checkpoint
+    // fails loudly instead of silently mis-capping a run that was never
+    // actually resumed from anything.
+    throw new Error("singleStep was requested but no live checkpoint was found to resume from.");
   } else {
     if (!owner || !repo || !branch || !task) {
       throw new Error("owner, repo, branch, and task are all required on a fresh call (not resuming).");
@@ -297,6 +344,26 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     writtenFiles = [];
     writesPerFile = new Map();
     validateCounts = new Map();
+  }
+
+  // Establish this call's own loop bound (cappedSteps) and the run's true
+  // ceiling (effectiveOverallMaxSteps) now that startStep/checkpoint are
+  // known. singleStep (the editor worker's one-step-per-invocation resume)
+  // deliberately does NOT let this call's own max_steps redefine the run's
+  // real ceiling -- it restores that ceiling from the checkpoint instead,
+  // and bounds only THIS call's loop to a single iteration. Every other
+  // caller (a fresh run, or a manual synchronous resume) keeps the existing,
+  // documented behavior: max_steps sets/updates the real ceiling directly.
+  if (singleStep) {
+    // Checkpoints seeded/saved before this field existed (or a fresh run
+    // that reaches here, which can't happen given the branch above, but
+    // kept as a safe fallback) won't have it -- fall back to this call's own
+    // max_steps rather than leaving the run's real ceiling undefined.
+    effectiveOverallMaxSteps = checkpoint.overallMaxSteps || Math.min(max_steps, EDITOR_HARD_MAX_STEPS);
+    cappedSteps = startStep;
+  } else {
+    cappedSteps = Math.min(max_steps, EDITOR_HARD_MAX_STEPS);
+    effectiveOverallMaxSteps = cappedSteps;
   }
 
   const { FUNCTIONS, declarations } = buildFunctions({
@@ -328,13 +395,18 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     validateCounts: Object.fromEntries(validateCounts),
     repeatCounts: Object.fromEntries(repeatCounts),
     consecutiveAllRepeatSteps,
+    overallMaxSteps: effectiveOverallMaxSteps,
   });
 
   for (let step = startStep; step <= cappedSteps; step++) {
     // Withhold tools on the final step, same reasoning/mechanism as
-    // designer_delegate.js: structurally forces a plain-text answer
-    // instead of an unexecuted function call.
-    const isFinalStep = step === cappedSteps;
+    // designer_delegate.js: structurally forces a plain-text answer instead
+    // of an unexecuted function call. Compared against effectiveOverallMaxSteps
+    // (the run's TRUE ceiling), not cappedSteps (this call's own loop bound) --
+    // on a singleStep resume the two differ, and isFinalStep must reflect
+    // whether this is really the run's last step, not just this call's only
+    // step. See effectiveOverallMaxSteps's own comment above.
+    const isFinalStep = step === effectiveOverallMaxSteps;
     const stuckLoopForce = consecutiveAllRepeatSteps >= 3;
     const withholdTools = isFinalStep || stuckLoopForce;
 
@@ -400,7 +472,33 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
           failed: true,
         };
       }
-      await deleteCheckpoint(runId);
+      // Persist a "done" checkpoint (status + finalAnswer) here instead of
+      // deleting it -- a resume_run_id caller polling a background/worker-
+      // driven run needs SOMETHING to read once the run finishes, and
+      // deleting it the instant it completes would mean there's never a
+      // window in which a "done" status could be observed. Still expires via
+      // the normal checkpoint TTL like any other checkpoint -- this is a
+      // bounded-lifetime record for polling, not a permanent store. Mirrors
+      // connectors/gemini/agent_delegate.js's finishRun, which made the same
+      // change and no longer calls deleteCheckpoint on its success path
+      // either.
+      await saveCheckpoint(runId, {
+        contents,
+        transcript,
+        stepsDone: step,
+        task: effectiveTask,
+        owner: effectiveOwner,
+        repo: effectiveRepo,
+        branch: effectiveBranch,
+        writtenFiles,
+        writesPerFile: Object.fromEntries(writesPerFile),
+        validateCounts: Object.fromEntries(validateCounts),
+        repeatCounts: Object.fromEntries(repeatCounts),
+        consecutiveAllRepeatSteps,
+        overallMaxSteps: effectiveOverallMaxSteps,
+        status: "done",
+        finalAnswer: answer,
+      });
       return { answer, steps: step, transcript, runId, task: effectiveTask, writtenFiles };
     }
 
@@ -511,4 +609,67 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     writtenFiles,
     failed: true,
   };
+}
+
+// Seeds a fresh checkpoint (status "running", stepsDone 0, no steps taken
+// yet) WITHOUT running any part of the editor loop -- mirrors
+// connectors/gemini/agent_delegate.js's seedRun. Meant for the upcoming
+// editor_tools.js async-start path (Step 7) to return a run_id immediately
+// and let the editor worker (Step 4) take step 1 in the background, rather
+// than this call itself blocking on step 1 synchronously before returning.
+//
+// Runs assertNotDefaultBranch up front -- same guardrail #2 check
+// runEditorAgent's own fresh-call branch already does -- BEFORE ever
+// writing a checkpoint, so an invalid branch never gets a run_id at all:
+// there would be nothing useful to resume, and a caller polling a run_id
+// that can never succeed is worse than an immediate, synchronous rejection.
+//
+// Deliberately duplicates the small fresh-run setup already inside
+// runEditorAgent (a UUID + the initial system-preamble turn) rather than
+// calling into runEditorAgent with max_steps: 0, for the same reason
+// seedRun gives for its own equivalent duplication: runEditorAgent's loop
+// simply never executes when cappedSteps < startStep, but the only existing
+// early-return path that covers that case (`checkpoint && startStep >
+// cappedSteps`) assumes a checkpoint ALREADY EXISTS -- reaching it on a
+// genuinely fresh, zero-step call would mean either throwing or bending
+// that guard's contract to serve a second, differently-shaped caller. A
+// small, explicit duplication of the fresh-run setup here is lower-risk.
+//
+// Unlike editor_checkpoint.js's other callers, this writes the whole-blob
+// shape directly (contents/writtenFiles/writesPerFile/validateCounts etc.)
+// rather than through runEditorAgent's saveState closure, since there is no
+// loop-scoped closure to reuse here -- the shape matches saveState's own
+// object exactly, just with the zero-step initial values.
+export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS }) {
+  if (!owner || !repo || !branch || !task) {
+    throw new Error("owner, repo, branch, and task are all required to seed a new run.");
+  }
+
+  await assertNotDefaultBranch(owner, repo, branch);
+
+  const runId = randomUUID();
+  const contents = [{ role: "user", parts: [{ text: buildSystemPreamble({ owner, repo, branch, task }) }] }];
+  // Seeds the run's TRUE overall step ceiling (see runEditorAgent's
+  // effectiveOverallMaxSteps for the full rationale) -- this is what lets
+  // the editor worker's later singleStep resumes know when they've reached
+  // the run's real last step, instead of mistaking their own artificially
+  // shrunk per-call max_steps for it.
+  const overallMaxSteps = Math.min(max_steps, EDITOR_HARD_MAX_STEPS);
+  await saveCheckpoint(runId, {
+    contents,
+    transcript: [],
+    stepsDone: 0,
+    task,
+    owner,
+    repo,
+    branch,
+    writtenFiles: [],
+    writesPerFile: {},
+    validateCounts: {},
+    repeatCounts: {},
+    consecutiveAllRepeatSteps: 0,
+    overallMaxSteps,
+    status: "running",
+  });
+  return runId;
 }

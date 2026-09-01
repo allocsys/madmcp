@@ -29,7 +29,7 @@
 // ---------------------------------------------------------------------------
 
 import { Client, Receiver } from "@upstash/qstash";
-import { AGENT_WORKER_URL } from "../../config.js";
+import { AGENT_WORKER_URL, EDITOR_WORKER_URL } from "../../config.js";
 
 let qstashClient = null;
 let qstashInitAttempted = false;
@@ -78,6 +78,52 @@ export async function publishAgentStep({ runId, afterStep, retryCount = 0 }) {
   if (!AGENT_WORKER_URL) throw new Error("AGENT_WORKER_URL is not set -- cannot publish to QStash without a target URL for the worker endpoint.");
   await client.publishJSON({
     url: AGENT_WORKER_URL,
+    body: { runId, afterStep, retryCount },
+  });
+}
+
+// --- delegate_editor siblings (plan.md Step 6b) ----------------------------
+//
+// AGENT_WORKER_URL is imported at module scope above and hardcoded directly
+// into publishAgentStep's client.publishJSON({ url: AGENT_WORKER_URL, ... })
+// call, and isQStashConfigured() likewise hardcodes the
+// Boolean(AGENT_WORKER_URL) check -- neither function takes a url/target
+// parameter, and every existing call site (agent_tools.js's fresh-start
+// branch, agent_worker.js's re-chain call) calls them with no such
+// parameter either. So editor_worker.js/editor_tools.js have no way to
+// retarget those at EDITOR_WORKER_URL without a code change here --
+// generalizing the existing functions in place isn't achievable without
+// either adding a parameter every existing call site would need to be
+// touched to pass, or silently changing their target. Two new sibling
+// functions instead: same shape, same fail-by-throwing/fail-closed
+// contracts, but wired to EDITOR_WORKER_URL, with zero changes to
+// publishAgentStep/isQStashConfigured or their call sites -- no risk of
+// regressing the live Gemini async path.
+//
+// Signature verification (verifyQStashSignature/getReceiver) is unchanged
+// and shared as-is below -- it's already generic over the caller (it just
+// verifies a signature against a body), so no editor-specific variant is
+// needed there.
+
+// Same shape as isQStashConfigured() above, but checks EDITOR_WORKER_URL
+// instead of AGENT_WORKER_URL -- used by editor_tools.js (plan.md Step 7)
+// to decide whether delegate_editor's async start/poll path is reachable
+// this deployment.
+export function isEditorQStashConfigured() {
+  return getQStashClient() !== null && Boolean(EDITOR_WORKER_URL);
+}
+
+// Same shape and same fail-by-throwing contract as publishAgentStep above,
+// but publishes to EDITOR_WORKER_URL instead of AGENT_WORKER_URL. See that
+// function's own comments for the full reasoning (afterStep/retryCount
+// threading) -- unchanged here, just against the editor worker endpoint
+// (connectors/github/editor_worker.js).
+export async function publishEditorStep({ runId, afterStep, retryCount = 0 }) {
+  const client = getQStashClient();
+  if (!client) throw new Error("QSTASH_TOKEN is not set -- cannot publish to QStash.");
+  if (!EDITOR_WORKER_URL) throw new Error("EDITOR_WORKER_URL is not set -- cannot publish to QStash without a target URL for the editor worker endpoint.");
+  await client.publishJSON({
+    url: EDITOR_WORKER_URL,
     body: { runId, afterStep, retryCount },
   });
 }

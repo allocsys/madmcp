@@ -320,3 +320,45 @@ on anywhere real.
   Keep these two mechanisms distinct, same as `agent_delegate.js` and
   `agent_worker.js` do — don't conflate a same-step failure with a
   stuck-but-succeeding loop.
+
+---
+
+## Progress log
+
+- **Steps 1-6 + 6b: done.** Checkpoint async fields, `singleStep` +
+  `overallMaxSteps` persistence, `seedEditorRun`, `editor_worker.js`,
+  `server.js` route wiring, config flags, and the `isEditorQStashConfigured`/
+  `publishEditorStep` siblings in `qstash_client.js` are all in place and
+  match this plan's spec, each as its own commit.
+- **Step 7: done** (commit `21df9ae`). `editor_tools.js`'s async branching
+  mirrors `agent_tools.js`'s almost exactly -- fresh-start seeding,
+  poll/fresh/stale/dead-letter/done handling, gated behind
+  `EDITOR_AGENT_ASYNC === "qstash"` + `isEditorQStashConfigured()`. A prior
+  commit (`f6c531c`) added the `checkpoint.status === "done"` short-circuit
+  to `runEditorAgent` that this step's poll-a-done-run path depends on.
+- **Step 8: done** (commit `8c27b64`). Added
+  `test/editor-worker.test.js`, `test/editor-delegate-async-checkpoint.test.js`,
+  and `test/editor-tools-async.test.js`, mirroring the `delegate_agent`
+  async suite -- including the Step 2 `singleStep` vs.
+  `max_steps: stepsDone + 1` regression case (two chained `singleStep` hops
+  confirmed to preserve `overallMaxSteps`/`isFinalStep` on the second hop,
+  both by asserting `tools: undefined` was passed on the true final step
+  and by confirming an attempted function call on that step is discarded
+  rather than executed). Full suite verified green (508/508) locally
+  (sandbox clone, `npm install` -> `npm test` -> `npm run lint` ->
+  `node --check` on every file, matching `ci.yml`'s own steps) both before
+  and after merging in `main`.
+- **Merged `main` in** (commit `d081af3`) to pick up `main`'s clone-token
+  scope upgrade (`contents:read` -> `contents:write`, commits `a485e6a`/
+  `d893a03`/`d5c2589`/`4aa7e0d`) -- clean merge, no conflicts, full suite
+  re-verified green on the merged tree.
+- **PR opened:** [#134](https://github.com/allocsys/madmcp/pull/134)
+  (`feat/editor-async-checkpoint` -> `main`). `mergeable: true` per GitHub;
+  CI running on the branch as of this writing.
+- **Still outstanding:** the manual end-to-end smoke test called for in
+  Step 8's "Done when" (seed -> worker chain advances -> poll reports
+  "done" -> diff reviewed on a real branch, against a real QStash/Redis
+  deployment) has NOT been run. `EDITOR_AGENT_ASYNC` still defaults to
+  `"sync"`, so none of this is live anywhere until that flag is
+  deliberately flipped on post-merge -- do the smoke test before flipping
+  it.
