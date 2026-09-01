@@ -367,6 +367,42 @@ five implementation steps now closed.
   all-keys-exhausted failure state rather than self-recovering via
   `max_steps` first.
 
+  **Outcome: run 0cbad5aa completed normally -- does not validate the
+  fix.** A further poll (no `max_steps`, pure read) showed the run had
+  self-recovered past step 19 entirely: step 20 ran ("batching the
+  remaining unread small subfolders now") and the call returned a real
+  final answer, not an error or a checkpoint-stalled state. So this
+  occurrence never reached all-keys-exhausted / dead-lettered, and
+  never exercised the `.transient` aggregate-error path at all -- there
+  was nothing to inspect. Closing this run out as a third confirmation
+  of the *stall cause* (hypothesis 3, retry/re-chain under B.AI
+  rate-limit pressure) only. **The `.transient` fix from `main`@`8eaf2d1`
+  is still unvalidated end-to-end** -- every live run so far has either
+  self-recovered (like this one) or been nudged forward with an
+  explicit `max_steps` before reaching a genuine dead-letter. Next
+  attempt should let a `bai` audit run to a real dead-letter without
+  intervening, so the resume path's error message can actually be read.
+
+  **Given three occurrences now share the same stall-then-recover
+  signature, and the proximate trigger (B.AI 429s) is diagnosed with
+  reasonable confidence, the more interesting remaining unknown is
+  upstream: why does `/api/agent-worker` cadence go from ~8-10s apart
+  to multi-minute gaps in the first place, rather than retrying on a
+  roughly constant schedule?** That's a QStash delivery-scheduling
+  question, not a B.AI or application-code question, and nothing in
+  this investigation so far has looked at QStash directly -- every
+  prior update in this section explicitly flagged "no QStash
+  dashboard/API tool exists in this toolset" as an unchecked avenue.
+  Worth checking whether such a tool has since become available (the
+  same way Vercel's did mid-investigation) before assuming this is
+  fully explained by B.AI retry backoff alone -- the widening-gap
+  pattern (roughly 10s -> 90s -> 3min) looks more like backoff
+  *compounding* across multiple retry layers than a single fixed
+  per-attempt delay, which would be worth confirming against
+  `agent_worker.js`'s actual backoff logic and/or QStash's own retry
+  policy for this queue, rather than assumed.
+
+
   **Follow-up: B.AI rate-limit resilience.** Two candidates were flagged
   for a separate look; the first is now resolved:
   - **RESOLVED (2026-09-01, `main`@`8eaf2d1`).** Confirmed the
