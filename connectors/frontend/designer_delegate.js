@@ -33,7 +33,7 @@ import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { readFile, writeFile, validate as validateFile } from "./designer_tool_functions.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from "./designer_checkpoint.js";
-import { isRedisConfigured } from "../gemini/cooldown.js";
+import { isRedisConfigured } from "../shared/cooldown.js";
 import { githubRequest } from "../github/client.js";
 import {
   FRONTEND_ALLOWED_EXTENSIONS,
