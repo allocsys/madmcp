@@ -235,3 +235,60 @@ demand, and do not have visibility into the layer that emits it.
   (rate-limiting, failed re-chain, or otherwise) in future write-ups --
   it's a symptom we've only ever seen once, on one run, and couldn't
   reproduce under controlled conditions.
+
+---
+
+## 6. Follow-up session (2026-09-02): bug #3 fix confirmed landed, editor path confirmed clean, DEBUG_AGENT_WORKER red herring ruled out
+
+**Bug #3 fix + regression test are already on `main`, no further action
+needed:**
+- `14245fd` -- "Fix: pass max_steps through to seedRun on async fresh-start
+  delegate_agent path". `connectors/gemini/agent_tools.js` now calls
+  `seedRun({ task, provider, model, maxOutputTokens, max_steps })`,
+  confirmed by direct read of the current file.
+- `ded479f` -- "Add regression test: seedRun must pin overallMaxSteps to
+  the caller's requested max_steps" (`test/agent-seedrun-max-steps-
+  regression.test.js`), pinning `seedRun`'s own contract directly, plus
+  the pre-existing `test/agent-tools-async.test.js` covering the call site.
+
+**Next-steps item #2 (editor path) checked -- no analogous bug exists:**
+`connectors/github/editor_tools.js`'s fresh-async-start branch already
+calls `seedEditorRun({ owner, repo, branch, task, max_steps, provider })`
+-- `max_steps` is present. `seedEditorRun`'s signature
+(`connectors/github/editor_delegate.js`) is `{ owner, repo, branch, task,
+max_steps = EDITOR_DEFAULT_STEPS, provider }`, and `runEditorAgent`'s own
+`effectiveOverallMaxSteps`/`cappedSteps` derivation mirrors
+`agent_delegate.js`'s (correct) pattern. The two files were structurally
+parallel per the original worry in Section 3, but only `agent_tools.js`
+actually had the missed-parameter bug -- `editor_tools.js` never did.
+No fix or regression test needed here.
+
+**Red herring ruled out -- `DEBUG_AGENT_WORKER`'s history in `config.js`
+is NOT the resolution to Section 5's "Void" mystery:** `agent_worker.js`
+and `config.js` both carry comments about a worker-chain stall that was
+"diagnosed as sustained B.AI rate-limiting" and is why `DEBUG_AGENT_WORKER`
+defaults off. This looked at first glance like it might resolve Section 5.
+It doesn't: that diagnosis is commit `2aad526` (2026-08-31), which predates
+`d7a51d7` (2026-09-01, when Section 5 was written) and explicitly describes
+a **separate, self-recovered** stall from an earlier session -- not run
+`d303f6a8-8b0f-4881-bf95-aa6a274271f2`, which never self-recovered across
+multiple real polls. Section 5 remains genuinely open; do not cite the
+B.AI-rate-limiting diagnosis as an explanation for the "Void" run without
+new evidence specific to that run.
+
+**Re-ran the original bai key-rotation test with the fix in place:**
+started a fresh async `delegate_agent({ provider: "bai", max_steps: 3 })`
+run (`run_id: e6c0ee61-129c-42e9-a698-239557f83567`) to confirm the run
+now actually stops at the requested ceiling instead of drifting to the old
+default of 20. First poll: 0 steps done, 2s since start (freshly seeded,
+worker not yet chained far enough to observe the cap in effect). Continue
+polling this run_id (spaced out, not repeatedly) to confirm it halts at or
+before step 3 rather than continuing past it -- this is the final
+outstanding item from the original next-steps list.
+
+**Updated overall status:** of the original 5 next-steps items, #1
+(fix bug #3) and #2 (check editor path) are now fully closed. #3 (read
+agent_worker.js) is done -- see the DEBUG_AGENT_WORKER finding above,
+which narrowed but did not resolve it. #4 (re-test bai with the fix) is
+in progress (see run above). #5 (Void investigation) remains open per
+Section 5, unchanged.
