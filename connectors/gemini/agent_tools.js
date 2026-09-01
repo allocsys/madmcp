@@ -96,7 +96,7 @@ export function register(server) {
         // this is the entire point of Scenario B.
         let runId;
         try {
-          runId = await seedRun({ task, provider, model, maxOutputTokens });
+          runId = await seedRun({ task, provider, model, maxOutputTokens, max_steps });
           await publishAgentStep({ runId, afterStep: 0 });
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to start async investigation: ${err?.message ?? String(err)}` }], isError: true };
