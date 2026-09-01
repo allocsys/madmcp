@@ -21,7 +21,7 @@
 // ---------------------------------------------------------------------------
 
 import { OPENROUTER_API_KEYS, OPENROUTER_API, GLM_MODEL, GLM_FALLBACK_MODELS, GLM_REQUEST_TIMEOUT_MS } from "../../config.js";
-import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../gemini/cooldown.js";
+import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
 
 // Cosmetic headers OpenRouter asks for (affects how your app shows up on
 // their dashboard's usage attribution, not required to place first) -- see
