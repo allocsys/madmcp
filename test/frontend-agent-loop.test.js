@@ -34,7 +34,7 @@ vi.mock("../connectors/frontend/designer_tool_functions.js", () => ({
   validate: vi.fn(),
 }));
 
-vi.mock("../connectors/gemini/cooldown.js", () => ({
+vi.mock("../connectors/shared/cooldown.js", () => ({
   isRedisConfigured: vi.fn(() => true),
 }));
 
