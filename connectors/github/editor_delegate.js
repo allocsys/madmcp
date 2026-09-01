@@ -235,7 +235,7 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
 // values are ignored -- same resume contract as designer_delegate.js (see
 // its comments for why `task` specifically must never be trusted over the
 // checkpoint's own record of it on a live resume).
-export async function runEditorAgent({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, resume_run_id, singleStep = false }) {
+export async function runEditorAgent({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, resume_run_id, singleStep = false, provider }) {
   // The run's TRUE overall step ceiling -- distinct from cappedSteps (this
   // particular invocation's own loop bound). For a fresh run or a manual
   // synchronous resume the two are the same value. They diverge for a
@@ -262,6 +262,15 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   let effectiveRepo = repo;
   let effectiveBranch = branch;
   let effectiveTask = task;
+  // The provider actually in effect for this run -- the caller-supplied one
+  // on a fresh run, or the one restored from a resumed checkpoint (see
+  // `checkpoint.provider || provider` below). Same reasoning as
+  // connectors/gemini/agent_delegate.js's runInvestigation: resuming on a
+  // DIFFERENT provider than the one that started the run risks corrupting
+  // the conversation shape, not just a preference mismatch. Threaded
+  // through every providerChat/saveCheckpoint call below exactly like
+  // effectiveTask is.
+  let effectiveProvider = provider;
   // Stuck-loop detection -- same shape as designer_delegate.js's copy of
   // connectors/gemini/agent_delegate.js's fix #4. See that file's comments
   // for the full reasoning; unchanged here.
@@ -307,6 +316,13 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     effectiveRepo = checkpoint.repo;
     effectiveBranch = checkpoint.branch;
     effectiveTask = checkpoint.task;
+    // Same reasoning as effectiveTask directly above -- once a run is past
+    // step 1, the checkpoint's own record of which provider started it is
+    // authoritative, not whatever the caller passes on a resume call.
+    // Checkpoints saved before this field existed won't have it; fall back
+    // to whatever the caller passed (may be undefined, which providerChat
+    // treats as "gemini") rather than erroring.
+    effectiveProvider = checkpoint.provider || provider;
     repeatCounts = new Map(Object.entries(checkpoint.repeatCounts || {}));
     consecutiveAllRepeatSteps = checkpoint.consecutiveAllRepeatSteps || 0;
   } else if (resume_run_id) {
@@ -396,6 +412,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     repeatCounts: Object.fromEntries(repeatCounts),
     consecutiveAllRepeatSteps,
     overallMaxSteps: effectiveOverallMaxSteps,
+    provider: effectiveProvider,
   });
 
   for (let step = startStep; step <= cappedSteps; step++) {
@@ -412,7 +429,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 
     let candidate;
     try {
-      candidate = await providerChat(contents, { tools: withholdTools ? undefined : declarations });
+      candidate = await providerChat(contents, { tools: withholdTools ? undefined : declarations, provider: effectiveProvider });
       const cascadeLog = formatCascadeLogLine(candidate, { step });
       if (cascadeLog) transcript.push(cascadeLog);
     } catch (err) {
@@ -496,6 +513,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
         repeatCounts: Object.fromEntries(repeatCounts),
         consecutiveAllRepeatSteps,
         overallMaxSteps: effectiveOverallMaxSteps,
+        provider: effectiveProvider,
         status: "done",
         finalAnswer: answer,
       });
@@ -640,7 +658,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 // rather than through runEditorAgent's saveState closure, since there is no
 // loop-scoped closure to reuse here -- the shape matches saveState's own
 // object exactly, just with the zero-step initial values.
-export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS }) {
+export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, provider }) {
   if (!owner || !repo || !branch || !task) {
     throw new Error("owner, repo, branch, and task are all required to seed a new run.");
   }
@@ -669,6 +687,7 @@ export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDI
     repeatCounts: {},
     consecutiveAllRepeatSteps: 0,
     overallMaxSteps,
+    provider,
     status: "running",
   });
   return runId;
