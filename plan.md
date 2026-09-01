@@ -10,7 +10,8 @@
 | Heartbeat / in-flight step tracking | Done — PR #123, merged `main`@`95e83a7`, live-validated 2026-09-01 |
 | `deleteCheckpoint` GC never called in prod path | Open, undecided |
 | Visible reasoning text not compacted | Fixed — PR #126, merged `main`@`31ad09a`, live-validated 2026-09-01 |
-| B.AI rate-limit exhaustion misclassified as permanent error | Fixed — `main`@`8eaf2d1` (+ tests @`3cd20e6`/@`3e4b699`), CI green |
+| B.AI rate-limit exhaustion misclassified as permanent error | Fixed — `main`@`8eaf2d1` (+ tests @`3cd20e6`/@`3e4b699`), CI green, live validation still pending |
+| B.AI 503/timeout never set cooldown, driving widening per-step stall gap | Fixed — `main`@`27449d5` (+ tests @`6a0b825`), CI not yet confirmed |
 | Manual token-count validation vs baseline | Not completed |
 
 ## Resolved: Heartbeat / in-flight step tracking
