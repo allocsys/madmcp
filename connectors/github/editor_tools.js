@@ -77,8 +77,10 @@ export function register(server) {
       max_steps:       z.number().optional().describe(`Max agent steps before being forced to answer (default ${EDITOR_DEFAULT_STEPS}, hard cap ${EDITOR_HARD_MAX_STEPS} regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done.`),
       resume_run_id:   z.string().optional().describe("A runId returned from a previous failed/partial delegate_editor call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). On a failed/partial run the transcript is always shown regardless of this flag."),
+      provider: z.enum(["gemini", "bai"]).optional()
+        .describe(`Which provider runs the editor loop (default: "gemini"). "bai" routes to B.AI's free GLM-5.3-Flash model (see connectors/bai/client.js) -- no model-fallback cascade on that path, only key rotation over BAI_API_KEYS. This tool is write-capable (it commits to a real branch), so a lighter/free model is a materially higher-risk choice here than for delegate_agent's read-only loop -- consider testing against real editor tasks before trusting it unattended. RESUME RULE: if resume_run_id resolves to a checkpoint that recorded a provider, that recorded provider is always used and this argument is ignored.`),
     },
-    async ({ owner = DEFAULT_OWNER, repo, branch, task, max_steps, resume_run_id, show_transcript = false }) => {
+    async ({ owner = DEFAULT_OWNER, repo, branch, task, max_steps, resume_run_id, show_transcript = false, provider }) => {
       // Same "task is only genuinely optional when resuming a live
       // checkpoint" reasoning as delegate_designer/delegate_agent's own
       // handlers.
@@ -118,7 +120,7 @@ export function register(server) {
         // run -- this is the entire point of the async path.
         let runId;
         try {
-          runId = await seedEditorRun({ owner, repo, branch, task, max_steps });
+          runId = await seedEditorRun({ owner, repo, branch, task, max_steps, provider });
           await publishEditorStep({ runId, afterStep: 0 });
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to start async run: ${err?.message ?? String(err)}` }], isError: true };
@@ -208,7 +210,7 @@ export function register(server) {
 
       let result;
       try {
-        result = await runEditorAgent({ owner, repo, branch, task, max_steps, resume_run_id });
+        result = await runEditorAgent({ owner, repo, branch, task, max_steps, resume_run_id, provider });
       } catch (err) {
         return { content: [{ type: "text", text: `delegate_editor failed: ${err?.message ?? String(err)}` }], isError: true };
       }
