@@ -53,19 +53,21 @@ async function callGenerateContentOnce(body, model, apiKey) {
   return data;
 }
 
-// Cascades through (GEMINI_API_KEYS x [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS]),
+// Cascades through ([GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS] x GEMINI_API_KEYS),
 // same two-axis shape as connectors/groq/client.js's callChatCompletion --
 // see that file's header for the general reasoning. Model-first ordering:
-// for a GIVEN key, exhaust every fallback model before rotating to the next
-// key. Rationale: a 429/503 is usually a per-model, per-key quota signal
-// (free-tier Gemini quotas are tracked per model), so cascading models
-// within the SAME key/account is the cheap, free lever -- no second
-// account/project's quota gets touched until that lever is fully spent.
-// Key rotation is the more expensive fallback (a second key likely means a
-// second billing account/project), so it's reserved for when the whole
-// model list is exhausted on the current key, OR the key itself is bad/
-// revoked (401/403, which breaks out of the model loop immediately -- no
-// point cycling models on a dead key).
+// for a GIVEN model, try every configured key before dropping to the next
+// fallback model. Rationale: use the strongest/primary model across ALL
+// available API keys before ever falling back to a weaker model. A 429/503
+// is usually a per-model, per-key quota signal, so exhausting all available
+// keys/accounts on the primary model first ensures we maximize utilization
+// of our best model before stepping down to weaker fallbacks.
+//
+// Key rotation is the natural inner loop: when a key hits rate limits or
+// exhausts quota on the current model, we try the next key on that same model.
+// If a key is bad or revoked (401/403), we `continue` to the next key under
+// the same model. If all keys are exhausted for the current model, the inner
+// key loop ends and the outer model loop advances to the next fallback model.
 //
 // Cooldown is namespaced per (model, key-index) via "gemini:<keyIndex>",
 // mirroring Groq's client.js -- a 429 on model X under key 0 must not cool
@@ -78,8 +80,8 @@ async function callGenerateContentOnce(body, model, apiKey) {
 // default (GEMINI_MODEL), that choice is honored exactly with no MODEL
 // cascade -- they asked for that specific model, so silently substituting
 // another one on a 429 would violate that request. Key rotation still
-// applies in that case, same as Groq: a bad/exhausted key isn't a model
-// choice.
+// applies in that case, same as Groq: trying all available keys on that
+// explicitly requested model.
 async function callGenerateContent(body, requestedModel) {
   if (!GEMINI_API_KEYS.length) {
     throw new Error("No Gemini API key configured. Set GEMINI_API_KEYS (or the legacy GEMINI_API_KEY) as an environment variable on the madmcp server.");
@@ -89,14 +91,16 @@ async function callGenerateContent(body, requestedModel) {
     : [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
 
   let lastErr;
-  for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
-    const apiKey = GEMINI_API_KEYS[keyIndex];
-    const namespace = keyIndex === 0 ? undefined : `gemini:${keyIndex}`;
-    const isLastKey = keyIndex === GEMINI_API_KEYS.length - 1;
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
+    const isLastModel = i === models.length - 1;
 
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i];
-      const isLastModelForKey = i === models.length - 1;
+    for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
+      const apiKey = GEMINI_API_KEYS[keyIndex];
+      const namespace = keyIndex === 0 ? undefined : `gemini:${keyIndex}`;
+      const isLastKeyForModel = keyIndex === GEMINI_API_KEYS.length - 1;
+      const isLastCombination = isLastModel && isLastKeyForModel;
+
       // Best-effort cross-call memory (see cooldown.js): if this (model, key)
       // pair was 429'd recently -- possibly in a prior invocation, since
       // Vercel doesn't guarantee a warm/reused instance between calls --
@@ -117,10 +121,10 @@ async function callGenerateContent(body, requestedModel) {
         const isRateLimited = err.status === 429;
         const isOverloaded  = err.status === 503;
         const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
-        // A bad/exhausted key (401/403) isn't a model problem -- no point
-        // cascading through the rest of this key's model list, jump
-        // straight to the next key instead.
-        if (isBadKey) break;
+        // A bad/exhausted key (401/403) on the current model shouldn't stop
+        // us from trying remaining keys on this model (or moving to the next
+        // model if this was the last key). Continue to the next key.
+        if (isBadKey) continue;
         if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
         if (isRateLimited) {
           // Rate-limited on this (model, key) pair -- record a cooldown
@@ -135,10 +139,10 @@ async function callGenerateContent(body, requestedModel) {
           // specifically the way a 429 is.
           await setModelCooldown(model, parseRetryDelaySeconds(err.message), namespace);
         }
-        if (isLastModelForKey && isLastKey) throw err;
-        // Otherwise fall through -- either to the next model on this key,
-        // or (via the outer loop, once this key's models are exhausted) to
-        // the next key.
+        if (isLastCombination) throw err;
+        // Otherwise fall through -- either to the next key on this model,
+        // or (via the outer loop, once all keys for this model are exhausted) to
+        // the next fallback model.
       }
     }
   }
@@ -193,7 +197,7 @@ export async function geminiChat(contents, { model = GEMINI_MODEL, tools, toolCo
   // still under connectors/gemini/) ran a multi-step Gemini loop passing
   // { includeServerSideToolInvocations: true } to combine the native
   // googleSearch tool with a custom function declaration in the same call.
-  // That loop was retired 2026-07-27 in favor of a direct Exa /answer call
+  // that loop was retired 2026-07-27 in favor of a direct Exa /answer call
   // (see research_delegate.js's header) -- nothing in this codebase passes
   // toolConfig anymore, but the param is left in place in case a future
   // caller needs it. agent_delegate.js never passes this: it has no built-in tools.
