@@ -151,8 +151,8 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
   it("throws the last error once all keys are exhausted", async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 503, statusText: "Service Unavailable", text: async () => "down" });
     await expect(clientModule.baiChat([{ role: "user", content: "hi" }])).rejects.toThrow("B.AI API error (503)");
-    // 2 keys x 1 model each = 2 attempts.
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    // 2 passes x 2 keys = 4 attempts (both keys keep failing transiently, so a second pass is attempted).
+    expect(global.fetch).toHaveBeenCalledTimes(4);
     // Regression coverage for commit 27449d5: a 503 must record a cooldown
     // for BOTH keys, same as a 429 would -- previously this test exercised
     // the 503 path without ever checking cooldown behavior, which is how
@@ -201,11 +201,13 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
     expect(caught).toBeDefined();
     expect(caught.message).toContain("all 2 configured keys");
     expect(caught.transient).toBe(true);
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 
   it("tags the all-keys-exhausted error as .transient when every key failed with a mix of transient statuses (429, 503)", async () => {
     global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Rate limited. retry in 5s." } }) })
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => "down" })
       .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Rate limited. retry in 5s." } }) })
       .mockResolvedValueOnce({ ok: false, status: 503, text: async () => "down" });
     let caught;
@@ -216,6 +218,7 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
     }
     expect(caught).toBeDefined();
     expect(caught.transient).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 
   it("does NOT tag the all-keys-exhausted error as .transient when at least one key failed for a permanent reason (401)", async () => {

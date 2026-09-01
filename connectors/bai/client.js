@@ -19,6 +19,8 @@
 import { BAI_API_KEYS, BAI_API, BAI_MODEL, BAI_REQUEST_TIMEOUT_MS } from "../../config.js";
 import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
 
+const MAX_KEY_ROTATION_PASSES = 2;
+
 async function callChatCompletionOnce(body, apiKey) {
   if (!apiKey) throw new Error("No B.AI API key available. Set BAI_API_KEYS as an environment variable on the madmcp server.");
 
@@ -66,57 +68,70 @@ async function callChatCompletion(body) {
   }
 
   const keyAttempts = [];
-  for (let keyIndex = 0; keyIndex < BAI_API_KEYS.length; keyIndex++) {
-    const apiKey = BAI_API_KEYS[keyIndex];
-    const namespace = `bai:${keyIndex}`;
 
-    if (await isModelCoolingDown(BAI_MODEL, namespace)) {
-      // A recorded cooldown is itself always rate-limit-caused (see
-      // setModelCooldown's only call site below) -- transient by definition.
-      keyAttempts.push({ keyIndex, reason: "recorded cooldown", transient: true });
-      continue;
+  for (let pass = 0; pass < MAX_KEY_ROTATION_PASSES; pass++) {
+    let passAttemptCount = 0;
+
+    for (let keyIndex = 0; keyIndex < BAI_API_KEYS.length; keyIndex++) {
+      const apiKey = BAI_API_KEYS[keyIndex];
+      const namespace = `bai:${keyIndex}`;
+
+      if (await isModelCoolingDown(BAI_MODEL, namespace)) {
+        // A recorded cooldown is itself always rate-limit-caused (see
+        // setModelCooldown's only call site below) -- transient by definition.
+        keyAttempts.push({ keyIndex, reason: "recorded cooldown", transient: true });
+        continue;
+      }
+
+      passAttemptCount++;
+      try {
+        const data = await callChatCompletionOnce({ ...body, model: BAI_MODEL }, apiKey);
+        if (keyIndex > 0) data._fallbackKeyIndex = keyIndex;
+        return data;
+      } catch (err) {
+        const isBadKey = err.status === 401 || err.status === 403;
+        const isRateLimited = err.status === 429;
+        const isOverloaded = err.status === 503;
+        const isNetworkTransient = err.transient === true;
+
+        // Tracked per-attempt (not just logged) so the aggregate
+        // all-keys-exhausted error thrown below can itself be tagged
+        // `.transient` -- see this function's own throw site and
+        // isTransientGeminiError() in agent_delegate.js, which is what
+        // actually reads that flag to decide whether a resume is worth
+        // suggesting. A bad key (401/403) is NOT transient -- rotating past
+        // it here is still the right move (see the no-`break` note below),
+        // but if EVERY key in the account is simply invalid, that is a real
+        // misconfiguration a resume will not fix, unlike a shared rate limit.
+        keyAttempts.push({ keyIndex, reason: err.message, transient: isRateLimited || isOverloaded || isNetworkTransient });
+
+        // NOTE: this client has only ONE loop (key rotation only -- see this
+        // file's header on why there's deliberately no inner model loop like
+        // groq/glm's clients have). A bad key (401/403) should move on to the
+        // next key, same as the rate-limited/overloaded/transient cases below
+        // -- it must NOT `break`, since with no inner loop to fall out of,
+        // `break` here would exit the whole key-rotation loop and abandon any
+        // remaining keys entirely.
+        if (!isBadKey && !isRateLimited && !isOverloaded && !isNetworkTransient) {
+          throw err;
+        }
+        if (isRateLimited) {
+          await setModelCooldown(BAI_MODEL, parseRetryDelaySeconds(err.message), namespace);
+        } else if (isOverloaded || isNetworkTransient) {
+          // No Retry-After-style hint on 503s or timeouts -- pass undefined so
+          // setModelCooldown() falls back to its existing DEFAULT_COOLDOWN_SECONDS
+          // (60s, see cooldown.js). Without this, a chronically slow/overloaded
+          // key got retried live from scratch on every step instead of being
+          // skipped, which is what drove the widening per-step stall gap.
+          await setModelCooldown(BAI_MODEL, undefined, namespace);
+        }
+      }
     }
-    try {
-      const data = await callChatCompletionOnce({ ...body, model: BAI_MODEL }, apiKey);
-      if (keyIndex > 0) data._fallbackKeyIndex = keyIndex;
-      return data;
-    } catch (err) {
-      const isBadKey = err.status === 401 || err.status === 403;
-      const isRateLimited = err.status === 429;
-      const isOverloaded = err.status === 503;
-      const isNetworkTransient = err.transient === true;
 
-      // Tracked per-attempt (not just logged) so the aggregate
-      // all-keys-exhausted error thrown below can itself be tagged
-      // `.transient` -- see this function's own throw site and
-      // isTransientGeminiError() in agent_delegate.js, which is what
-      // actually reads that flag to decide whether a resume is worth
-      // suggesting. A bad key (401/403) is NOT transient -- rotating past
-      // it here is still the right move (see the no-`break` note below),
-      // but if EVERY key in the account is simply invalid, that is a real
-      // misconfiguration a resume will not fix, unlike a shared rate limit.
-      keyAttempts.push({ keyIndex, reason: err.message, transient: isRateLimited || isOverloaded || isNetworkTransient });
-
-      // NOTE: this client has only ONE loop (key rotation only -- see this
-      // file's header on why there's deliberately no inner model loop like
-      // groq/glm's clients have). A bad key (401/403) should move on to the
-      // next key, same as the rate-limited/overloaded/transient cases below
-      // -- it must NOT `break`, since with no inner loop to fall out of,
-      // `break` here would exit the whole key-rotation loop and abandon any
-      // remaining keys entirely.
-      if (!isBadKey && !isRateLimited && !isOverloaded && !isNetworkTransient) {
-        throw err;
-      }
-      if (isRateLimited) {
-        await setModelCooldown(BAI_MODEL, parseRetryDelaySeconds(err.message), namespace);
-      } else if (isOverloaded || isNetworkTransient) {
-        // No Retry-After-style hint on 503s or timeouts -- pass undefined so
-        // setModelCooldown() falls back to its existing DEFAULT_COOLDOWN_SECONDS
-        // (60s, see cooldown.js). Without this, a chronically slow/overloaded
-        // key got retried live from scratch on every step instead of being
-        // skipped, which is what drove the widening per-step stall gap.
-        await setModelCooldown(BAI_MODEL, undefined, namespace);
-      }
+    // If this pass made zero live attempts (i.e. every key was already cooling down
+    // before we started), further passes won't help, so stop immediately.
+    if (passAttemptCount === 0) {
+      break;
     }
   }
 
