@@ -289,7 +289,7 @@ export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false"
 // EDITOR_AGENT_ENABLED above is already independent of anything gating
 // delegate_agent.
 export const EDITOR_WORKER_URL = process.env.EDITOR_WORKER_URL;
-export const EDITOR_AGENT_ASYNC = process.env.EDITOR_AGENT_ASYNC || "sync";
+export const EDITOR_AGENT_ASYNC = process.env.EDITOR_AGENT_ASYNC || "qstash";
 // Same default as AGENT_ASYNC_POLL_FRESH_SECONDS -- no reason for the
 // freshness window itself to differ between the two workers.
 export const EDITOR_ASYNC_POLL_FRESH_SECONDS = Number(process.env.EDITOR_ASYNC_POLL_FRESH_SECONDS) || 60;
