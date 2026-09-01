@@ -329,6 +329,44 @@ five implementation steps now closed.
   but is out of scope for this ticket; noted as a candidate follow-up
   below rather than fixed here.
 
+  **Update (2026-09-01, later still): third occurrence, live-tested
+  against the `.transient` fix from `main`@`8eaf2d1`, confirms
+  hypothesis (3) again -- no new root cause.** Kicked off a fresh
+  `bai`-provider full `connectors/` audit specifically to end-to-end
+  test the `.transient` fix (run_id
+  `0cbad5aa-adbc-4cfb-a7b8-38de37455c44`). Polling showed the same
+  signature as both prior incidents: progress stalled at step 19,
+  reported "no activity in Ns" with the idle time climbing across
+  polls (177s, then 218s), then a `max_steps`-forced resume unstuck it
+  ("still running" again, 19 steps, fresh heartbeat) without ever
+  producing a hard failure or an aggregate `.transient` error to
+  inspect directly.
+
+  Checked `Vercel:get_runtime_errors` (project `madmcp`, team
+  `allocsys`) for the preceding hour first -- zero runtime errors
+  logged, consistent with prior findings that this never surfaces as
+  an application-level error. `Vercel:get_runtime_logs` for the same
+  window showed the now-familiar pattern: `/api/agent-worker` POSTs
+  all returning clean `200`s, but with cadence that thins out sharply
+  -- a dense run of ~8-10s-apart calls (00:20:02-00:22:49), then
+  widening gaps (00:22:49->00:23:00->00:24:27, then a ~3min gap to
+  00:27:24, then another to 00:28:08). This matches the retry/re-chain
+  cadence described under hypothesis (3) above, not a crash or a
+  concurrent-duplicate race -- serial, single-threaded, steadily
+  spaced-out retries, same shape as the two previously diagnosed
+  incidents.
+
+  This run hadn't reached a dead-lettered end state or a resumed
+  final-answer state by the time of this log entry, so it does **not**
+  yet constitute a positive end-to-end confirmation that the
+  `.transient` tagging fix changes resume behavior in practice --  it
+  only reconfirms the *cause* of the stall pattern once again. Actual
+  validation of the fix's effect (does a resume after this kind of
+  stall now report "transient, worth retrying" instead of the old
+  wrong wording) is still pending a run that reaches a genuine
+  all-keys-exhausted failure state rather than self-recovering via
+  `max_steps` first.
+
   **Follow-up: B.AI rate-limit resilience.** Two candidates were flagged
   for a separate look; the first is now resolved:
   - **RESOLVED (2026-09-01, `main`@`8eaf2d1`).** Confirmed the
