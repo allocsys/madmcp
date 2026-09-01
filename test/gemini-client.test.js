@@ -300,30 +300,28 @@ describe("Gemini Connector - Client and Cascading Cascade (client.js)", () => {
       mockConfig.GEMINI_API_KEYS = ["key-0", "key-1"];
     });
 
-    it("exhausts every fallback model on key 0 before rotating to key 1", async () => {
+    it("exhausts every key on the primary model before falling back to fallback-lite-1", async () => {
       global.fetch = vi.fn()
         // key-0, gemini-flash-latest -> 429
         .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Exhausted" } }) })
-        // key-0, fallback-lite-1 -> 429
+        // key-1, gemini-flash-latest -> 429 (primary model now exhausted across every key)
         .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Exhausted" } }) })
-        // key-0, fallback-lite-2 -> 429 (key 0's model list now fully exhausted)
-        .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Exhausted" } }) })
-        // key-1, gemini-flash-latest -> succeeds
+        // key-0, fallback-lite-1 -> succeeds (cascade drops to the next model and restarts from key-0, not key-1)
         .mockResolvedValueOnce({
           ok: true,
-          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "key 1 success" }] } }] }),
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "fallback model on key 0 success" }] } }] }),
         });
 
-      const res = await clientModule.geminiGenerate("trigger key rotation");
-      expect(res).toBe("key 1 success");
-      expect(global.fetch).toHaveBeenCalledTimes(4);
+      const res = await clientModule.geminiGenerate("trigger model-first cascade");
+      expect(res).toBe("fallback model on key 0 success");
+      expect(global.fetch).toHaveBeenCalledTimes(3);
 
-      // 4th call (key-1's first attempt) should use key-1's header and go
-      // back to the PRIMARY model, not continue down key-0's fallback list --
-      // model-first-per-key, not "keep the same model index across keys".
-      const [url, init] = global.fetch.mock.calls[3];
-      expect(url).toContain("gemini-flash-latest:generateContent");
-      expect(init.headers["x-goog-api-key"]).toBe("key-1");
+      // 3rd call is the first attempt on the fallback model -- must use key-0's
+      // header (cascade restarts key rotation from key-0 for each new model),
+      // not key-1's.
+      const [url, init] = global.fetch.mock.calls[2];
+      expect(url).toContain("fallback-lite-1:generateContent");
+      expect(init.headers["x-goog-api-key"]).toBe("key-0");
     });
 
     it("jumps straight to the next key on 401/403 without cascading remaining models", async () => {
