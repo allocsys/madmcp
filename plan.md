@@ -51,16 +51,38 @@ to "running" (no behavior change for the current synchronous path).
   `max_steps: stepsDone + 1` are NOT equivalent).
 - On completion (real answer, or hard-cap finalize), persist
   `status: "done"` and `finalAnswer` via the checkpoint — mirror
-  `agent_delegate.js`'s `finishRun` closure.
+  `agent_delegate.js`'s `finishRun` closure. **Also remove the existing
+  `await deleteCheckpoint(runId);` call on this success path** (currently
+  the line immediately before the `return { answer, ... }` on a real
+  answer). Left in place, it would delete the very checkpoint this step
+  just wrote `status: "done"` to, so Step 7's poll ("done" → fall through
+  to a synchronous read) and Step 4's worker no-op check (`status !==
+  "running"`) would both find nothing instead of a completed run —
+  indistinguishable from an expired/never-existed one. Verified against
+  `agent_delegate.js`: it still imports `deleteCheckpoint` but never calls
+  it anywhere — `finishRun` writing `status: "done"` and relying on the
+  1-hour TTL replaced the delete-on-success pattern entirely on that path,
+  and `editor_delegate.js` needs the same removal, not just the new
+  fields added alongside the old call.
 - On an unrecoverable failure with no more retries left at this layer,
-  leave `status: "running"` (the worker, not this function, owns
-  dead-lettering — see Step 4) unless it's the final structural failure
-  path.
+  leave `status: "running"` and do nothing else — do NOT add a
+  `status: "failed"` write to any of `runEditorAgent`'s existing failure
+  branches (Gemini call error, no-answer/finishReason, forced-tools
+  violation, unexpected exception, or the loop-exit fallback). None of
+  these branches sets a `status` field today, and per Step 1 an omitted
+  `status` already defaults to `"running"` on save — that default is what
+  lets the worker's own dead-letter counter (Step 4) be the ONLY place
+  `status: "failed"` is ever written, matching `agent_worker.js`'s design
+  (dead-lettering lives in the worker, not the loop). This replaces an
+  earlier draft's carve-out for "the final structural failure path", which
+  didn't map onto any actual branch in the current code.
 
 **Done when:** a unit test can call `runEditorAgent({ resume_run_id, singleStep: true })`
-against a seeded checkpoint and see it advance exactly one step, and the
+against a seeded checkpoint and see it advance exactly one step, the
 existing fully-synchronous (no `singleStep`) call path is provably
-unchanged (existing tests still pass).
+unchanged (existing tests still pass), and a completed run's checkpoint is
+still loadable (with `status: "done"`) immediately after `runEditorAgent`
+returns — i.e. no test relies on the old `deleteCheckpoint` behavior.
 
 ---
 
