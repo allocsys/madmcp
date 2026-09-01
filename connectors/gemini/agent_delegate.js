@@ -42,7 +42,7 @@ import { randomUUID } from "node:crypto";
 import { providerChat } from "../llm/router.js";
 import { formatCascadeLogLine } from "../llm/cascade_log.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults, saveResultCacheEntry, getResultCacheEntries } from "./agent_checkpoint.js";
-import { isRedisConfigured } from "./cooldown.js";
+import { isRedisConfigured } from "../shared/cooldown.js";
 import { githubRequest } from "../github/client.js";
 import { readFileViaBlob } from "../github/helpers.js";
 import { extractRepoQualifier, fallbackCodeSearch } from "../github/search.js";
