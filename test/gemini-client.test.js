@@ -38,7 +38,7 @@ describe("Gemini Connector - Cooldown logic (cooldown.js)", () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv };
     // Dynamically import to ensure module-level state (redisInitAttempted/redisClient) is reset
-    cooldownModule = await import("../connectors/gemini/cooldown.js");
+    cooldownModule = await import("../connectors/shared/cooldown.js");
   });
 
   afterEach(() => {
@@ -98,7 +98,7 @@ describe("Gemini Connector - Cooldown logic (cooldown.js)", () => {
 
       // Re-import to trigger initialization check without env vars
       vi.resetModules();
-      const freshCooldown = await import("../connectors/gemini/cooldown.js");
+      const freshCooldown = await import("../connectors/shared/cooldown.js");
       expect(await freshCooldown.isModelCoolingDown("some-model")).toBe(false);
     });
 
