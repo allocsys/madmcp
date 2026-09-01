@@ -8,7 +8,7 @@
 // could fall through to paid models and start burning credits).
 //
 // Cooldown is namespaced per key-index via "bai:<keyIndex>", reusing
-// connectors/gemini/cooldown.js's generic `namespace` param.
+// connectors/shared/cooldown.js's generic `namespace` param.
 //
 // This file stays a thin, faithful wire-format client -- format translation
 // between Gemini's `contents`/`candidate` shape and OpenAI's
@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { BAI_API_KEYS, BAI_API, BAI_MODEL, BAI_REQUEST_TIMEOUT_MS } from "../../config.js";
-import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../gemini/cooldown.js";
+import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
 
 async function callChatCompletionOnce(body, apiKey) {
   if (!apiKey) throw new Error("No B.AI API key available. Set BAI_API_KEYS as an environment variable on the madmcp server.");
