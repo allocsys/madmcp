@@ -281,6 +281,26 @@ export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) ||
 export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 24;
 export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
 
+// Async delegate_editor (plan.md Step 6) -- mirrors the AGENT_WORKER_URL/
+// DELEGATE_AGENT_ASYNC/AGENT_ASYNC_*_SECONDS/AGENT_WORKER_MAX_CONSECUTIVE_FAILURES
+// block above almost exactly, but kept as its own set of flags rather than
+// reusing the AGENT_* ones directly -- delegate_editor's async rollout
+// should be independently toggleable from delegate_agent's, same way
+// EDITOR_AGENT_ENABLED above is already independent of anything gating
+// delegate_agent.
+export const EDITOR_WORKER_URL = process.env.EDITOR_WORKER_URL;
+export const EDITOR_AGENT_ASYNC = process.env.EDITOR_AGENT_ASYNC || "sync";
+// Same default as AGENT_ASYNC_POLL_FRESH_SECONDS -- no reason for the
+// freshness window itself to differ between the two workers.
+export const EDITOR_ASYNC_POLL_FRESH_SECONDS = Number(process.env.EDITOR_ASYNC_POLL_FRESH_SECONDS) || 60;
+// Max plausible time a single delegate_editor step can legitimately take
+// before being considered genuinely stuck/crashed. Used alongside
+// EDITOR_ASYNC_POLL_FRESH_SECONDS to guard against the crash blind spot
+// where a worker dies mid-step and leaves stepStartedAt set indefinitely --
+// same reasoning as AGENT_ASYNC_STEP_DEAD_SECONDS above.
+export const EDITOR_ASYNC_STEP_DEAD_SECONDS = Number(process.env.EDITOR_ASYNC_STEP_DEAD_SECONDS) || 120;
+export const EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
+
 export const GITHUB_APP_ID              = process.env.GITHUB_APP_ID;
 export const GITHUB_APP_INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID;
 export const GITHUB_APP_PRIVATE_KEY     = process.env.GITHUB_APP_PRIVATE_KEY;
