@@ -20,7 +20,7 @@ const mockParseRetryDelaySeconds = vi.fn((message) => {
   const match = /retry in ([\d.]+)\s*s/i.exec(message || "");
   return match ? Math.ceil(parseFloat(match[1])) : null;
 });
-vi.mock("../connectors/gemini/cooldown.js", () => ({
+vi.mock("../connectors/shared/cooldown.js", () => ({
   isModelCoolingDown: mockIsModelCoolingDown,
   setModelCooldown: mockSetModelCooldown,
   parseRetryDelaySeconds: mockParseRetryDelaySeconds,
