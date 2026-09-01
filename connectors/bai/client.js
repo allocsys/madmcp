@@ -71,7 +71,9 @@ async function callChatCompletion(body) {
     const namespace = `bai:${keyIndex}`;
 
     if (await isModelCoolingDown(BAI_MODEL, namespace)) {
-      keyAttempts.push({ keyIndex, reason: "recorded cooldown" });
+      // A recorded cooldown is itself always rate-limit-caused (see
+      // setModelCooldown's only call site below) -- transient by definition.
+      keyAttempts.push({ keyIndex, reason: "recorded cooldown", transient: true });
       continue;
     }
     try {
@@ -84,7 +86,16 @@ async function callChatCompletion(body) {
       const isOverloaded = err.status === 503;
       const isNetworkTransient = err.transient === true;
 
-      keyAttempts.push({ keyIndex, reason: err.message });
+      // Tracked per-attempt (not just logged) so the aggregate
+      // all-keys-exhausted error thrown below can itself be tagged
+      // `.transient` -- see this function's own throw site and
+      // isTransientGeminiError() in agent_delegate.js, which is what
+      // actually reads that flag to decide whether a resume is worth
+      // suggesting. A bad key (401/403) is NOT transient -- rotating past
+      // it here is still the right move (see the no-`break` note below),
+      // but if EVERY key in the account is simply invalid, that is a real
+      // misconfiguration a resume will not fix, unlike a shared rate limit.
+      keyAttempts.push({ keyIndex, reason: err.message, transient: isRateLimited || isOverloaded || isNetworkTransient });
 
       // NOTE: this client has only ONE loop (key rotation only -- see this
       // file's header on why there's deliberately no inner model loop like
@@ -104,7 +115,16 @@ async function callChatCompletion(body) {
 
   const totalKeys = BAI_API_KEYS.length;
   const details = keyAttempts.map(a => `key #${a.keyIndex}: ${a.reason}`).join(", ");
-  throw new Error(`B.AI API error: all ${totalKeys} configured keys are rate-limited, in cooldown, or failed (${details})`);
+  const exhaustedErr = new Error(`B.AI API error: all ${totalKeys} configured keys are rate-limited, in cooldown, or failed (${details})`);
+  // Only mark transient if EVERY contributing attempt was itself
+  // transient-shaped -- if even one key failed for a permanent reason
+  // (e.g. a bad/revoked key), a resume is not guaranteed to help just
+  // because the others happened to be rate-limited, so don't advertise
+  // this as "just retry me" in that mixed case.
+  if (keyAttempts.length && keyAttempts.every(a => a.transient)) {
+    exhaustedErr.transient = true;
+  }
+  throw exhaustedErr;
 }
 
 export async function baiChat(messages, { tools, maxOutputTokens } = {}) {
