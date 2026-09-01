@@ -14,7 +14,10 @@
 // needs credentials and the sandbox has none. This module supplies those
 // credentials in the narrowest, shortest-lived form practical:
 //   - a GitHub App (NOT the broad, long-lived GITHUB_TOKEN used everywhere
-//     else in this connector), scoped to contents:read only
+//     else in this connector), scoped to contents:write (upgraded from
+//     contents:read on 2026-09-01 at the repo owner's explicit request --
+//     see mintInstallationToken below; this token can now push, not just
+//     clone)
 //   - installed only on the specific repo(s) that need this
 //   - minted as a per-repo installation token, ~1hr TTL (GitHub's own max)
 //   - revoked server-side a short grace period after minting (see below) --
@@ -107,10 +110,12 @@ function buildAppJwt() {
   return `${signingInput}.${signRs256(signingInput, privateKey)}`;
 }
 
-// Mints a FRESH installation token scoped to exactly one repo, contents:read
-// only. Always hits GitHub's API -- there is no cache to check anymore (see
-// ONE-TIME-USE note above), so every call to getCloneToken() below results
-// in exactly one of these.
+// Mints a FRESH installation token scoped to exactly one repo, contents:write
+// (upgraded 2026-09-01 -- was contents:read; this token can now push, not
+// just clone, so its caller-facing framing in clone_token.js was updated to
+// match). Always hits GitHub's API -- there is no cache to check anymore
+// (see ONE-TIME-USE note above), so every call to getCloneToken() below
+// results in exactly one of these.
 async function mintInstallationToken(owner, repo) {
   if (!GITHUB_APP_INSTALLATION_ID) {
     throw new Error(
@@ -129,7 +134,7 @@ async function mintInstallationToken(owner, repo) {
     },
     body: JSON.stringify({
       repositories: [repo],
-      permissions: { contents: "read" },
+      permissions: { contents: "write" },
     }),
   });
   if (!res.ok) {
