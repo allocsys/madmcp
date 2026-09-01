@@ -1,0 +1,3 @@
+Redeploy trigger — bump to force a fresh deploy after the get_repo_clone_token contents:write scope change (connectors/github/app_auth.js, connectors/github/clone_token.js).
+
+Triggered: 2026-09-01
