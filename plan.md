@@ -383,24 +383,72 @@ five implementation steps now closed.
   attempt should let a `bai` audit run to a real dead-letter without
   intervening, so the resume path's error message can actually be read.
 
-  **Given three occurrences now share the same stall-then-recover
-  signature, and the proximate trigger (B.AI 429s) is diagnosed with
-  reasonable confidence, the more interesting remaining unknown is
-  upstream: why does `/api/agent-worker` cadence go from ~8-10s apart
-  to multi-minute gaps in the first place, rather than retrying on a
-  roughly constant schedule?** That's a QStash delivery-scheduling
-  question, not a B.AI or application-code question, and nothing in
-  this investigation so far has looked at QStash directly -- every
-  prior update in this section explicitly flagged "no QStash
-  dashboard/API tool exists in this toolset" as an unchecked avenue.
-  Worth checking whether such a tool has since become available (the
-  same way Vercel's did mid-investigation) before assuming this is
-  fully explained by B.AI retry backoff alone -- the widening-gap
-  pattern (roughly 10s -> 90s -> 3min) looks more like backoff
-  *compounding* across multiple retry layers than a single fixed
-  per-attempt delay, which would be worth confirming against
-  `agent_worker.js`'s actual backoff logic and/or QStash's own retry
-  policy for this queue, rather than assumed.
+  **RESOLVED (2026-09-01): cadence-widening root-caused by reading
+  `qstash_client.js`/`agent_worker.js` directly -- no QStash
+  dashboard/API access needed, and the answer wasn't QStash at all.**
+
+  Read `connectors/gemini/qstash_client.js` and `agent_worker.js` in
+  full. Two things rule out QStash-side scheduling as the source of the
+  widening gaps:
+  - `publishAgentStep` (`qstash_client.js`) calls `client.publishJSON`
+    with no delay/backoff parameter -- every re-chain publish fires
+    immediately after a step completes. The app itself never asks
+    QStash to wait longer between deliveries.
+  - `agent_worker.js`'s handler is deliberately written to always
+    return HTTP 200 for any "definite outcome" (no-op / chained /
+    dead-lettered / rechain-failed) specifically so QStash's own
+    delivery-retry backoff never engages -- the file's own comments
+    are explicit that transient failures are meant to be absorbed by
+    the re-chain path, not by asking QStash to redeliver.
+
+  That leaves step-execution time itself as the only remaining
+  explanation, and `connectors/bai/client.js` confirms it: cascading
+  through `BAI_API_KEYS`, a key already recorded as cooling down
+  (`isModelCoolingDown`) is skipped instantly, but a key not yet known
+  to be exhausted still makes a live HTTP call and can hang up to
+  `BAI_REQUEST_TIMEOUT_MS` (55s default) before failing over. Critically,
+  `callChatCompletion` only ever called `setModelCooldown` on a 429 --
+  a 503 (overloaded) or a network timeout recorded **no** cooldown at
+  all, so that same slow/overloaded key got retried live, eating up to
+  55s again, on every subsequent step. As more keys accumulated this
+  chronically-slow-but-never-cooling-down state over the course of a
+  run, each successive step's worst case grew -- exactly the ~10s ->
+  90s -> 3min widening observed in the Vercel logs, and fully
+  consistent with "all 200s, zero runtime errors" (each invocation
+  really does eventually succeed and return 200, just slower each time).
+
+  **Fix, committed directly to `main` per explicit instruction (no
+  branch/PR):** `connectors/bai/client.js`, commit `27449d5`. 503 and
+  network-transient failures now call `setModelCooldown` too, same as
+  429 -- passing `undefined` for the seconds argument, since neither
+  has a `Retry-After`-style hint to parse; `cooldown.js`'s
+  `setModelCooldown` already falls back to its existing
+  `DEFAULT_COOLDOWN_SECONDS` (60s) in that case, so no new constant was
+  needed. This caps a chronically-slow key's cost to one full-timeout
+  hit instead of one per step.
+
+  **Tests added, commit `6a0b825`** (`test/bai-client.test.js`): new
+  cases for 503-triggers-cooldown and timeout-triggers-cooldown, plus
+  the pre-existing "throws the last error once all keys are exhausted"
+  (503) test now also asserts `setModelCooldown` was called for both
+  keys -- it previously exercised the 503 path without checking
+  cooldown behavior at all, which is exactly how the original gap went
+  uncaught. Not yet run against CI (tests were reasoned through, not
+  executed locally, per direction not to clone the repo this session --
+  next push/CI run should confirm they're green).
+
+  **What this does and doesn't fix, relative to the 19th-step stall:**
+  should flatten the widening-gap pattern itself and reduce risk of a
+  single step blowing past any host-level function-duration ceiling.
+  Does **not** guarantee step 19 stops failing outright if B.AI's
+  account-level quota is genuinely exhausted (not transient) at that
+  point in a long audit -- in that case the run should now fail faster
+  and cleaner (quick skips instead of long hangs) and correctly land on
+  the already-fixed `.transient = true` aggregate error, rather than
+  taking minutes to time out into the same place. Whether it actually
+  prevents the stall, versus just making a real dead-letter arrive
+  faster, is exactly what the still-pending live `.transient`
+  validation (next item below) will show.
 
 
   **Follow-up: B.AI rate-limit resilience.** Two candidates were flagged
