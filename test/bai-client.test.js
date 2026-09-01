@@ -206,6 +206,7 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
 
   it("tags the all-keys-exhausted error as .transient when every key is a recorded cooldown skip", async () => {
     mockIsModelCoolingDown.mockResolvedValue(true);
+    global.fetch = vi.fn();
     let caught;
     try {
       await clientModule.baiChat([{ role: "user", content: "hi" }]);
