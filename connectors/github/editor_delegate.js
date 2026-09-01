@@ -658,7 +658,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 // rather than through runEditorAgent's saveState closure, since there is no
 // loop-scoped closure to reuse here -- the shape matches saveState's own
 // object exactly, just with the zero-step initial values.
-export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS }) {
+export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, provider }) {
   if (!owner || !repo || !branch || !task) {
     throw new Error("owner, repo, branch, and task are all required to seed a new run.");
   }
@@ -687,6 +687,7 @@ export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDI
     repeatCounts: {},
     consecutiveAllRepeatSteps: 0,
     overallMaxSteps,
+    provider,
     status: "running",
   });
   return runId;
