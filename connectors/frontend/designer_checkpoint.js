@@ -22,7 +22,7 @@
 // calls.
 // ---------------------------------------------------------------------------
 
-import { getRedis } from "../gemini/cooldown.js";
+import { getRedis } from "../shared/cooldown.js";
 
 const CHECKPOINT_KEY_PREFIX = "designer:checkpoint:";
 // Same reasoning as every other checkpoint module in this repo -- only
