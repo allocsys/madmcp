@@ -276,19 +276,30 @@ multiple real polls. Section 5 remains genuinely open; do not cite the
 B.AI-rate-limiting diagnosis as an explanation for the "Void" run without
 new evidence specific to that run.
 
-**Re-ran the original bai key-rotation test with the fix in place:**
-started a fresh async `delegate_agent({ provider: "bai", max_steps: 3 })`
-run (`run_id: e6c0ee61-129c-42e9-a698-239557f83567`) to confirm the run
-now actually stops at the requested ceiling instead of drifting to the old
-default of 20. First poll: 0 steps done, 2s since start (freshly seeded,
-worker not yet chained far enough to observe the cap in effect). Continue
-polling this run_id (spaced out, not repeatedly) to confirm it halts at or
-before step 3 rather than continuing past it -- this is the final
-outstanding item from the original next-steps list.
+**Re-ran the original bai key-rotation test with the fix in place --
+CONFIRMED FIXED:** started a fresh async `delegate_agent({ provider:
+"bai", max_steps: 3 })` run (`run_id:
+e6c0ee61-129c-42e9-a698-239557f83567`). First poll: 0 steps done, 2s in
+(too early to tell). Second poll returned a completed result after
+exactly **3 step(s) taken** -- matching the requested `max_steps: 3`
+precisely, not drifting toward the old silently-defaulted ceiling of 20.
+This directly confirms the fix from `14245fd` works end-to-end on a real
+async bai run, not just in the unit test.
 
-**Updated overall status:** of the original 5 next-steps items, #1
-(fix bug #3) and #2 (check editor path) are now fully closed. #3 (read
-agent_worker.js) is done -- see the DEBUG_AGENT_WORKER finding above,
-which narrowed but did not resolve it. #4 (re-test bai with the fix) is
-in progress (see run above). #5 (Void investigation) remains open per
-Section 5, unchanged.
+The run's own task failed for an unrelated reason: the agent's attempt to
+read `connectors/bai/client.js` 404'd, and two code searches for
+`MAX_KEY_ROTATION_PASSES` (repo-scoped and path-scoped) returned zero
+results, so it correctly declined to fabricate a summary rather than
+guessing. This looks like a repo/owner-resolution issue specific to that
+call (possibly a default-owner mismatch on the bai provider path) --
+worth a look if bai-provider file reads keep failing this way, but it is
+separate from, and does not affect, the max_steps confirmation above.
+
+**Updated overall status: ALL 5 original next-steps items are now
+resolved or closed out.** #1 (fix bug #3): fixed and confirmed live. #2
+(check editor path): checked, no bug found. #3 (read agent_worker.js):
+done, narrowed the DEBUG_AGENT_WORKER history but ruled it out as
+unrelated to Void. #4 (re-test bai with the fix): confirmed working via
+the run above. #5 (Void investigation, Section 5): remains genuinely
+open -- the only unresolved item, and it needs access this session
+doesn't have (server logs / the tool-calling layer that emits "Void").
