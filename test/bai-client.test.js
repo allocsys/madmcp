@@ -155,6 +155,69 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("tags the all-keys-exhausted error as .transient when every key failed with a transient status (429)", async () => {
+    // Reproduces the plan.md-diagnosed scenario: all configured BAI_API_KEYS
+    // rate-limited simultaneously. isTransientGeminiError() in
+    // agent_delegate.js reads err.transient to decide whether a resume is
+    // worth suggesting -- this must be true here, not just the message text.
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, statusText: "Too Many Requests", text: async () => JSON.stringify({ error: { message: "Rate limited. retry in 5s." } }) });
+    let caught;
+    try {
+      await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.message).toContain("all 2 configured keys");
+    expect(caught.transient).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("tags the all-keys-exhausted error as .transient when every key failed with a mix of transient statuses (429, 503)", async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Rate limited. retry in 5s." } }) })
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => "down" });
+    let caught;
+    try {
+      await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.transient).toBe(true);
+  });
+
+  it("does NOT tag the all-keys-exhausted error as .transient when at least one key failed for a permanent reason (401)", async () => {
+    // A mixed failure (one key genuinely rate-limited, another simply bad/
+    // revoked) should not be advertised as "just retry me" -- the bad key
+    // will fail identically on a resume regardless of the rate limit clearing.
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, text: async () => JSON.stringify({ error: { message: "Unauthorized" } }) })
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: "Rate limited. retry in 5s." } }) });
+    let caught;
+    try {
+      await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.transient).not.toBe(true);
+  });
+
+  it("tags the all-keys-exhausted error as .transient when every key is a recorded cooldown skip", async () => {
+    mockIsModelCoolingDown.mockResolvedValue(true);
+    let caught;
+    try {
+      await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.message).toContain("recorded cooldown");
+    expect(caught.transient).toBe(true);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it("throws if B.AI returns no choices", async () => {
     global.fetch = vi.fn().mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({}) });
     await expect(clientModule.baiChat([{ role: "user", content: "hi" }])).rejects.toThrow("B.AI returned no choices.");
