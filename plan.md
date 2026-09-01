@@ -56,12 +56,13 @@ this session's live run.
 ## 3. Bug found: `max_steps` not enforced on `bai`-provider runs
 
 While stress-testing with a deliberately heavy task and `max_steps: 3`,
-the run blew through the cap -- observed at **14, then 15** completed
-steps (still climbing) against a requested ceiling of 3, with no forced-
-answer cutoff. Per `delegate_agent`'s own tool description, `max_steps`
-is supposed to cap tool-use turns before the run is forced to answer
-(default 20, hard cap 30 regardless of the passed value) -- 3 was neither
-honored nor did the hard-cap-independent behavior kick in as documented.
+the run blew through the cap. Observed progression across repeated polls
+of the same `resume_run_id`: **14 steps -> 15 steps -> 19 steps**, still
+running, against a requested ceiling of 3. Per `delegate_agent`'s own
+tool description, `max_steps` is supposed to cap tool-use turns before
+the run is forced to answer (default 20, hard cap 30 regardless of the
+passed value) -- 3 was neither honored nor did the hard-cap-independent
+behavior kick in as documented.
 
 **Not yet root-caused.** Open questions for the next session:
 
@@ -85,6 +86,47 @@ more broadly (cost control, runaway-loop protection, dead-letter/retry
 budget interactions), not just a cosmetic mismatch between requested and
 actual step count on this one call.
 
-**Next step:** root-cause where `max_steps` is supposed to be read/enforced
-in the bai dispatch path, add a regression test pinning the cap, and check
-whether `gemini`-provider runs have the same gap.
+---
+
+## 4. Second observation: possible cache-hit-only stuck loop (same run)
+
+On the poll that observed 19 steps (up from 15 on the prior poll), the
+tool response itself was: `"Void (the re-fetch was served from cache, not
+new content)."` Inspecting the transcript, steps 16-18 were exact repeats
+of steps 12-14 (`github_get_file_at_commit` on the same commit + paths),
+all served from cache with nothing new returned.
+
+This suggests the run may not just be ignoring `max_steps` but also
+spinning -- re-issuing identical tool calls that can't produce new
+information, rather than converging toward an answer. This is distinct
+from the `max_steps` bug above and should be tracked separately:
+
+- Does `agent_delegate.js` (the read-only/`delegate_agent` path) have any
+  stuck-loop detection analogous to `editor_delegate.js`'s
+  `consecutiveAllRepeatSteps` mechanism (referenced in this repo's git
+  history for the editor's async port)? If yes, why didn't it trigger
+  here? If no, that's a gap worth closing independently of the
+  `max_steps` bug.
+- Is the cache-hit itself the problem (i.e., the model doesn't see that
+  its own call was a no-op repeat and can't tell it needs to try
+  something different), or is this a downstream symptom of the same
+  root cause as the `max_steps` bug (e.g., the loop's step-counting is
+  broken in a way that also breaks its repeat-detection)?
+
+**Status of this specific test run:** left running/unresolved as of this
+writing -- not killed, not confirmed to have self-terminated or
+dead-lettered. Whoever picks this up next should check its current state
+first rather than assume it's still active or already finished.
+
+---
+
+## Next steps
+
+1. Root-cause where `max_steps` is supposed to be read/enforced in the
+   bai dispatch path.
+2. Test whether `provider: "gemini"` has the same `max_steps` gap, to
+   isolate provider-specific vs. general step-budget bug.
+3. Check for stuck-loop/repeat-detection logic in `agent_delegate.js` and
+   whether it should have caught the cache-hit-only loop in finding #4.
+4. Add regression tests pinning both the step cap and repeat-detection
+   once root-caused.
