@@ -10,6 +10,7 @@
 | Heartbeat / in-flight step tracking | Done — PR #123, merged `main`@`95e83a7`, live-validated 2026-09-01 |
 | `deleteCheckpoint` GC never called in prod path | Open, undecided |
 | Visible reasoning text not compacted | Fixed — PR #126, merged `main`@`31ad09a`, live-validated 2026-09-01 |
+| B.AI rate-limit exhaustion misclassified as permanent error | Fixed — `main`@`8eaf2d1` (+ tests @`3cd20e6`/@`3e4b699`), CI green |
 | Manual token-count validation vs baseline | Not completed |
 
 ## Resolved: Heartbeat / in-flight step tracking
@@ -328,19 +329,46 @@ five implementation steps now closed.
   but is out of scope for this ticket; noted as a candidate follow-up
   below rather than fixed here.
 
-  **Follow-up (not done here, flagged for later): B.AI rate-limit
-  resilience.** Two candidates worth a separate look:
-  - Whether B.AI's 429 responses are transient-looking enough (two of
-    the three don't literally say "429" as a status, just prose) that
-    `agent_delegate.js`'s transient-vs-permanent classification (the
-    "This does not look like a transient error" check on resume) might
-    be miscategorizing a genuinely-transient B.AI rate-limit as
-    permanent -- would change whether resuming a stalled `bai` run is
-    the right recovery step vs. just waiting out the rate limit.
-  - Whether `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` (5) or the re-chain
-    backoff spacing should account for B.AI's specific rate-limit
-    behavior on long audits, given this reproduced twice on the same
-    task shape.
+  **Follow-up: B.AI rate-limit resilience.** Two candidates were flagged
+  for a separate look; the first is now resolved:
+  - **RESOLVED (2026-09-01, `main`@`8eaf2d1`).** Confirmed the
+    miscategorization was real, not hypothetical: `bai/client.js`'s
+    `callChatCompletion` cascades through `BAI_API_KEYS` correctly
+    per-attempt (each individual error keeps its real `.status`), but
+    once every key is exhausted it threw a fresh aggregate
+    `new Error(...)` with neither `.status` nor `.transient` set.
+    `agent_delegate.js`'s `isTransientGeminiError()` reads exactly those
+    two fields, so a run that died from all-keys-429'd (precisely the
+    scenario diagnosed above) was told on resume "this does not look
+    like a transient error ... check the underlying cause" -- actively
+    wrong guidance for a wait-and-retry situation. Also confirmed the
+    existing test suite didn't catch this: its one exhaustion test
+    (`test/bai-client.test.js`, "throws the last error once all keys
+    are exhausted") only asserted a `.message` substring, never
+    inspected `.status`/`.transient`.
+    Fix: each per-key attempt (including a `isModelCoolingDown` skip,
+    itself always rate-limit-caused) is now tracked as transient or not
+    (429/503/network-transient/cooldown-skip = transient; 401/403 =
+    not), and the aggregate error is tagged `.transient = true` only if
+    EVERY contributing attempt was transient -- a mixed failure (one
+    key genuinely rate-limited, another simply bad/revoked) stays
+    untagged, since a resume won't fix a bad key regardless of the rate
+    limit clearing. New tests: all-429, mixed 429/503, mixed
+    permanent+transient (asserts NOT tagged), all-cooldown-skip.
+    First test-only commit (`3cd20e6`) briefly broke CI (`#1412`,
+    `TypeError: [Function fetch] is not a spy or a call to a spy!` --
+    the new cooldown-skip test asserted `global.fetch` was never called
+    without first mocking it, so vitest correctly rejected the
+    assertion once `afterEach` restored the real `fetch`); fixed by
+    adding `global.fetch = vi.fn()` to that test (`3e4b699`), same
+    pattern every other test in the file already uses. CI green on the
+    client fix (`#1411`) and the corrected test commit (`#1413`).
+  - Still open: whether `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` (5) or
+    the re-chain backoff spacing should account for B.AI's specific
+    rate-limit behavior on long audits, given this reproduced twice on
+    the same task shape. Not addressed by the fix above -- that only
+    corrects the resume-worthiness signal, not the retry/backoff
+    policy itself.
 
   **Gating the invocation-id logging: DONE.** Diagnosis criterion is
   met, so per the original plan the `console.log` calls in
