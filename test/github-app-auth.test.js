@@ -155,7 +155,7 @@ describe("connectors/github/app_auth.js", () => {
       expect(global.fetch).not.toHaveBeenCalled();
     });
 
-    it("scopes the mint request to exactly the one repo, contents:read only", async () => {
+    it("scopes the mint request to exactly the one repo, contents:write (upgraded 2026-09-01 from contents:read)", async () => {
       vi.useFakeTimers();
       global.fetch.mockResolvedValueOnce(mintOk());
       const { getCloneToken } = await loadAppAuth();
@@ -163,7 +163,7 @@ describe("connectors/github/app_auth.js", () => {
       await getCloneToken("acme", "widgets");
 
       const body = JSON.parse(global.fetch.mock.calls[0][1].body);
-      expect(body).toEqual({ repositories: ["widgets"], permissions: { contents: "read" } });
+      expect(body).toEqual({ repositories: ["widgets"], permissions: { contents: "write" } });
     });
 
     it("returns the minted token and its GitHub-issued expiry", async () => {
