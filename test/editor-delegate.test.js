@@ -40,7 +40,7 @@ vi.mock("../connectors/github/editor_validate.js", () => ({
   validateByExtension: vi.fn(async () => ({ valid: true })),
 }));
 
-vi.mock("../connectors/gemini/cooldown.js", () => ({
+vi.mock("../connectors/shared/cooldown.js", () => ({
   isRedisConfigured: vi.fn(() => true),
 }));
 
