@@ -691,3 +691,139 @@ not touched.
   be new information worth its own investigation (would suggest either
   the caps need tuning, or a genuinely different failure mode) rather
   than assuming it's the same one Section 9 already root-caused.
+
+---
+
+## 11. Live test of the Section 9/10 fix (2026-09-02, follow-up session): a NEW post-merge timeout occurrence found -- different failure shape than the original repro, root cause NOT yet fixed
+
+Per the handoff from Section 10, ran the prescribed live test: a fresh,
+deliberately oversized `delegate_agent` task (`provider: "bai"`,
+`max_steps: 3`), same shape as Section 7's repro (single sprawling
+full-repo-architecture-writeup task designed to make the model batch many
+tool calls / large file reads), and watched `get_runtime_errors`/
+`get_runtime_logs` (project `prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh`, team
+`team_LyeppGZMAygFDwBK8CuNZOWx`) for the "Task timed out after 300
+seconds" error group throughout.
+
+**Baseline confirmed clean first:** PR #138 merged as commit `c379867` at
+`2026-09-02T01:09:27Z`. Before starting the new test run, the error
+group's most recent occurrence was `2026-09-02T00:42:01Z` -- strictly
+before the merge. No occurrences in the gap between merge and test start.
+
+**Run `223d6b08-d2e1-4f23-8597-27fc48c594a3` (started ~`01:16:47Z`):**
+
+- Step 1: `github_get_file_tree` + `github_get_repo` -- normal.
+- Step 2: batched 6 `github_read_file` calls. **The new
+  `MAX_STEP_RESULT_CHARS` cap fired exactly as designed**: the 6th call
+  (`connectors/github/editor_checkpoint.js`) came back as `[Result
+  withheld -- this step's combined tool-result size already reached the
+  60000-char per-step cap from earlier calls in the same step. Re-request
+  this specific call in your next step.]` instead of its actual content.
+  This is the priority #1 fix working correctly, live, on the exact
+  batched-calls-in-one-step shape Section 7 used to repro the original
+  bug.
+- Step 3 (the forced-final-answer step, since `max_steps: 3` was
+  reached -- bai has no more tool calls available and must synthesize one
+  complete answer covering the full task: every connector, every
+  checkpoint schema, a line-by-line worker comparison, every config.js
+  env var): invocation `ba8f4094-3f81-4587-ba30-30f4d4df0822` entered at
+  `01:17:33Z` and **hard-timed-out at exactly 300 seconds** (`01:17:33Z`
+  + 300s, HTTP 504, confirmed via both the polling tool's own
+  "stalled... no activity in ~300s" report and a direct
+  `get_runtime_logs` hit showing `Vercel Runtime Timeout Error: Task
+  timed out after 300 seconds` immediately after that invocation's
+  `heartbeat written, entering runInvestigation` line, with no return log
+  in between).
+
+**Confirmed NOT a stale-deployment false alarm:** `get_deployment` on
+`dpl_ELEZPU9ymzysz8hFEgUz1QYjKRis` (the deployment the timeout occurred
+on) shows `githubCommitSha: c379867...`, `githubCommitRef: main`,
+`githubCommitVerification: verified` -- this is the exact merged PR #138
+commit, in production, not an old deployment.
+
+**Confirmed NOT already accounted for in Section 10's "predate this fix"
+baseline:** `get_runtime_errors` immediately after the timeout shows the
+error group's `last` timestamp updated to `2026-09-02T01:17:33.000Z` --
+strictly after the `01:09:27Z` merge. This is a genuine new occurrence,
+not a stale/cached read of the pre-merge data.
+
+**QStash's own redelivery engaged automatically afterward** (a second
+invocation, `8d8b49e6-25a4-47e9-a856-db56146ac430`, entered at
+`01:22:45Z` for the same `runId`/`afterStep=2`) -- consistent with the
+priority #3 dead-letter/redelivery-visibility fix at least not being
+broken, though whether `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES`/the
+`Upstash-Retried`-driven early-dead-letter path actually fires after
+enough of these was not confirmed before this session's investigation
+ended (would need to watch further redeliveries play out, or read
+`agent_worker.js`'s current logging around that path directly).
+
+**Why this looks like a DIFFERENT failure mode than Sections 7-9's
+original repro, not a simple "caps too loose" tuning issue:**
+
+Sections 7-9's repro and root cause were specifically about an oversized
+**input** -- many batched tool calls and/or large file-read results
+bloating the `contents` payload sent *into* the next outbound LLM call,
+making that call slow enough to blow the 300s ceiling. PR #138's two caps
+(`MAX_TOOL_CALLS_PER_STEP`, `MAX_STEP_RESULT_CHARS`) target exactly that
+mechanism, and this session's run shows the caps working correctly on
+that exact shape (step 2's withheld 6th result, above).
+
+But the timeout this session did NOT happen on a bloated-input step -- it
+happened on the **forced-final-answer step**, where by definition there
+are no more tool calls (bai/Gemini is withheld further tools and must
+emit one complete text answer). Nothing about `MAX_TOOL_CALLS_PER_STEP`
+or `MAX_STEP_RESULT_CHARS` bounds the model's own **output** generation
+time, and this task's forced answer was explicitly asked to be
+exhaustive ("every connector directory... every checkpoint schema...
+line-by-line worker comparison... enumerate every environment variable...
+be exhaustive") -- a large-output-generation problem, structurally
+distinct from the large-input-context problem Section 9 root-caused and
+Section 10 fixed. The input-side caps have no mechanism to bound this.
+
+**Explicitly NOT confirmed yet:**
+- Whether output size/generation time is really the driving factor here
+  (vs. e.g. bai-side latency variance, or the accumulated step 1+2
+  context -- even after the per-step 60000-char cap -- still being large
+  enough across multiple steps to matter for the final call). No token
+  count or generation-time breakdown has been pulled for this specific
+  invocation.
+- Whether this recurs on a LESS exhaustively-worded task (i.e. whether
+  the forced-final-answer step is only a problem when the task itself
+  explicitly demands an unusually large synthesized answer, as this test
+  task deliberately did, or whether it's a more general risk on any
+  forced-final-answer step after 2+ steps of accumulated context).
+- Whether the QStash redelivery that started at `01:22:45Z` succeeded,
+  timed out again, or is still pending -- not watched to completion this
+  session.
+- Whether `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES`/the `Upstash-Retried`
+  dead-letter path actually engages correctly on repeated timeouts of
+  this specific run in practice (only unit-tested per Section 10, not
+  observed live against a real repeatedly-timing-out run yet).
+
+**Next steps:**
+- Do not treat Section 9's root cause as the explanation for this new
+  occurrence without further evidence -- per this session's own
+  instruction, a new occurrence after the merge means either the caps
+  need tuning or a different failure mode is at play, and the
+  forced-final-answer/output-size angle above is a distinct-enough
+  mechanism that it likely needs its own fix, not a tweak to
+  `MAX_TOOL_CALLS_PER_STEP`/`MAX_STEP_RESULT_CHARS`.
+- Fix candidate to evaluate: a cap or truncation strategy for the
+  **final-step answer generation itself** (e.g. a tighter
+  `maxOutputTokens` specifically on the forced-final-answer call, or
+  detecting an unusually broad/exhaustive task description and steering
+  the model toward a bounded summary rather than an unbounded exhaustive
+  one) -- distinct from the existing per-step input caps.
+- Watch run `223d6b08-d2e1-4f23-8597-27fc48c594a3`'s QStash redelivery
+  chain (started `01:22:45Z`) to see whether it succeeds, times out again,
+  or eventually dead-letters -- would give direct evidence on whether this
+  is a one-off (e.g. bai latency spike) or a reliably-reproducible new
+  failure mode on this same run.
+- If reproducible, try the same oversized-task shape with a LESS
+  exhaustively-worded final-answer ask (keeping the same batched-tool-call
+  step 1/2 shape) to isolate whether output size specifically is the
+  driving variable, independent of accumulated input context.
+- Pull actual token counts / generation time for the timed-out invocation
+  if a way to do so becomes available (not accessible via
+  `get_runtime_logs`/`get_runtime_errors` alone) to confirm or rule out
+  the output-generation-time theory directly rather than by inference.
