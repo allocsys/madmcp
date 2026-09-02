@@ -20,8 +20,8 @@ import * as fetch      from "./connectors/fetch/tools.js";
 import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
 import * as agent      from "./connectors/gemini/agent_tools.js";
-import { handleAgentWorker } from "./connectors/gemini/agent_worker.js";
-import { handleEditorWorker } from "./connectors/github/editor_worker.js";
+import { handleAgentWorker, handleAgentWorkerFailure } from "./connectors/gemini/agent_worker.js";
+import { handleEditorWorker, handleEditorWorkerFailure } from "./connectors/github/editor_worker.js";
 import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
@@ -191,6 +191,16 @@ app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 // of the /mcp middleware stack above.
 app.post("/api/agent-worker", handleAgentWorker);
 
+// QStash failureCallback target for publishAgentStep (plan.md Section 13) --
+// called by QStash itself, as its own separately-signed message, the moment
+// it gives up delivering the original /api/agent-worker message (now
+// immediately, since publishAgentStep sets retries: QSTASH_STEP_RETRIES = 0).
+// Same auth/middleware reasoning as /api/agent-worker above: not behind
+// requireMcpKey/requireAllowedIp/mcpLimiter, since this is QStash-originated
+// traffic authenticated entirely by handleAgentWorkerFailure's own
+// verifyQStashSignature check.
+app.post("/api/agent-worker-failure", handleAgentWorkerFailure);
+
 // QStash-invoked worker for delegate_editor's async self-chaining
 // background loop (plan.md Step 5) -- same reasoning as /api/agent-worker
 // immediately above: deliberately NOT behind requireMcpKey/requireAllowedIp
@@ -202,6 +212,11 @@ app.post("/api/agent-worker", handleAgentWorker);
 // reuse any of the /mcp middleware stack above. Relies on the same global
 // express.json() verify callback above for req.rawBody.
 app.post("/api/editor-worker", handleEditorWorker);
+
+// QStash failureCallback target for publishEditorStep (plan.md Section 13) --
+// same reasoning as /api/agent-worker-failure above, mirrored for the editor
+// worker's own checkpoint/dead-letter path.
+app.post("/api/editor-worker-failure", handleEditorWorkerFailure);
 
 const PORT = process.env.PORT || 8080;
 // Gated so importing this module (e.g. from tests via supertest, or the MCP
