@@ -13,6 +13,7 @@
 - **FIXED:** `max_steps` silently ignored on async fresh-start `delegate_agent` calls (§2).
 - **FIXED:** oversized single-step input causing Vercel's 300s serverless timeout, plus the dead-letter blind spot that let a timed-out run hang forever (§3).
 - **FIXED, MERGED TO `main` AND LIVE-CONFIRMED** (commit `ef71c05`, squash-merge of PR #142): forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4). Live end-to-end repro (run `7afbab6c-0109-43e8-b95d-f7bec49f94a7`, 20 steps) confirmed the fix behaves as designed; a few non-blocking gaps were identified for future hardening (§4, §6 item 5).
+- **DONE, CONFIRMED-SAFE:** §3's `MAX_STEP_RESULT_CHARS` raised 60000 → 100000 (PR #143, commit `628d1f7`); live-timing-tested against real Vercel invocation logs, gaps ~5–9% of the 300s ceiling, no revert needed (§6 item 9).
 - **OPEN, low priority:** the "Void" response mystery — observed once, unreproduced, needs visibility this session doesn't have (§5).
 - **TODO (housekeeping):** revert `DEBUG_AGENT_WORKER` to default OFF; commit `test-bai-timeout.sh` to the repo; abandon run `c1beaeda-874a-47dd-97b0-763bff80ba6d` and descendants (§6).
 
