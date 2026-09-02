@@ -1642,3 +1642,162 @@ Sections 18-20.
   20 used for the earlier fixes in this chain.
 - QStash's own dashboard/API -- never directly inspected (Section 13's own
   note, still true).
+
+---
+
+## 22. New hypothesis (untested as of writing): drop bai's final-step SYSTEM
+NOTE entirely instead of continuing to refine its wording -- branch
+`experiment/drop-bai-final-step-note` (2026-09-02)
+
+### 22.1 Live reproduction of Section 18/20's leakage bug with a THIRD
+syntax variant, at a different max_steps value
+
+Independently of any code change, re-ran the same exhaustive full-repo-
+writeup task against a fresh `delegate_agent({ provider: "bai", max_steps:
+5 })` run (`run_id: 36414cc8-e510-47ab-8837-26eea30b2132`) -- a different
+step budget than any prior repro in this doc (Sections 15/17/18/20 all used
+`max_steps: 3`), specifically to check whether the failure mode was tied to
+that particular ceiling or general to "whichever step ends up being last."
+
+Steps 1-4 completed normally (file tree, config.js, bai/mem0 connector
+files, checkpoint files, both workers -- batched efficiently, no cap
+withholding triggered this time since no single step's calls totaled over
+`MAX_STEP_RESULT_CHARS`). Step 5 (forced-final, no tools) did NOT time out
+this time, but its "final answer" was:
+
+```
+{"path":"connectors/github/editor_worker.js","owner":"allocsys","repo":"madmcp","char_offset":null}
+```
+
+-- a bare, unwrapped JSON args object with no surrounding tag/bracket/key
+syntax at all. This is a THIRD distinct literal leakage shape, after
+Section 18's space-mangled XML tag and Section 20's bracket-marker
+(`[Function call: ...]`). Notably, this shape has no `"name"` or
+`"function"` key in it at all -- just the bare argument object -- so it may
+not be caught by `detectToolCallLeakage`'s existing third pattern (which
+specifically looks for a `"name"|"function": "..."` key), an open question
+this session did not verify against the actual function (see 22.4).
+
+**Conclusion, combined with Sections 15/17/18/20:** the failure now has THREE
+independently-observed live data points (`max_steps` 3 and 3 and 3 and 5)
+producing FOUR distinct garbled/leaked literal outputs across five runs,
+plus one clean pass (Section 17's `3f776358`) and one platform timeout
+(Section 15's `124a76f8`) at `max_steps: 3`. Changing the step budget does
+not fix or reliably avoid the problem -- it just relocates which step ends
+up being "final."
+
+### 22.2 New hypothesis: the elaboration of the SYSTEM NOTE itself may be
+priming the leakage, not preventing it
+
+Observation across Sections 16/18/20/21's history: each time the final-step
+SYSTEM NOTE was made MORE detailed about what NOT to do (Section 16: added
+a brevity instruction; Section 18/20/21: added explicit prohibitions
+against XML-tag-shaped and bracket-shaped tool-call text, naming the exact
+syntax to avoid), the leakage did not stop -- it mutated into a NEW syntax
+variant not explicitly named in the note. Gemini, by contrast, has never
+received any of this bai-specific elaboration (Section 19 decoupled the
+caps and the brevity/anti-leakage wording to bai-only) and has never been
+observed leaking in this investigation.
+
+This is circumstantial, not proven -- Gemini also simply hasn't been run
+through this exact repro shape as many times as bai has, so absence of
+observed leakage on Gemini isn't the same as a controlled comparison. But
+the pattern (more detail -> new variant, not fewer) is suggestive enough to
+be worth testing the opposite direction before adding a fourth
+elaboration: instead of writing an even more detailed note describing a
+fourth syntax to avoid, remove the note-on-this-branch entirely for bai and
+see what happens with no priming text at all.
+
+### 22.3 Change implemented -- branch `experiment/drop-bai-final-step-note`,
+commit `3cc4725` (via `delegate_editor`, NOT YET MERGED to `main`)
+
+In `connectors/gemini/agent_delegate.js`'s step loop, the
+`remainingAfterThisStep <= 1` branch now reads:
+
+```js
+if (!(applyOversizedStepCaps && remainingAfterThisStep === 0)) {
+  const noToolsNote = remainingAfterThisStep === 0
+    ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
+    : "";
+  responseParts.push({
+    text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} ...]`,
+  });
+}
+```
+
+**Precisely what changed:** when `effectiveProvider === "bai"` (i.e.
+`applyOversizedStepCaps` is true) AND `remainingAfterThisStep === 0` (the
+turn immediately before the forced no-tools final step), NO SYSTEM NOTE
+text is appended to `responseParts` at all -- bai receives zero warning
+that the next turn has no tools, zero brevity instruction, zero anti-
+leakage wording. The `remainingAfterThisStep === 1` warning (a full step
+earlier, tools still available) is unaffected regardless of provider,
+since the `!(...)` guard only excludes the `=== 0` case specifically.
+
+**Deliberately unchanged, confirmed by direct code read before and after:**
+- `isFinalStep`/`withholdTools` (the actual `tools: undefined` cutoff on
+  the `providerChat` call) -- completely untouched. Tools are still
+  genuinely withheld on the final step for every provider, exactly as
+  before. This change only removes the WARNING text about that fact for
+  bai, not the mechanism itself.
+- The `remainingAfterThisStep === 2` "start wrapping up" nudge -- untouched
+  for all providers including bai.
+- Every non-bai provider (gemini, glm, groq, default) -- receives the
+  exact same `remainingAfterThisStep === 0` note as before, unchanged, on
+  every branch.
+
+**Verification done this session (code + tests only, no live repro yet):**
+- Direct diff against `origin/main` confirms the ONLY file changed is
+  `connectors/gemini/agent_delegate.js` (8 insertions / 6 deletions) --
+  `plan.md` itself is byte-identical between this branch and `main` as of
+  this section being written (the branch's own single commit shows a large
+  `plan.md` diff in `git show --stat`, but that's a shallow-clone/history
+  divergence artifact, not an actual content change -- confirmed via direct
+  diff against `origin/main`, not just the commit's own stat).
+- Full test suite run directly (`npx vitest run` in a fresh clone of this
+  branch, not just `delegate_editor`'s own unverified claim of having run
+  it): **46 files, 541 tests, all passing**, identical count to `main`'s
+  last known-good total (Section 21.3). No test in `test/` pins the exact
+  `remainingAfterThisStep === 0` bai-branch wording being removed --
+  confirmed via a direct grep for `remainingAfterThisStep`/`SYSTEM NOTE`
+  across `test/`, the only hit is `openai-shape-adapter.test.js`, which
+  only exercises the (untouched) `=== 2` nudge text. So no test needed
+  updating, and none was silently broken by the omission.
+- Not yet done: a live repro run against THIS branch to see whether the
+  no-note approach actually produces a clean answer, a different leak
+  variant, a platform timeout, or something else new. This section
+  documents the hypothesis and the shipped-but-unmerged code; the next
+  session/next step is the actual test.
+
+### 22.4 Explicitly open / not yet done
+
+- **No live repro yet on this branch.** Everything above is code-level
+  verification (diff, tests) -- the actual behavioral question (does
+  removing the note reduce/eliminate leakage, or does the model do
+  something else unexpected with zero guidance on its final turn) is
+  UNTESTED. This is the immediate next step.
+- **`detectToolCallLeakage` not checked against the new bare-JSON leak
+  shape (22.1) directly.** Whether the third regex pattern
+  (`"(?:name|function)"\s*:\s*"..."`) would catch
+  `{"path":"...","owner":"...","repo":"...","char_offset":null}` was not
+  verified this session -- that string has no `name`/`function` key, so it
+  plausibly slips past all three existing patterns. If the no-note
+  experiment doesn't eliminate leakage, this is worth checking directly
+  before assuming the existing backstop still covers every shape bai can
+  produce.
+- **The branch is NOT merged to `main`.** `main` still has the full
+  Section 16/18/20/21 elaborated note for bai. This is deliberate --
+  per the user, this change may be REVERTED depending on what the live
+  repro shows, so it's being kept isolated on its own branch rather than
+  merged speculatively.
+- **If the live repro shows the no-note approach performs WORSE** (more
+  frequent leakage, new untested failure shapes, or the platform-timeout
+  failure mode reappearing since the brevity instruction is also gone for
+  bai on this branch) -- that would be real evidence the elaborated note
+  WAS earning its keep despite the mutating-syntax pattern in 22.1, and
+  this branch should be abandoned/reverted rather than merged. Do not
+  treat 22.2's hypothesis as confirmed until a live run actually supports
+  it.
+- Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
+  (still ON), and Section 5's "Void" mystery all remain exactly as open as
+  Section 21 left them -- untouched by this section.

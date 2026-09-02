@@ -2418,12 +2418,14 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // extra wording, that's real evidence the elaboration was earning its
       // keep and this should be revisited -- not assumed either way without
       // a fresh live test.
-      const noToolsNote = remainingAfterThisStep === 0
-        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
-        : "";
-      responseParts.push({
-        text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} Separately from the length of your response: if you cannot fully complete the task -- including any specific format requested -- say so explicitly and describe what's missing, rather than presenting a partial or reformatted answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
-      });
+      if (!(applyOversizedStepCaps && remainingAfterThisStep === 0)) {
+        const noToolsNote = remainingAfterThisStep === 0
+          ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
+          : "";
+        responseParts.push({
+          text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} Separately from the length of your response: if you cannot fully complete the task -- including any specific format requested -- say so explicitly and describe what's missing, rather than presenting a partial or reformatted answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
+        });
+      }
     }
 
     // Compact older bulky tool results in contents before appending this step's turns
