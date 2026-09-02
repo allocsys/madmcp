@@ -334,7 +334,7 @@ export async function handleAgentWorker(req, res) {
 // ORIGINAL endpoint ever arrives once QStash's retry budget is spent --
 // that check never gets a chance to fire, and the checkpoint is left at
 // status:"running" forever with nothing to catch it (the live blind spot
-// confirmed in Section 12 against runId 223d6b08-...). This callback is the
+// confirmed in Section 12). This callback is the
 // only signal QStash gives for that terminal state, so it's the only place
 // this specific gap can be closed.
 //

@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // which let a deterministically-timing-out step exhaust QStash's own
 // default retry budget (3 retries, ~40min worst case) with no notification
 // back to this app once that budget was exhausted (the live blind spot
-// confirmed against runId 223d6b08-... in plan.md Section 12).
+// confirmed in plan.md Section 12).
 //
 // Mocks @upstash/qstash ITSELF (not qstash_client.js, unlike
 // test/agent-worker.test.js and test/editor-worker.test.js, which mock the
