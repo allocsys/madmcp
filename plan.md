@@ -369,7 +369,85 @@ originally turned off (log volume stops earning its keep once diagnosed).
 - Consider adding a checkpoint payload-size log line (bytes) at
   `saveCheckpoint` time regardless of DEBUG_AGENT_WORKER, since that's the
   one number that would most directly confirm or kill this hypothesis.
-- Try resuming the stalled run above (`c1beaeda-874a-47dd-97b0-763bff80ba6d`)
-  with an explicit `max_steps` to see whether it recovers synchronously
-  (per `agent_tools.js`'s existing stale-checkpoint fallback) -- not yet
-  attempted this session.
+- See Section 8 below: the attempted resume of this exact run produced its
+  own new evidence pointing the same direction.
+
+---
+
+## 8. Three consecutive explicit-max_steps resume attempts on the stalled run all failed to complete -- strengthens the oversized-payload hypothesis, points at a possible execution-timeout angle
+
+Attempted to resume the same stalled run from Section 7
+(`c1beaeda-874a-47dd-97b0-763bff80ba6d`, stuck at 4 steps done) using an
+explicit `max_steps` on the resume call -- the mechanism `agent_tools.js`
+documents for pushing a stale/stalled checkpoint forward synchronously.
+Three attempts, all in this same follow-up session, none completed
+cleanly:
+
+1. **`resume_run_id` + `max_steps: 5`** (checkpoint was stale, 4 steps
+   done, 70-280s since last activity across the polls that preceded this) --
+   returned a raw tool-execution error (`{"error": "Error occurred during
+   tool execution"}`, no other detail surfaced to this session).
+2. **Same run, `max_steps: 5` again**, immediately after -- also a raw
+   tool-execution error, distinct request id from attempt 1. Both errors
+   were generic infra-level failures, not one of `agent_tools.js`'s own
+   handled error paths (no "Investigation failed", no "stalled", no
+   "failed permanently" text -- those all render as normal tool text, not
+   a `{"error": ...}` shape).
+3. **Same run, `max_steps: 8`** -- did not error immediately. Instead it
+   ran long enough that the user deliberately interrupted it rather than
+   wait out an unknown-length hang. Per the user's own observation of the
+   pattern across attempts: *the first resume attempt at a given max_steps
+   tends to error/time out quickly, and a subsequent attempt only goes
+   through if a bigger max_steps is passed than the one that just failed*
+   -- consistent with something size- or duration-proportional gating
+   success, not simple flakiness. This third attempt was aborted before
+   reaching either a clean result or another error, so we don't know what
+   it would have resolved to.
+
+**Why this matters for the Section 7 hypothesis:** a resume on this run
+has to reconstruct and resend the ENTIRE accumulated `contents` array --
+by step 4, that includes two 30,000-60,000-char file-read results plus
+roughly 20 other tool results across 4 batched steps. That is a
+substantially larger payload than an ordinary step, both for whatever
+backend function handles the resume request and for the outbound call to
+bai's API. Two clean infra-level errors immediately, followed by a third
+attempt that ran long enough to require manual interruption instead of
+erroring fast, is a pattern that fits "payload/duration scales with
+accumulated checkpoint size and something (a function execution limit, a
+bai request timeout, or similar) is being pushed close to or past its
+ceiling" better than it fits ordinary transient flakiness. This is still
+an inference from black-box behavior, not a confirmed mechanism.
+
+**Explicitly NOT confirmed:** we do not have the actual error detail
+behind either `{"error": "Error occurred during tool execution"}`
+response (no stack trace, no distinguishing message reached this session
+-- only an opaque request id each time), and we do not know what the
+third, interrupted attempt would have returned. The "needs bigger
+max_steps to go through" pattern is the user's observation across these
+specific attempts, not something we've independently verified holds in
+general.
+
+**Next steps for this thread:**
+- This now clearly needs server-side visibility this session doesn't have:
+  the two request ids from attempts 1-2 above, checked against whatever
+  logging/error-tracking sits behind the MCP tool-execution layer (not
+  this repo's own code -- these errors happened before/outside
+  `agent_tools.js`'s own try/catch blocks, which always return a
+  structured text response, never a bare `{"error": ...}`).
+- With `DEBUG_AGENT_WORKER` now defaulting on (Section 7), check whether
+  `agent_worker.js`'s logs show ANY invocation at all during these resume
+  attempts -- if the resume calls are going through `runInvestigation`
+  synchronously (as `agent_tools.js`'s stale-checkpoint fallback is
+  supposed to do) rather than through the worker, `agent_worker.js`'s logs
+  won't show anything relevant and the right place to look is whatever
+  wraps the synchronous `runInvestigation` call itself (e.g. a Vercel
+  function timeout log, not this repo's own logging).
+- Do not attempt further resumes of this specific run
+  (`c1beaeda-874a-47dd-97b0-763bff80ba6d`) without logs in hand first --
+  three attempts with no clean outcome and one requiring manual
+  interruption suggests further blind retries are unlikely to add new
+  information and cost real time/quota.
+- If/when a synchronous-resume execution-time ceiling is confirmed as the
+  mechanism, cross-reference against `GEMINI_REQUEST_TIMEOUT_MS` (55000ms
+  default) and any platform-level function-duration limit -- neither has
+  been checked against this specific failure yet.
