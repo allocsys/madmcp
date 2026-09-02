@@ -1168,10 +1168,28 @@ const FUNCTION_DECLARATIONS = [{
 // matches call-shaped wrappers (an XML tag, a "[Function call: ..."
 // marker, or a `"name": "..."` JSON shape) around a name that is ACTUALLY
 // one of this file's declared functions.
+//
+// WHITESPACE NORMALIZATION (fix, plan.md Section 21): the ORIGINAL version
+// of these patterns captured `[\w-]*` only -- contiguous identifier chars,
+// no spaces -- which looks right for a normal tag/call name. But the actual
+// literal text captured in Section 18's run 6ea018d5 was
+// `<githu b_read_file>`: the model didn't just wrap a real name in tag
+// syntax, it garbled the name itself with an embedded space. Under the old
+// pattern that only captures "githu" (stops at the space), which is not a
+// real function name, so the backstop silently let that exact case through
+// -- the one case it was written specifically to catch. Fixed by allowing
+// internal whitespace inside the captured candidate (`[\w\s-]*?`, matched
+// non-greedily up to the syntax's own closing token) and then stripping
+// ALL whitespace from the captured text before comparing against
+// knownFunctionNames, so `<githu b_read_file>` and `<github_read_file>`
+// normalize identically. This does not increase the false-positive surface
+// -- normalization only feeds into the knownFunctionNames.has(...) check,
+// so it still only fires on an ACTUAL real tool name (mangled or not), not
+// on arbitrary whitespace-containing text.
 const TOOL_CALL_LEAKAGE_PATTERNS = [
-  /<\/?\s*([a-zA-Z_][\w-]*)\b/g,                          // XML-tag-shaped: <github_read_file> or </params>
-  /\[\s*function\s*call\s*:?\s*([a-zA-Z_][\w-]*)/gi,       // bracket-shaped: [Function call: github_read_file ...]
-  /"(?:name|function)"\s*:\s*"([a-zA-Z_][\w-]*)"/gi,       // JSON-shaped: {"name": "github_read_file", ...}
+  /<\/?\s*([a-zA-Z_][\w\s-]*?)\s*\/?>/g,                                          // XML-tag-shaped: <github_read_file>, </params>, or a space-mangled <githu b_read_file>
+  /\[\s*function\s*call\s*:?\s*([a-zA-Z_][\w\s-]*?)(?=\s+with\b|\s*\]|,)/gi,       // bracket-shaped: [Function call: github_read_file ...] (also tolerates a mangled name before "with"/"]"/",")
+  /"(?:name|function)"\s*:\s*"([a-zA-Z_][\w\s-]*?)"/gi,                           // JSON-shaped: {"name": "github_read_file", ...}
 ];
 
 function detectToolCallLeakage(text, knownFunctionNames) {
@@ -1179,7 +1197,8 @@ function detectToolCallLeakage(text, knownFunctionNames) {
     pattern.lastIndex = 0;
     let m;
     while ((m = pattern.exec(text))) {
-      if (knownFunctionNames.has(m[1])) return m[1];
+      const normalized = m[1].replace(/\s+/g, "");
+      if (knownFunctionNames.has(normalized)) return normalized;
     }
   }
   return null;
