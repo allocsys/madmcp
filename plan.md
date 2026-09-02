@@ -451,3 +451,114 @@ general.
   mechanism, cross-reference against `GEMINI_REQUEST_TIMEOUT_MS` (55000ms
   default) and any platform-level function-duration limit -- neither has
   been checked against this specific failure yet.
+
+---
+
+## 9. ROOT CAUSE CONFIRMED via Vercel logs: oversized steps hit the platform's 300-second serverless function timeout
+
+Gained Vercel log access this session and checked `get_runtime_errors` +
+`get_runtime_logs` for the `madmcp` project (`prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh`,
+team `team_LyeppGZMAygFDwBK8CuNZOWx`) directly. This resolves Sections 7
+and 8 from theory to confirmed fact, and gives a strong new lead on
+Section 5.
+
+**`get_runtime_errors` (last 2h):** a single dominant error group --
+`Vercel Runtime Timeout Error: Task timed out after 300 seconds`, 15
+occurrences, route `/`, spanning `2026-08-08` to `2026-09-02` (i.e. this
+is a recurring, pre-existing failure mode, not a one-off).
+
+**`get_runtime_logs` filtered to `runId=c1beaeda-874a-47dd-97b0-763bff80ba6d`
+(the Section 7/8 run) shows the exact mechanism:**
+
+- `/api/agent-worker` hit the 300s timeout FIVE times while stuck trying
+  to advance past the oversized step 2: `23:57:29`, `23:57:36`,
+  `00:02:47`, `00:04:48`, `00:09:13`. The `00:09:13` entry has a full
+  debug trail (DEBUG_AGENT_WORKER was on by then, per Section 7's flip):
+  `entry ... afterStep=2` -> `heartbeat written, entering
+  runInvestigation` -> killed at exactly 300s, never reaching
+  `handleAgentWorker`'s own try/catch or the re-chain/dead-letter logic
+  below it.
+- Our own `/mcp` resume calls from Section 8 (the two that returned raw
+  `{"error": ...}` tool-execution failures, and the third the user
+  interrupted) hit the IDENTICAL 300s timeout on the same route:
+  `00:05:19`, `00:14:13`, `00:19:15`, `00:21:53`, `00:22:37`. These were
+  not `agent_tools.js`-level errors at all -- they were the platform
+  hard-killing the synchronous `runInvestigation` call mid-flight, which
+  is indistinguishable from a generic tool-execution failure from this
+  session's side.
+- The run DID eventually advance from 2 steps to 4 (confirmed via two
+  `stale-afterStep` no-op log lines reporting `liveStepsDone=4`) -- but
+  there is no log evidence of a clean success in between the timeouts.
+  The likeliest explanation is a QStash redelivery of the same
+  `afterStep=2` message eventually got a fast-enough bai response to
+  finish under 300s, i.e. this is probabilistic/flaky (sometimes the
+  oversized step's outbound API call finishes in time, sometimes it
+  doesn't), not deterministic.
+
+**CONFIRMED: Sections 7 and 8's hypotheses were correct.** An oversized
+step (many batched tool calls, large truncated file contents accumulated
+into one turn's context) makes the outbound call to the provider (bai, in
+every observed case here) slow enough that the whole serverless
+invocation -- worker-driven or our own synchronous resume -- routinely
+exceeds Vercel's 300-second function execution ceiling and gets hard
+terminated by the platform, not by any code path in this repo.
+
+**NEW finding, likely more consequential than the timeout itself: the
+dead-letter mechanism doesn't see these failures at all.**
+`agent_worker.js`'s `retryCount`/`AGENT_WORKER_MAX_CONSECUTIVE_FAILURES`
+(default 5) tracking only increments when `runInvestigation` RETURNS --
+either a success or an internally-caught `{ failed: true }`. A hard
+platform timeout kills the function before that code ever runs, so it can
+never be counted as one of the 5 failures that would otherwise finalize
+the checkpoint as `"failed"`. In practice this means a run stuck in this
+failure mode can loop on QStash's own automatic redelivery retries
+indefinitely (bounded only by QStash's own retry policy, not this repo's
+own guardrail), which matches the observed behavior far better than
+Section 5's original "maybe the re-chain publish failed silently" theory
+did.
+
+**Plausible (not confirmed) explanation for Section 5's "Void" response:**
+if the platform hard-kills the backing function before it returns, and
+the `/mcp` gateway layer in front of it has any response caching, a
+subsequent poll of the same still-unresolved request could plausibly be
+served a stale cached response instead of a fresh one -- which matches
+"the re-fetch was served from cache, not new content" strikingly well.
+This is a much better-supported theory than anything in Section 5's
+original writeup, but it is still inferred, not directly observed in a
+log line that says "Void" or names a caching layer -- treat it as the
+leading hypothesis now, not a closed case.
+
+**Updated status: the core stall/hang mechanism (Sections 5, 7, 8) is now
+CONFIRMED as oversized-step-induced Vercel function timeouts, not a bug in
+this repo's own retry/checkpoint/re-chain logic**, which was otherwise
+verified sound in Sections 3 and 6. The remaining open question is
+whether "Void" specifically is caused by the gateway-caching mechanism
+above -- narrower and more tractable than the original open-ended
+mystery.
+
+**Next steps:**
+- Fix candidate (not yet implemented): cap the number of tool calls /
+  total result size the model is allowed to batch into a single step, so
+  no single step's outbound API call can realistically exceed a safe
+  fraction of the 300s ceiling. This would address the root cause
+  directly rather than working around it.
+- Alternative/complementary fix: reduce `GEMINI_REQUEST_TIMEOUT_MS`-style
+  per-call timeout enforcement to also apply on the bai path (Section 3
+  noted bai's client has cooldown/retry logic but the config comments
+  don't show an equivalent hard per-call timeout the way Gemini's client
+  does) so a slow individual call fails fast and cleanly instead of
+  riding all the way to the platform's own hard kill.
+- Consider whether Vercel's function `maxDuration` can be raised (Fluid
+  Compute / Pro plan may allow up to 800s+) as a stopgap, though this only
+  delays the same failure mode rather than fixing it, and the team is
+  currently on the Hobby plan per `list_teams` (`"plan": "hobby"`), which
+  may cap this lower than paid tiers regardless.
+- Fix the dead-letter blind spot: consider whether QStash's own delivery
+  attempt count/headers can be inspected so `agent_worker.js` can
+  recognize "this message has already been redelivered N times by QStash
+  itself" as equivalent evidence of stuck-ness, independent of its own
+  in-process `retryCount`, which a hard kill can never increment.
+- Do NOT resume `c1beaeda-874a-47dd-97b0-763bff80ba6d` again -- it's not
+  informative anymore; the mechanism is understood. Any further testing of
+  this failure mode should use a fresh, deliberately oversized task like
+  Section 7's, now that we know what to look for in the logs.
