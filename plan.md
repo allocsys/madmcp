@@ -12,7 +12,7 @@
 
 - **FIXED:** `max_steps` silently ignored on async fresh-start `delegate_agent` calls (§2).
 - **FIXED:** oversized single-step input causing Vercel's 300s serverless timeout, plus the dead-letter blind spot that let a timed-out run hang forever (§3).
-- **FIXED (implemented, tested, CI green -- not yet merged to `main`):** forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4).
+- **FIXED, MERGED TO `main`** (commit `ef71c05`, squash-merge of PR #142): forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4). Live end-to-end confirmation against a real `provider: "bai"` run is still outstanding (§6 item 5).
 - **OPEN, low priority:** the "Void" response mystery — observed once, unreproduced, needs visibility this session doesn't have (§5).
 - **TODO (housekeeping):** revert `DEBUG_AGENT_WORKER` to default OFF; commit `test-bai-timeout.sh` to the repo; abandon run `c1beaeda-874a-47dd-97b0-763bff80ba6d` and descendants (§6).
 
@@ -251,10 +251,23 @@ CI green as of run #1580:**
   gating at the `agent_delegate.js` call site: fires on bai's true final
   step, not on an earlier bai step, not on a non-bai provider's final step,
   and not on a stuck-loop-forced non-final withheld-tools turn).
+- **MERGED (2026-09-02):** PR #142 squash-merged to `main` as commit
+  `ef71c05`.
+- **Correction to `scripts/test-bai-timeout.sh`'s provenance note:** the
+  file initially committed to this branch was a *reconstruction* (its own
+  header said so explicitly, since the real original script wasn't
+  available to that session). The actual original script was later
+  recovered and committed in its place (commit `7dac054`, still part of
+  this same PR before merge) -- the version now on `main` is the real
+  original (Termux-shebang, `BAI_API_KEY` singular, 9-case structure with
+  CSV distribution summaries for cases 4/9), not the reconstruction. If
+  anything downstream still references the reconstructed version's
+  different interface (`BAI_API_KEYS` plural, `RUNS_PER_CONFIG`, single
+  hardcoded rate-limiter prompt), that reference is stale.
 - **Not yet done:** the exhaustive full-repo-writeup live repro against a
   real `provider: "bai"` run (item (a)/(b)/(c) above) has NOT been run yet --
   this fix is CI-verified (mocked `providerChat`/`baiChat`) but not yet
-  live-confirmed end-to-end. PR not yet opened/merged to `main`.
+  live-confirmed end-to-end. This is now the only remaining item for §4.
 
 ---
 
