@@ -831,8 +831,8 @@ Section 10 fixed. The input-side caps have no mechanism to bound this.
 
 ## 12. Follow-up check on the Section 11 redelivery -- inconclusive, but the inconclusiveness is itself new information
 
-Checked `get_runtime_logs`/`get_runtime_errors` for `223d6b08-d2e1-4f23-
-8597-27fc48c594a3` and invocation `8d8b49e6-25a4-47e9-a856-db56146ac430`
+Checked `get_runtime_logs`/`get_runtime_errors` for the run from Section 11
+and invocation `8d8b49e6-25a4-47e9-a856-db56146ac430`
 across a wide window (`01:20Z` through `06:00Z`) to answer Section 11's
 open item #1 (did the redelivery succeed, time out again, or dead-letter).
 
@@ -880,9 +880,9 @@ invocations got.
   watching" risk Section 9 flagged, just manifesting as *zero* further
   activity rather than repeated timeouts.
 
-**Not attempted this session:** resuming or re-polling
-`223d6b08-d2e1-4f23-8597-27fc48c594a3` directly (e.g. via `delegate_agent`
-with `resume_run_id`) to check its checkpoint status/`stepsDone` from the
+**Not attempted this session:** resuming or re-polling the run directly
+(e.g. via `delegate_agent` with `resume_run_id`) to check its checkpoint
+status/`stepsDone` from the
 MCP side rather than the Vercel-logs side -- this would give an
 independent read on whether the run is actually still "running" (per its
 own checkpoint) or has quietly finished/failed without a clean log trail,
@@ -890,7 +890,7 @@ and doesn't require guessing at log-classification semantics. This is the
 most direct next step to actually resolve item #1.
 
 **RESOLVED via direct checkpoint poll:** called `delegate_agent({
-  resume_run_id: "223d6b08-d2e1-4f23-8597-27fc48c594a3" })` with no
+  resume_run_id: <run id from Section 11> })` with no
 `max_steps` (guaranteed read-only per the tool's own poll-vs-push
 contract). Response: **"Investigation appears stalled ... 2 step(s)
 completed, no activity in 388s (the background worker chain may have
@@ -925,7 +925,7 @@ state indefinitely unless manually pushed forward.
 - Items #2-#4 from Section 11 (less-exhaustive re-test to isolate
   output-size, token/generation-time breakdown) remain open and untouched
   this session.
-- This specific run (`223d6b08-d2e1-4f23-8597-27fc48c594a3`) could be
+- This specific run could be
   manually pushed forward with an explicit `max_steps` on a resume call
   to see whether the forced-final-answer step succeeds, times out again,
   or reproduces something new -- not attempted this session; flagging as
