@@ -477,12 +477,61 @@ the limit of what black-box behavior alone can resolve.
      section's earlier entries). **PR #144 squash-merged to `main` as
      commit `ef66382`.** `MAX_STEP_RESULT_CHARS = 300000` is now live in
      production.
-   - **STILL OPEN: the live timing test itself.** Merging removes
-     blocker #2 (delegate_agent now genuinely exercises the 300000 cap,
-     since it's what's deployed) but NOT blocker #1 -- this session still
-     has no Vercel runtime-logs tool, so the test can't be completed here
-     either. Deferred to a new session. **Until that live test runs and
-     confirms the same comfortable-headroom result the 100k raise got,
-     treat 300000 as merged-but-NOT-yet-confirmed-safe** -- unlike the
-     100k line above, this one hasn't been checked against a real
-     Vercel invocation gap yet.
+   - **STILL OPEN, AND NEW CONCERNING EVIDENCE (2026-09-02, this
+     session):** this session *does* have the Vercel log tools
+     (`get_runtime_logs`, `get_runtime_errors`, `get_deployment_build_logs`
+     all loaded fine via `tool_search`) -- a different toolset gap than
+     the prior session hit. But every call against
+     `prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh` / `team_LyeppGZMAygFDwBK8CuNZOWx`
+     (`get_runtime_logs`, `get_runtime_errors`, even a plain `get_project`
+     and `list_projects`) returned **403 Forbidden** -- "You don't have
+     permission to access this resource." Different blocker than last
+     time (tool present, credentials rejected for this specific
+     team/project) -- worth flagging to whoever manages this session's
+     Vercel auth/scopes, since this is now blocked two sessions running
+     for two different reasons.
+
+     Without log access, exact invocation timestamps couldn't be pulled.
+     Two live `delegate_agent({ provider: "bai", max_steps: 3 })` runs
+     were still made, forcing step 1's aggregate payload up via batched
+     `github_read_file` calls with explicit `char_limit: 100000` each:
+     - Run `68895fa5-9584-4d08-b1e5-ffef7e239361`: 7 files/reads,
+       aggregate 294,455 chars -- landed just *under* the 300000 cap.
+       Completed cleanly in 2 steps (expected -- cap never engaged).
+     - Run `e7cace87-72c1-453c-84d6-230f0bf2063a`: 8 files/reads (added
+       `connectors/github/search.js`), aggregate 310,831 chars --
+       clearing the cap. Step 1 completed normally (all 8 reads returned
+       in full at the read layer, as expected -- `MAX_STEP_RESULT_CHARS`
+       bounds what's sent to `providerChat`, not what `github_read_file`
+       itself returns). **Step 2 -- the at-risk call that absorbs that
+       ~310k-char step-1 result into the next `providerChat` call --
+       never completed.** The run first showed as stalled ("no activity
+       in 133s"), and a synchronous resume attempt then failed outright:
+       "QStash exhausted its own delivery budget (retried ?/0) on step 2
+       without ever getting a response -- almost always a
+       platform-level execution timeout repeating on the same oversized
+       step." The §3 dead-letter fix worked as designed (finalized
+       cleanly as `"failed"` instead of hanging forever), but the
+       underlying event -- repeated non-response on step 2, every QStash
+       delivery attempt -- is exactly the failure mode §3/§6-item-9 exist
+       to keep *out* of the 300s danger zone, not a borderline timing
+       result.
+
+     **This is not confirmed-safe, and the honest read leans toward the
+     opposite: the one run that actually cleared 300000 chars failed to
+     complete step 2 at all, on every delivery attempt.** Caveats worth
+     naming rather than glossing over: (a) single data point, not a
+     repeated/averaged result like the 100k test had; (b) without Vercel
+     logs there's no direct confirmation this was specifically a 300s
+     *timeout* vs. some other step-2 failure mode -- that's the tool's
+     own inferred error text, not something independently verified this
+     session; (c) step 1 was already at the `MAX_TOOL_CALLS_PER_STEP = 8`
+     ceiling, a co-occurring boundary condition worth noting though not
+     obviously causal. None of that is reason to wave this off, though.
+     **Recommend against declaring 300000 confirmed-safe on this
+     session's evidence, and recommend seriously weighing the handoff's
+     own fallback -- back off toward 200000, with 100000 as the
+     already-confirmed-safe floor -- rather than running further live
+     tests against production traffic until Vercel log access is
+     restored and the failure can be root-caused against real
+     timestamps instead of an inferred QStash error string.**
