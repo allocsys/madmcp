@@ -332,7 +332,7 @@ function sliceFileContentForModel(content, path, { char_offset, char_limit }) {
   }
 
   const offset    = char_offset ?? 0;
-  const safeLimit = Math.min(char_limit ?? 30000, 100000);
+  const safeLimit = Math.min(char_limit ?? 30000, 200000);
   const slice     = content.slice(offset, offset + safeLimit);
   const remaining = Math.max(0, total - offset - slice.length);
   const header    = `[File: ${path} | Total: ${total} chars | Offset: ${offset} | Returning: ${slice.length} chars | Remaining: ${remaining} chars]\n\n`;
