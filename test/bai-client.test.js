@@ -339,19 +339,20 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
           }),
         });
 
-      const choice = await clientModule.baiChat([{ role: "user", content: "hi" }], { maxOutputTokens: 1200, reasoningEffort: "low" });
+      const choice = await clientModule.baiChat([{ role: "user", content: "hi" }], { maxOutputTokens: 3000, reasoningEffort: "low" });
 
       expect(choice.message.content).toBe("Final answer after retry.");
       expect(global.fetch).toHaveBeenCalledTimes(2);
 
       const firstBody = JSON.parse(global.fetch.mock.calls[0][1].body);
-      expect(firstBody.max_tokens).toBe(1200);
+      expect(firstBody.max_tokens).toBe(3000);
       expect(firstBody.reasoning_effort).toBe("low");
 
       const retryBody = JSON.parse(global.fetch.mock.calls[1][1].body);
-      // Doubled from 1200 (> the 4096 floor), and reasoning_effort is
+      // Doubled from 3000 (6000, which exceeds the 4096 floor, so the
+      // doubling itself is what's under test here), and reasoning_effort is
       // reused unchanged -- never raised, per the fix's own constraint.
-      expect(retryBody.max_tokens).toBe(2400);
+      expect(retryBody.max_tokens).toBe(6000);
       expect(retryBody.reasoning_effort).toBe("low");
     });
 
