@@ -25,7 +25,7 @@ import { baiChat } from "../bai/client.js";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../openai_shape/adapter.js";
 import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
 
-export async function providerChat(contents, { provider = "gemini", tools, model, maxOutputTokens } = {}) {
+export async function providerChat(contents, { provider = "gemini", tools, model, maxOutputTokens, reasoningEffort } = {}) {
   if (provider === "glm") {
     const messages = toOpenAIMessages(contents);
     const openAITools = tools ? toOpenAITools(tools) : undefined;
@@ -59,7 +59,14 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     // below.
     const messages = toOpenAIMessages(contents);
     const openAITools = tools ? toOpenAITools(tools) : undefined;
-    const choice = await baiChat(messages, { tools: openAITools, maxOutputTokens });
+    // reasoningEffort is opt-in and passed through exactly as given (no
+    // default forced here, same as maxOutputTokens above) -- see
+    // connectors/bai/client.js's baiChat for what this actually does
+    // (sent as body.reasoning_effort) and connectors/gemini/agent_delegate.js
+    // for the one call site that currently sets it (the bai forced-final
+    // step, to mitigate the reasoning-token-budget-exhaustion failure mode
+    // documented in plan.md Section 25).
+    const choice = await baiChat(messages, { tools: openAITools, maxOutputTokens, reasoningEffort });
     return fromOpenAIChoice(choice);
   }
   // default / "gemini" -- maxOutputTokens passed through as-is, no forced

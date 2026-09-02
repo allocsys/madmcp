@@ -149,15 +149,88 @@ async function callChatCompletion(body) {
   throw exhaustedErr;
 }
 
-export async function baiChat(messages, { tools, maxOutputTokens } = {}) {
+// Floor for the retry's max_tokens bump (see computeRetryMaxTokens below) --
+// live testing found a fixed cap of 1200 still exhausted the reasoning
+// budget 2/5 times even with reasoning_effort=low, so the retry needs
+// meaningfully more headroom than any of the caps that were shown to fail,
+// not just a small bump over whatever the original call used.
+const RETRY_MIN_MAX_TOKENS = 4096;
+
+// The original call's max_tokens (if any) doubled, floored at
+// RETRY_MIN_MAX_TOKENS -- covers both "caller passed a small explicit cap
+// that turned out to be too tight" (double it) and "caller passed nothing at
+// all" (fall straight to the floor, since there's nothing to double).
+function computeRetryMaxTokens(originalMaxTokens) {
+  if (typeof originalMaxTokens === "number" && originalMaxTokens > 0) {
+    return Math.max(originalMaxTokens * 2, RETRY_MIN_MAX_TOKENS);
+  }
+  return RETRY_MIN_MAX_TOKENS;
+}
+
+// Detects the root-caused failure shape (plan.md Section 25): the
+// completion hit its max_tokens ceiling (finish_reason "length") with the
+// token budget spent almost entirely on internal reasoning_tokens rather
+// than the visible answer -- i.e. this was NOT a case of a genuinely long,
+// mostly-complete answer that simply ran a little over budget; the model
+// barely got to writing an answer at all before truncation. 0.9 is a
+// deliberately generous threshold (an answer that's 10%+ of the token
+// spend is treated as "the model was actually answering, just verbose" and
+// left alone -- only the near-total-reasoning-consumption case triggers a
+// retry).
+//
+// Checks two possible `usage` shapes for reasoning_tokens since bai's exact
+// wire format for this field isn't documented anywhere this codebase has
+// access to: a top-level `usage.reasoning_tokens` (seen directly in this
+// investigation's own test-bai-timeout.sh probing) and the nested
+// `usage.completion_tokens_details.reasoning_tokens` shape OpenAI's own
+// o-series reasoning models use (bai is OpenAI-shaped throughout, per this
+// file's header, so its exact reasoning-model wire format may follow
+// either OpenAI's own precedent or its own convention -- support both
+// rather than gambling on one).
+export function isReasoningBudgetExhausted(choice, usage) {
+  if (choice?.finish_reason !== "length") return false;
+  if (!usage) return false;
+
+  const reasoningTokens = typeof usage.reasoning_tokens === "number"
+    ? usage.reasoning_tokens
+    : usage.completion_tokens_details?.reasoning_tokens;
+  const completionTokens = usage.completion_tokens;
+
+  if (typeof reasoningTokens !== "number" || typeof completionTokens !== "number" || completionTokens <= 0) {
+    return false;
+  }
+
+  return (reasoningTokens / completionTokens) >= 0.9;
+}
+
+export async function baiChat(messages, { tools, maxOutputTokens, reasoningEffort } = {}) {
   const body = { messages };
   if (tools) body.tools = tools;
   if (maxOutputTokens) body.max_tokens = maxOutputTokens;
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort;
 
-  const data = await callChatCompletion(body);
-  const choice = data?.choices?.[0];
+  let data = await callChatCompletion(body);
+  let choice = data?.choices?.[0];
   if (!choice) {
     throw new Error("B.AI returned no choices.");
   }
+
+  // Retry ONCE, with a larger max_tokens budget, if this call's entire
+  // token budget went to reasoning and produced no usable answer. Do NOT
+  // raise reasoning_effort on the retry -- body.reasoning_effort is reused
+  // as-is (whatever the caller passed, or omitted entirely), since a higher
+  // effort setting produces MORE reasoning tokens, which would make budget
+  // exhaustion on the retry more likely, not less (see this function's own
+  // header comment and isReasoningBudgetExhausted's for the live-testing
+  // evidence behind this constraint).
+  if (isReasoningBudgetExhausted(choice, data.usage)) {
+    const retryBody = { ...body, max_tokens: computeRetryMaxTokens(maxOutputTokens) };
+    data = await callChatCompletion(retryBody);
+    choice = data?.choices?.[0];
+    if (!choice) {
+      throw new Error("B.AI returned no choices on retry (after reasoning-token-budget exhaustion on the first attempt).");
+    }
+  }
+
   return choice;
 }

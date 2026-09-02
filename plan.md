@@ -12,7 +12,7 @@
 
 - **FIXED:** `max_steps` silently ignored on async fresh-start `delegate_agent` calls (§2).
 - **FIXED:** oversized single-step input causing Vercel's 300s serverless timeout, plus the dead-letter blind spot that let a timed-out run hang forever (§3).
-- **ROOT-CAUSED, FIX AGREED, NOT YET IMPLEMENTED:** forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4).
+- **FIXED (implemented, tested, CI green -- not yet merged to `main`):** forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4).
 - **OPEN, low priority:** the "Void" response mystery — observed once, unreproduced, needs visibility this session doesn't have (§5).
 - **TODO (housekeeping):** revert `DEBUG_AGENT_WORKER` to default OFF; commit `test-bai-timeout.sh` to the repo; abandon run `c1beaeda-874a-47dd-97b0-763bff80ba6d` and descendants (§6).
 
@@ -206,6 +206,56 @@ empty/garbled final answers, (b) the retry fires only on genuinely
 token-exhausted calls (check via logs, don't assume), (c) delegation time
 increase stays within the bounded range anticipated above.
 
+**IMPLEMENTED (2026-09-02), branch `fix/bai-final-step-reasoning-effort`,
+CI green as of run #1580:**
+- `connectors/bai/client.js`: `baiChat()` now accepts `reasoningEffort`
+  (sent as `body.reasoning_effort`). New `isReasoningBudgetExhausted(choice,
+  usage)` detects `finish_reason === "length"` with `reasoning_tokens /
+  completion_tokens >= 0.9` (checks both a top-level `usage.reasoning_tokens`
+  and the nested `usage.completion_tokens_details.reasoning_tokens` shape,
+  since bai's exact field name isn't documented). On detection, retries
+  **once** with `max_tokens` raised via `computeRetryMaxTokens()` (original
+  doubled, floored at `RETRY_MIN_MAX_TOKENS = 4096` -- the fixed floor exists
+  because live testing found even a 1200 cap still exhausted the reasoning
+  budget 2/5 times). `reasoning_effort` is reused as-is on the retry, never
+  raised.
+- `connectors/llm/router.js`: `providerChat()` takes `reasoningEffort` and
+  passes it through only on the `bai` branch (opt-in, no forced default,
+  same contract as `maxOutputTokens`).
+- `connectors/gemini/agent_delegate.js`: the single `providerChat(...)` call
+  site now sets `reasoningEffort: "low"` gated on `effectiveProvider ===
+  "bai" && isFinalStep` specifically -- NOT the broader `withholdTools`
+  (which also covers `stuckLoopForce` and the verification pass). Confirmed
+  by test that a stuck-loop-forced no-tools turn does NOT get
+  `reasoningEffort` set, only the true forced-final step does.
+- No `SYSTEM_PREAMBLE`/`BAI_PREAMBLE_ADDENDUM`/final-step-note wording was
+  touched, per this section's own recommendation above.
+- **Already-shipped, unrelated-to-this-fix code found live on `main`
+  independent of this branch:** `BAI_PREAMBLE_ADDENDUM` +
+  `buildSystemPreamble(provider)` in `agent_delegate.js` (a short bai-only
+  early warning, added in turn 1's system preamble, that a tool-less forced
+  final turn is coming). This predates and is orthogonal to the client-level
+  fix above -- confirmed via `list_commits`: it landed in commit `f4b87d0`
+  ("bai: add early SYSTEM_PREAMBLE reinforcement for forced tool-less final
+  turn; reword final-step note to also disallow narrating intended tool
+  use", plan.md Section 24 follow-up), which is already on `main`. Section 4
+  above did not mention it because the session that wrote it was working
+  from an earlier read of this file, before that commit's own section (24)
+  was folded into this consolidated document -- not a real doc/code gap,
+  just a stale read. No action needed beyond this note.
+- **Test coverage added:** `test/bai-client.test.js` (reasoning_effort
+  passthrough + the exhaustion-detection/retry path, including the
+  never-raise-effort-on-retry contract), `test/llm-router.test.js`
+  (reasoningEffort passthrough on the bai branch only), and a new
+  `test/agent-delegate-bai-reasoning-effort.test.js` (the `isFinalStep`-only
+  gating at the `agent_delegate.js` call site: fires on bai's true final
+  step, not on an earlier bai step, not on a non-bai provider's final step,
+  and not on a stuck-loop-forced non-final withheld-tools turn).
+- **Not yet done:** the exhaustive full-repo-writeup live repro against a
+  real `provider: "bai"` run (item (a)/(b)/(c) above) has NOT been run yet --
+  this fix is CI-verified (mocked `providerChat`/`baiChat`) but not yet
+  live-confirmed end-to-end. PR not yet opened/merged to `main`.
+
 ---
 
 ## 5. OPEN: the "Void" response mystery
@@ -239,17 +289,22 @@ the limit of what black-box behavior alone can resolve.
 
 ## 6. Housekeeping / open items
 
-1. **Implement §4's fix** (`reasoning_effort: "low"` + finish_reason/
-   token-ratio detect-and-retry) in `connectors/bai/client.js`.
-2. **Commit `test-bai-timeout.sh`** to the repo as a reusable diagnostic,
-   distinct from the existing mocked-`providerChat` unit tests.
+1. **DONE (2026-09-02, branch `fix/bai-final-step-reasoning-effort`, CI
+   green):** implement §4's fix (`reasoning_effort: "low"` + finish_reason/
+   token-ratio detect-and-retry) in `connectors/bai/client.js`. Not yet
+   merged to `main` -- see §4's "IMPLEMENTED" note for full detail.
+2. **DONE:** `test-bai-timeout.sh` committed to the repo at
+   `scripts/test-bai-timeout.sh` (same branch as #1), distinct from the
+   existing mocked-`providerChat` unit tests.
 3. **Revert `DEBUG_AGENT_WORKER`** to its default-OFF setting — safe now
    that §3's dead-letter fixes have landed.
 4. **Do not resume** run `c1beaeda-874a-47dd-97b0-763bff80ba6d` or any of
    its descendants — used to root-cause §3/§4, no longer informative.
    Left to resolve on its own (complete, dead-letter, or TTL-expire).
-5. Once #1 ships, re-run the exhaustive full-repo-writeup repro to confirm
-   the fix (see §4's "next live-test pattern").
+5. **STILL OPEN:** #1 is implemented and CI-green but not yet live-tested --
+   re-run the exhaustive full-repo-writeup repro against a real
+   `provider: "bai"` run to confirm the fix (see §4's "next live-test
+   pattern"), then merge the branch to `main`.
 6. §5's "Void" mystery needs server-log/gateway visibility this session
    doesn't have — flag to whoever owns that layer if it recurs.
 7. QStash's own dashboard/API has never been directly inspected — worth a
