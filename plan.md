@@ -289,17 +289,22 @@ the limit of what black-box behavior alone can resolve.
 
 ## 6. Housekeeping / open items
 
-1. **Implement §4's fix** (`reasoning_effort: "low"` + finish_reason/
-   token-ratio detect-and-retry) in `connectors/bai/client.js`.
-2. **Commit `test-bai-timeout.sh`** to the repo as a reusable diagnostic,
-   distinct from the existing mocked-`providerChat` unit tests.
+1. **DONE (2026-09-02, branch `fix/bai-final-step-reasoning-effort`, CI
+   green):** implement §4's fix (`reasoning_effort: "low"` + finish_reason/
+   token-ratio detect-and-retry) in `connectors/bai/client.js`. Not yet
+   merged to `main` -- see §4's "IMPLEMENTED" note for full detail.
+2. **DONE:** `test-bai-timeout.sh` committed to the repo at
+   `scripts/test-bai-timeout.sh` (same branch as #1), distinct from the
+   existing mocked-`providerChat` unit tests.
 3. **Revert `DEBUG_AGENT_WORKER`** to its default-OFF setting — safe now
    that §3's dead-letter fixes have landed.
 4. **Do not resume** run `c1beaeda-874a-47dd-97b0-763bff80ba6d` or any of
    its descendants — used to root-cause §3/§4, no longer informative.
    Left to resolve on its own (complete, dead-letter, or TTL-expire).
-5. Once #1 ships, re-run the exhaustive full-repo-writeup repro to confirm
-   the fix (see §4's "next live-test pattern").
+5. **STILL OPEN:** #1 is implemented and CI-green but not yet live-tested --
+   re-run the exhaustive full-repo-writeup repro against a real
+   `provider: "bai"` run to confirm the fix (see §4's "next live-test
+   pattern"), then merge the branch to `main`.
 6. §5's "Void" mystery needs server-log/gateway visibility this session
    doesn't have — flag to whoever owns that layer if it recurs.
 7. QStash's own dashboard/API has never been directly inspected — worth a
