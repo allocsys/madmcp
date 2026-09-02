@@ -235,6 +235,41 @@ describe("connectors/llm/router.js — providerChat", () => {
     await expect(providerChat(contents, { provider: "bai" })).rejects.toThrow("B.AI API error (503): overloaded");
   });
 
+  it("passes an explicit reasoningEffort straight through on the bai path (plan.md Section 25 fix)", async () => {
+    mockBaiChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "bai", maxOutputTokens: 4096, reasoningEffort: "low" });
+
+    expect(mockBaiChat).toHaveBeenCalledWith(
+      [{ role: "user", content: "adapted" }],
+      { tools: undefined, maxOutputTokens: 4096, reasoningEffort: "low" }
+    );
+  });
+
+  it("omits reasoningEffort on the bai path when the caller doesn't pass one", async () => {
+    mockBaiChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "bai" });
+
+    expect(mockBaiChat).toHaveBeenCalledWith(
+      [{ role: "user", content: "adapted" }],
+      { tools: undefined, maxOutputTokens: undefined, reasoningEffort: undefined }
+    );
+  });
+
+  it("never sends reasoningEffort to gemini/glm/groq (bai-only option)", async () => {
+    mockGeminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [{ text: "hi" }] }, finishReason: "STOP" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChat(contents, { provider: "gemini", reasoningEffort: "low" });
+    // geminiChat's call signature has no reasoningEffort field at all --
+    // confirms the option is silently dropped on this branch, not
+    // forwarded somewhere it isn't understood.
+    expect(mockGeminiChat).toHaveBeenCalledWith(contents, { tools: undefined, model: undefined });
+  });
+
   it("propagates a geminiChat failure without swallowing it", async () => {
     mockGeminiChat.mockRejectedValueOnce(new Error("Gemini API error (503): overloaded"));
     const contents = [{ role: "user", parts: [{ text: "hello" }] }];
