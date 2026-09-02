@@ -1064,3 +1064,102 @@ session doesn't re-open this as if it were still a gap.
 - `223d6b08-d2e1-4f23-8597-27fc48c594a3` -- left unresumed, per Section 13's
   own instruction.
 - `DEBUG_AGENT_WORKER` -- still ON.
+
+---
+
+## 15. Second live, on-demand reproduction of Section 11's output-generation-timeout hypothesis -- CONFIRMED, and Section 13's failure-callback fix observed working cleanly end-to-end (2026-09-02, follow-up session)
+
+Deliberately repeated Section 11's repro shape on demand: fresh async
+`delegate_agent({ provider: "bai", max_steps: 3 })`, same oversized/
+exhaustive-answer task pattern (full-repo architecture writeup: every
+connector file, every checkpoint schema field-by-field, a line-by-line
+`agent_worker.js`/`editor_worker.js` comparison, every `config.js` env
+var -- explicitly "be exhaustive"). Watched it live via a mix of MCP-side
+polling and direct Vercel log/error checks, rather than reconstructing it
+after the fact as Section 11/12 had to.
+
+**Run `124a76f8-caa6-4b02-87c7-51dbc315e7a9`:**
+
+- Step 1 (`f6dde9ff`, `02:21:50Z`): `github_get_file_tree` -- normal,
+  chained.
+- Step 2 (`51fda45e`, `02:21:59Z`): batched several `github_read_file`
+  calls (`config.js`, `agent_worker.js`, `editor_worker.js`, then three
+  checkpoint files). **`MAX_STEP_RESULT_CHARS` fired correctly** on the
+  last three (`agent_checkpoint.js`, `editor_checkpoint.js`,
+  `designer_checkpoint.js`), withholding their content with the
+  re-request-next-step message -- Section 10's input-side fix working
+  exactly as designed, live, again.
+- Step 3 (`0b8eeb04`, entered `02:22:36Z`, forced-final-answer since
+  `max_steps: 3` was reached): wrote its heartbeat, entered
+  `runInvestigation`, and never returned. Polled `get_runtime_errors`
+  repeatedly through the window rather than guessing at elapsed time from
+  the checkpoint's own "stalled" heuristic (which fires at ~120s of no
+  *chain* activity -- a different, earlier clock than the platform's
+  actual 300s kill point, and was NOT treated as evidence of a timeout by
+  itself this session).
+- **`02:27:36Z` (exactly 300s after the `02:22:36Z` entry):**
+  `get_runtime_errors` showed two fresh entries appear together:
+  - `Vercel Runtime Timeout Error: Task timed out after 300 seconds` --
+    `last` timestamp updated to `2026-09-02T02:22:36.000Z` (this specific
+    invocation), joining the same long-running error group Section 9
+    originally found (`first=2026-08-08`).
+  - `agent-worker-failure: runId 124a76f8-... dead-lettered via QStash
+    failureCallback ... on step 3` -- same `02:27:36Z` timestamp, i.e. the
+    failure callback fired essentially immediately once QStash's own
+    `retries: 0` budget was exhausted, not after any further delay.
+
+**Confirmed via a direct MCP-side poll immediately after:** `delegate_agent({
+resume_run_id: "124a76f8-..." })` (no `max_steps`, read-only) returned a
+definitive permanent-failure error --- "Investigation failed permanently
+... QStash exhausted its own delivery budget (retried ?/0) on step 3
+... platform-level execution timeout" --- not a "still running"/"stalled"
+ambiguous status. The checkpoint is cleanly finalized as `"failed"`.
+
+**What this confirms, beyond Section 11's original single occurrence:**
+
+1. **Section 11's output-generation-time hypothesis is now confirmed by a
+   second, deliberately-reproduced, live-watched occurrence** -- not just
+   the one retrospective case (`223d6b08`) it was originally inferred
+   from. Same mechanism: a forced-final-answer step with no more tool
+   calls available, asked to produce an exhaustive answer, runs output
+   generation for the full 300s with no early exit and gets hard-killed.
+   The existing input-side caps (`MAX_TOOL_CALLS_PER_STEP`,
+   `MAX_STEP_RESULT_CHARS`) correctly bounded steps 1-2 but have no
+   mechanism to bound step 3's generation time, exactly as Section 11
+   theorized.
+2. **Section 13's failure-callback fix worked cleanly, live, this time --
+   in sharp contrast to `223d6b08`'s behavior pre-fix.** `223d6b08`
+   (Section 12) sat at `status:"running"` indefinitely after its own 300s
+   timeout, with no further QStash redelivery and no error ever
+   finalizing it -- discovered only much later via a manual checkpoint
+   poll. `124a76f8` instead went from timeout to a cleanly finalized
+   `"failed"` checkpoint within the same second, entirely automatically,
+   with both the timeout and the dead-letter visible in
+   `get_runtime_errors` and a subsequent poll immediately reporting a
+   definitive permanent-failure error rather than ambiguous "stalled"
+   status. This is the real-world confirmation Section 10's own "next
+   steps" asked for ("the real-world test is whether ... stops recurring
+   for new runs" -- it didn't stop recurring, but the fix changed the
+   failure from silent-hang to clean-finalize, which was always the
+   actual goal of Section 13's fix, not preventing the timeout itself).
+
+**Explicitly NOT done this session:** no fix implemented for the
+underlying output-generation-time issue itself -- this section is
+additional confirming evidence for Section 11, not a resolution of it.
+`223d6b08` still not resumed. `DEBUG_AGENT_WORKER` still ON.
+
+**Next steps (supersedes/reaffirms Section 11's own, now with a second
+confirmed data point instead of one):**
+- Implement a fix candidate for the output-generation-time problem itself,
+  e.g. a tighter `maxOutputTokens` specifically on the forced-final-answer
+  call (distinct from the existing per-step input caps), or detecting an
+  unusually broad/exhaustive task description up front and steering the
+  model toward a bounded summary.
+- Consider whether the checkpoint's own "stalled" heuristic (~120s) should
+  be surfaced differently from an actual confirmed platform timeout --
+  this session treated the two as distinct signals (poll status vs.
+  `get_runtime_errors`) rather than conflating them, which is worth
+  keeping as the pattern for future investigation of this failure mode.
+- Section 11 items #2-#4 (less-exhaustive re-test to isolate output size as
+  the driving variable, token/generation-time breakdown for a timed-out
+  invocation) remain open and untouched.
