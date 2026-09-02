@@ -604,30 +604,52 @@ the limit of what black-box behavior alone can resolve.
      (https://github.com/allocsys/madmcp/pull/145), base `main`, head
      `test/lower-max-step-result-chars-270k`, squash-merged as commit
      `d023a5c`. `MAX_STEP_RESULT_CHARS = 270000` is now live on `main`.
-   - **NOT DONE: the live-timing validation the handoff called for (its
-     step 3/4), run before or after merge.** This session had no Vercel
-     log tooling available at all -- `tool_search` for runtime
-     logs/errors/deployment tooling returned nothing, a different gap
-     from the two prior sessions' blockers on this same investigation
-     (missing tool entirely vs. 403-permission-denied on a present tool).
-     The PR was merged anyway on explicit repo-owner instruction, citing
-     the same after-merge-test-order precedent already used (with
-     authorization) for both the 100k and 300k rollouts above -- not a
-     claim that 270000 is confirmed safe. **270000 remains an untested
-     value pending live validation** the same way 100000 was validated
-     (real `delegate_agent({provider:"bai"})` run forcing step 1's
-     aggregate payload past 270000 chars, actual Vercel `/api/agent-worker`
-     invocation timestamps pulled from runtime logs, gaps checked against
-     the 300s ceiling). **Next session: check whether Vercel log access
-     has been restored before attempting this** -- if still unavailable,
-     the fallback used earlier in this investigation (forcing the cap via
-     `delegate_agent` and reading the stall/dead-letter signal from the
-     tool's own error text, without independent timestamp confirmation)
-     is weaker evidence but better than nothing; flag which method was
-     used either way rather than presenting a QStash-inferred result as
-     equivalent to a real-timestamp one. If 270000 fails the same way
-     300000 did, fall back to the confirmed-safe 100000 floor and stop
-     iterating upward on this constant until there's a different way to
-     bound the outbound payload (e.g. compressing/summarizing large file
-     reads instead of just capping raw chars) -- per the original
-     handoff's own fallback instruction.
+   - **LIVE-TIMING VALIDATION NOW DONE (2026-09-02, same session as the
+     merge), CONFIRMED SAFE:** Vercel log access (`get_runtime_logs`,
+     `get_runtime_errors`) turned out to be available after all via a
+     differently-scoped tool search than the one that came up empty
+     earlier this session -- worth remembering for future sessions that
+     hit an apparent tool-access gap: retry the search before concluding
+     the tool genuinely isn't there.
+
+     Two independent live `delegate_agent({provider: "bai", max_steps: 3})`
+     runs were made, each batching 8 `github_read_file` calls (two
+     paginated reads of `agent_delegate.js` covering its full 167,939
+     chars, plus 6 other real repo files) with explicit `char_limit: 100000`
+     per call, aggregate ~305,672 chars -- comfortably past the 270000 cap
+     so it would genuinely engage, not just graze it (an earlier same-session
+     attempt at this test picked smaller files by mistake, landed at only
+     186,254 chars aggregate, and never tripped the cap at all -- a sizing
+     miss worth noting so a future session doesn't repeat it; the two runs
+     below are the corrected version).
+
+     - Run `9afeb4f4-ae64-40f3-b00c-50ad697473d3`: cap engaged as designed
+       (6/8 calls returned in full, 1 truncated mid-file, 1 withheld
+       entirely -- aggregate clamped at 270000). Real `/api/agent-worker`
+       invocation timestamps from Vercel runtime logs:
+       `afterStep=0` (executes the 8 batched reads): started 20:55:28
+       `afterStep=1` (**the at-risk call** -- absorbs the ~270k-char
+       step-1 payload into `providerChat`, executes step 2): started
+       20:55:47 -- **19s** after the prior invocation started.
+       `runInvestigation returned steps=2 failed=false`, `exit status=done`.
+     - Run `dcac8f6e-1f9e-489a-82fe-3f82e46a1c27` (second repro, same
+       methodology): cap engaged identically (5/8 full, 1 truncated, 2
+       withheld). Timestamps: `afterStep=0` started 21:00:00,
+       `afterStep=1` (at-risk call) started 21:00:19 -- **19s** again,
+       identical gap to the first run. `steps=2 failed=false`,
+       `exit status=done`.
+
+     Both runs: 19s gap, ~6.3% of Vercel's 300s ceiling -- same range as
+     the confirmed-safe 100000 validation (15-26s gaps). `get_runtime_errors`
+     (`since: 1h`) shows no new error groups from either run -- the only
+     entries present are the pre-existing `aa81ada5`/`e7cace87` timeout and
+     dead-letter records from the earlier confirmed-unsafe-300000 finding,
+     unchanged.
+
+     **Verdict: 270000 is CONFIRMED SAFE.** Two independent repro runs,
+     both with real Vercel timestamps (not inferred from QStash error
+     text), both landing at the same 19s gap, both comfortably clear of
+     the 300s ceiling, zero new runtime errors. This closes out the
+     live-timing validation the handoff's step 3/4 called for. No further
+     action needed on this constant unless future evidence surfaces a
+     problem at 270000 specifically.
