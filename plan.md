@@ -2092,8 +2092,8 @@ client.js`), not the agent-loop/prompt level Sections 16-24 all targeted:
    is a mechanical check on the API response shape (`finish_reason` +
    the reasoning/completion token ratio), not a prompt instruction the
    model can fail to follow -- it directly addresses why Sections 16-24's
-   五 rounds of SYSTEM NOTE/preamble wording changes kept produc­ing new
-   failure shapes instead of converging: the lever they were pulling
+   several rounds of SYSTEM NOTE/preamble wording changes kept producing
+   new failure shapes instead of converging: the lever they were pulling
    (prompt compliance) was never the actual mechanism (token-budget
    allocation inside one completion call).
 
