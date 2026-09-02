@@ -1148,6 +1148,43 @@ const FUNCTION_DECLARATIONS = [{
   functionDeclarations: FUNCTIONS.map(({ name, description, parameters }) => ({ name, description, parameters })),
 }];
 
+// Tool-call-leakage backstop (bai-only, plan.md Section 18/20 fix): on a
+// withholdTools turn (final step, stuck-loop force, or the verification
+// pass -- all cases where NO real function call is structurally possible),
+// the model can still emit ordinary text that IMITATES a function call
+// instead of giving a real plain-text answer. Observed live twice on bai's
+// forced-final step: run 6ea018d5 leaked XML-tag-shaped syntax
+// (`<github_read_file><params>...`), run ab8afaa8 leaked bracket-marker-
+// shaped syntax (`[Function call: github_read_file with ...]`). The
+// existing `finishReason === "MALFORMED_FUNCTION_CALL"` check (see the loop
+// below) does NOT catch this -- it only fires when the model returns no
+// text at all; both leaks above had non-empty `answer` text, so they took
+// the ordinary `if (answer) return finishRun(...)` path untouched.
+//
+// This is a mechanical, structural check (real FUNCTIONS[] names wrapped in
+// call-shaped syntax), not a generic "contains markup" heuristic -- a
+// legitimate answer that happens to show an XML example or a JSON snippet
+// unrelated to this file's own tool names should never trip it. Only
+// matches call-shaped wrappers (an XML tag, a "[Function call: ..."
+// marker, or a `"name": "..."` JSON shape) around a name that is ACTUALLY
+// one of this file's declared functions.
+const TOOL_CALL_LEAKAGE_PATTERNS = [
+  /<\/?\s*([a-zA-Z_][\w-]*)\b/g,                          // XML-tag-shaped: <github_read_file> or </params>
+  /\[\s*function\s*call\s*:?\s*([a-zA-Z_][\w-]*)/gi,       // bracket-shaped: [Function call: github_read_file ...]
+  /"(?:name|function)"\s*:\s*"([a-zA-Z_][\w-]*)"/gi,       // JSON-shaped: {"name": "github_read_file", ...}
+];
+
+function detectToolCallLeakage(text, knownFunctionNames) {
+  for (const pattern of TOOL_CALL_LEAKAGE_PATTERNS) {
+    pattern.lastIndex = 0;
+    let m;
+    while ((m = pattern.exec(text))) {
+      if (knownFunctionNames.has(m[1])) return m[1];
+    }
+  }
+  return null;
+}
+
 // SCOPE NOTE (2026-07-27): this file deliberately has NO web access (no
 // web_fetch, no Google Search grounding) -- that lives entirely in
 // connectors/exa/research_delegate.js, behind the separate delegate_research
@@ -1982,7 +2019,23 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // Strip internal LINE_QUOTE: markers before ever returning an answer
         // to a caller -- they're a parseable artifact for THIS loop's own
         // structural check, not something a caller asked for or should see.
-        return finishRun({ answer: stripLineQuoteMarkers(answer), steps: step, transcript, runId, task: effectiveTask });
+        const cleanedAnswer = stripLineQuoteMarkers(answer);
+        // Tool-call-leakage backstop (bai-only, see detectToolCallLeakage's
+        // comment above): only checked on a withholdTools turn (final step/
+        // stuck-loop/verification), the exact shape both observed leaks
+        // (6ea018d5, ab8afaa8) occurred on, and only for bai -- Gemini has
+        // never exhibited this and must not be affected by a bai-specific
+        // backstop.
+        if (applyOversizedStepCaps && withholdTools) {
+          const leakedToolName = detectToolCallLeakage(cleanedAnswer, FUNCTION_NAME_SET);
+          if (leakedToolName) {
+            return finishRun({
+              answer: `(The model attempted to invoke the "${leakedToolName}" tool as text on this turn -- no tools were available (see the SYSTEM NOTE reason above), so nothing was executed and no real answer was produced. This is a known failure mode on bai's forced-final step (plan.md Section 18/20) -- retry with a higher max_steps so a real tool-enabled step is available, or narrow the task. Raw (unusable) model output follows for reference:\n\n${cleanedAnswer})`,
+              steps: step, transcript, runId, task: effectiveTask, failed: true,
+            });
+          }
+        }
+        return finishRun({ answer: cleanedAnswer, steps: step, transcript, runId, task: effectiveTask });
       }
       if (!answer) {
         // MALFORMED_FUNCTION_CALL on a no-tools turn specifically means:
@@ -2318,7 +2371,8 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now." +
           (applyOversizedStepCaps
             ? " IMPORTANT: keep this answer SHORT -- a few concise paragraphs, not the full exhaustive format originally requested (a per-file/per-item breakdown, a complete table, a line-by-line comparison, or similar). " +
-              "If you do not have the steps left to actually produce that, do NOT attempt it anyway: a long attempt at an exhaustive answer risks exceeding this platform's own execution time limit and being cut off with nothing delivered at all, which is strictly worse than a short, honest, incomplete one. Briefly summarize what you found, explicitly list what's missing or unfinished, and stop there."
+              "If you do not have the steps left to actually produce that, do NOT attempt it anyway: a long attempt at an exhaustive answer risks exceeding this platform's own execution time limit and being cut off with nothing delivered at all, which is strictly worse than a short, honest, incomplete one. Briefly summarize what you found, explicitly list what's missing or unfinished, and stop there. " +
+              "SEPARATELY: do not attempt to invoke a tool in ANY form on this turn -- no XML-style tags (e.g. <tool_name>...), no bracket-style markers (e.g. [Function call: ...]), no JSON call objects, and no other tool-call-shaped syntax of any kind. No call will execute no matter how it is phrased or formatted; write ONLY your plain-text answer."
             : "")
         : "";
       responseParts.push({
