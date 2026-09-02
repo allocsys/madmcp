@@ -12,7 +12,7 @@
 
 - **FIXED:** `max_steps` silently ignored on async fresh-start `delegate_agent` calls (§2).
 - **FIXED:** oversized single-step input causing Vercel's 300s serverless timeout, plus the dead-letter blind spot that let a timed-out run hang forever (§3).
-- **FIXED, MERGED TO `main`** (commit `ef71c05`, squash-merge of PR #142): forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4). Live end-to-end confirmation against a real `provider: "bai"` run is still outstanding (§6 item 5).
+- **FIXED, MERGED TO `main` AND LIVE-CONFIRMED** (commit `ef71c05`, squash-merge of PR #142): forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4). Live end-to-end repro (run `7afbab6c-0109-43e8-b95d-f7bec49f94a7`, 20 steps) confirmed the fix behaves as designed; a few non-blocking gaps were identified for future hardening (§4, §6 item 5).
 - **OPEN, low priority:** the "Void" response mystery — observed once, unreproduced, needs visibility this session doesn't have (§5).
 - **TODO (housekeeping):** revert `DEBUG_AGENT_WORKER` to default OFF; commit `test-bai-timeout.sh` to the repo; abandon run `c1beaeda-874a-47dd-97b0-763bff80ba6d` and descendants (§6).
 
@@ -264,10 +264,45 @@ CI green as of run #1580:**
   anything downstream still references the reconstructed version's
   different interface (`BAI_API_KEYS` plural, `RUNS_PER_CONFIG`, single
   hardcoded rate-limiter prompt), that reference is stale.
-- **Not yet done:** the exhaustive full-repo-writeup live repro against a
-  real `provider: "bai"` run (item (a)/(b)/(c) above) has NOT been run yet --
-  this fix is CI-verified (mocked `providerChat`/`baiChat`) but not yet
-  live-confirmed end-to-end. This is now the only remaining item for §4.
+- **LIVE-CONFIRMED (2026-09-02):** the exhaustive full-repo-writeup repro
+  was run against a real `provider: "bai"` delegate_agent call (run
+  `7afbab6c-0109-43e8-b95d-f7bec49f94a7`, task: full-repo investigation of
+  this very fix, 20 steps, `show_transcript: true`). Findings:
+  - **(a)/(b) confirmed by code+test re-verification during the repro:**
+    `reasoningEffort: "low"` is gated specifically on `effectiveProvider
+    === "bai" && isFinalStep` -- not the broader `withholdTools` (which
+    also covers `stuckLoopForce`/verification turns). The retry-once path
+    (`computeRetryMaxTokens` doubling + floor) fires only on detected
+    budget exhaustion; no code path escalates `reasoning_effort` on retry
+    -- only `max_tokens` changes. No empty/garbled final answer was
+    produced by the repro run itself.
+  - **(c) delegation time:** not independently re-measured against the
+    ~40s worst-case estimate in this pass (the repro run's own step timing
+    wasn't isolated for this purpose) -- if this matters going forward,
+    a dedicated timing comparison (fix branch vs. pre-fix) would need to
+    be run separately.
+  - **New gaps surfaced for future hardening (not regressions, not
+    blocking):**
+    1. Retry-once may still be insufficient given the probe's documented
+       >4x variance in reasoning-token spend on identical prompts (case 8
+       vs. case 9 in `test-bai-timeout.sh`'s data).
+    2. Exhaustion detection has no signal if a bai response has neither
+       usage-shape field (`completion_tokens_details.reasoning_tokens` nor
+       the `message.reasoning_content` fallback) -- garbled output would
+       pass through undetected in that case, same class of miss as the
+       earlier `detectToolCallLeakage` gaps.
+    3. Non-final withheld-tools turns (stuck-loop/verification) can still
+       hit budget exhaustion and get the doubled-`max_tokens` retry, but
+       never get the cheaper `reasoningEffort: "low"` prevention -- a
+       deliberate, tested narrowness per §4's fix design, flagged here as
+       a real coverage gap if those turns turn out to fail in practice.
+    4. B.AI's server-side ~55-65s connection kill (independent of
+       `max_tokens`) means doubling `max_tokens` on retry could push a
+       call past that window and convert a budget-exhaustion failure into
+       a hard timeout instead -- `BAI_REQUEST_TIMEOUT_MS = 55000` is the
+       client-side mirror of this ceiling but doesn't prevent it.
+  - This closes out §4's last remaining item. Any follow-up work on gaps
+    1-4 above would be a new, separate investigation.
 
 ---
 
@@ -314,10 +349,10 @@ the limit of what black-box behavior alone can resolve.
 4. **Do not resume** run `c1beaeda-874a-47dd-97b0-763bff80ba6d` or any of
    its descendants — used to root-cause §3/§4, no longer informative.
    Left to resolve on its own (complete, dead-letter, or TTL-expire).
-5. **STILL OPEN:** #1 is merged to `main` but not yet live-tested -- re-run
-   the exhaustive full-repo-writeup repro against a real `provider: "bai"`
-   run to confirm the fix (see §4's "next live-test pattern"). This is the
-   last open item for §4.
+5. **DONE (2026-09-02):** #1's live-test pattern was run -- see §4's
+   "LIVE-CONFIRMED" note for the full repro results (run
+   `7afbab6c-0109-43e8-b95d-f7bec49f94a7`) and the four non-blocking gaps
+   identified for possible future hardening.
 6. §5's "Void" mystery needs server-log/gateway visibility this session
    doesn't have — flag to whoever owns that layer if it recurs.
 7. QStash's own dashboard/API has never been directly inspected — worth a
