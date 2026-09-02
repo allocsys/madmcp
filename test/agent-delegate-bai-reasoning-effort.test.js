@@ -24,6 +24,7 @@ function makeFakeRedis() {
 const fakeRedis = makeFakeRedis();
 vi.mock("../connectors/shared/cooldown.js", () => ({
   getRedis: () => fakeRedis,
+  isRedisConfigured: () => true,
 }));
 
 describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort gating (plan.md Section 4/25 fix)", () => {
