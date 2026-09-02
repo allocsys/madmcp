@@ -68,6 +68,33 @@ function makeReqRes({ body, signature = "sig", rawBody, upstashRetried } = {}) {
   return { req, res };
 }
 
+// Builds a fake request/response pair shaped like QStash's failure-callback
+// POST body (plan.md Section 13) -- distinct from makeReqRes above, which
+// shapes the ORIGINAL {runId, afterStep, retryCount} worker-invocation body.
+// The failure callback's own top-level fields (retried/maxRetries) are
+// QStash's own bookkeeping; the actual {runId, afterStep} this app cares
+// about is base64-encoded under `sourceBody`, mirroring exactly what QStash
+// sends (see handleAgentWorkerFailure's own header comment).
+function makeFailureReqRes({ sourceBody, retried = 3, maxRetries = 3, signature = "sig", rawSourceBody } = {}) {
+  const body = {
+    retried,
+    maxRetries,
+    sourceBody: rawSourceBody !== undefined ? rawSourceBody : Buffer.from(JSON.stringify(sourceBody || {})).toString("base64"),
+  };
+  const req = {
+    body,
+    rawBody: Buffer.from(JSON.stringify(body)),
+    get: (name) => (name === "Upstash-Signature" ? signature : undefined),
+  };
+  const res = {
+    statusCode: null,
+    jsonBody: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.jsonBody = body; return this; },
+  };
+  return { req, res };
+}
+
 describe("agent_worker.js — handleAgentWorker", () => {
   let handleAgentWorker, handleAgentWorkerFailure, seedRun, loadCheckpoint;
 
