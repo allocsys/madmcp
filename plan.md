@@ -1287,7 +1287,7 @@ same exhaustive full-repo-writeup task, word-for-word.
 
 **Run `3f776358-fd16-4787-ad6e-75015580a96d`:** completed in exactly 3
 steps, no stall, no timeout. Step 3 (the forced-final-answer step, same
-shape that ran the full 300s and died on both `223d6b08` and `124a76f8`)
+shape that ran the full 300s and died on both the Section 11/12 run and `124a76f8`)
 produced a short answer that explicitly named its own incompleteness
 before diving in:
 
@@ -1320,7 +1320,7 @@ the next step, not a conclusion.
 - If a future repeat DOES time out again despite the fix, that's the
   signal to stop treating the prompt instruction as sufficient on its own
   and implement the `maxOutputTokens` cap next.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+- The Section 11/12 run still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
 
 ---
