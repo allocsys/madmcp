@@ -690,3 +690,56 @@ the limit of what black-box behavior alone can resolve.
      commit updates that comment to match, rather than leaving the
      in-repo documentation and this plan's own verdict disagreeing with
      each other.
+
+     **NEW CAVEAT FOUND (2026-09-02, same session), via a real delegated
+     code-review task -- not a repro-methodology artifact, a genuine gap
+     in the guardrail:** a `delegate_agent({provider: "bai"})` run was
+     given an open-ended task to critically review the oversized-step
+     guardrails for hallucination risk, partial-info-loss, and
+     compaction-interaction caveats (run `9c402073-94ee-4559-b401-0a1f22c74254`).
+     Rather than batching calls, bai chose to read the same 167,939-char
+     `agent_delegate.js` file sequentially across 3 separate steps
+     (30000 + 100000 + 37939 chars -- each individual step's own aggregate
+     comfortably under the 270000 per-step cap, so the cap never engaged
+     even once). **Step 4 then hard-stalled and dead-lettered anyway:**
+     confirmed via real Vercel timestamps --
+     `Vercel Runtime Timeout Error: Task timed out after 300 seconds`,
+     `last=2026-09-02T21:44:18Z`, followed by
+     `agent-worker-failure: runId 9c402073... dead-lettered ... on step 4`,
+     `21:49:19Z` -- the same ~5min timeout-then-dead-letter gap pattern as
+     the earlier confirmed-unsafe-300000 finding, but on a run that never
+     tripped `MAX_STEP_RESULT_CHARS` at all.
+
+     **Root cause (code-level, not yet independently re-verified against a
+     second repro -- flagging confidence honestly):** `MAX_STEP_RESULT_CHARS`
+     bounds a single step's own aggregate tool-result payload, but does
+     nothing to bound the CUMULATIVE size of `contents` across multiple
+     steps. By step 4, all three of the prior steps' large chunks (the
+     full 167,939-char file, spread across steps 1-3) were still sitting
+     in `contents` in full -- `compactHistoryInPlace`'s
+     `fullDetailSteps = HISTORY_FULL_DETAIL_STEPS = 3` window means a
+     turn only becomes eligible for compaction once
+     `stepIndex <= (currentStep - 1) - fullDetailSteps`; at `currentStep=4`
+     that's `stepIndex <= 0`, so steps 1-3 (`stepIndex` 1-3) were all still
+     protected as "recent" and none had compacted yet. The step-4 outbound
+     `providerChat` call therefore likely carried a payload comparable in
+     size to a single over-cap step, via a path the per-step cap has no
+     visibility into: **slow sequential pagination of one large file
+     evades `MAX_STEP_RESULT_CHARS` exactly as effectively as batching
+     many calls into one step would trigger it -- the guardrail bounds
+     fan-out-per-step, not total-context-growth.**
+
+     **Not yet done:** a second repro to confirm this is reproducible (not
+     a one-off) and isolate whether it's specifically the pagination
+     pattern or just "any run that accumulates ~168k+ chars of
+     full-detail history by step 4" regardless of how it got there; a
+     look at whether `HISTORY_FULL_DETAIL_STEPS`/`COMPACTION_CHAR_THRESHOLD`
+     tuning (currently 3 steps / 500 chars) could close this gap without
+     hurting legitimate use of pagination; the original delegated review
+     task itself (hallucination/partial-info-loss/compaction-interaction
+     analysis) never completed -- run `9c402073...` is still sitting
+     dead-lettered, unresumed as of this edit. **Recommend a follow-up
+     session resume that run explicitly (`resume_run_id` +
+     `max_steps`) to get its actual analysis, and treat this compaction-
+     timing gap as a new open item distinct from the MAX_STEP_RESULT_CHARS
+     value question §6 item 9 already closed out above.**
