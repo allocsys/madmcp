@@ -535,3 +535,43 @@ the limit of what black-box behavior alone can resolve.
      tests against production traffic until Vercel log access is
      restored and the failure can be root-caused against real
      timestamps instead of an inferred QStash error string.**
+
+   **RESOLVED (2026-09-02, next session): Vercel log access restored, failure ROOT-CAUSED AND CONFIRMED REAL -- NOT SAFE, back off recommended.**
+
+   This session's toolset had working `get_runtime_logs`/`get_runtime_errors`
+   access against `prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh` / `team_LyeppGZMAygFDwBK8CuNZOWx`
+   -- no 403, first call succeeded. `get_runtime_errors` (since: "1h") returned:
+
+   - `Vercel Runtime Timeout Error: Task timed out after 300 seconds` --
+     count=2, route `/`, `first=2026-08-08T11:54:37Z`,
+     `last=2026-09-02T19:53:27Z`.
+   - `agent-worker-failure: runId e7cace87-72c1-453c-84d6-230f0bf2063a
+     dead-lettered via QStash failureCallback (retried=undefined,
+     maxRetries=0) on step 2` -- count=1, `2026-09-02T19:56:10Z`.
+
+   The timeout error's `last` timestamp (19:53:27) lands ~3 minutes before
+   the dead-letter callback fired for run `e7cace87` (19:56:10) -- the gap
+   is consistent with QStash's own retry/give-up delay after the
+   underlying invocation was already killed by Vercel's 300s ceiling, not
+   a coincidence. **This confirms the prior session's cautious read was
+   correct and not overcautious: run `e7cace87`'s step-2 stall genuinely
+   was Vercel's hard 300-second timeout**, not merely QStash's own
+   inferred error text as the only evidence.
+
+   A second, smaller live run this session (`d926e567-a406-4379-8ce8-a57f4169137d`,
+   3 files, explicit `char_limit: 100000` each) completed cleanly in 2
+   steps with no issue -- but its aggregate payload (166,307 chars) never
+   actually cleared the 300000 cap, so it is **not** evidence of safety at
+   300k; it simply didn't test the boundary. No further live attempts to
+   clear the 300000 cap were made this session, since real, timestamped
+   confirmation of a genuine 300s production timeout at that cap already
+   exists above -- repeating the test against production traffic to
+   "re-confirm" a failure already confirmed by real logs isn't warranted.
+
+   **Verdict: 300000 is CONFIRMED UNSAFE, not merely unconfirmed.**
+   Recommend a follow-up session (or this repo's owner) revert
+   `MAX_STEP_RESULT_CHARS` to 200000 (untested but smaller than the
+   failure point and above the confirmed-safe 100000 floor) or back to
+   the confirmed-safe 100000, and live-test 200000 the same way the 100k
+   raise was tested before calling it safe. This edit only updates
+   `plan.md`'s record -- no code change was made this session.
