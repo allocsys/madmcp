@@ -303,3 +303,73 @@ unrelated to Void. #4 (re-test bai with the fix): confirmed working via
 the run above. #5 (Void investigation, Section 5): remains genuinely
 open -- the only unresolved item, and it needs access this session
 doesn't have (server logs / the tool-calling layer that emits "Void").
+
+---
+
+## 7. Stall reproduced on demand with an oversized task -- new hypothesis for Section 5 (unconfirmed)
+
+Deliberately started a fresh async `delegate_agent({ provider: "bai",
+max_steps: 3 })` run (`run_id: c1beaeda-874a-47dd-97b0-763bff80ba6d`) with
+a single huge, sprawling task (full-repo architecture write-up: every
+connector, every checkpoint schema, line-by-line worker comparison, every
+config.js env var) specifically to see how an oversized step interacts
+with the step-budget/worker-chain machinery.
+
+**Observed:**
+- Step 1: `github_get_file_tree` -- normal, single call.
+- Step 2: the model batched **13 separate `github_read_file` calls into
+  one step**, including two calls that hit the 30,000-char truncation
+  ceiling (`agent_delegate.js` at 148,522 total chars, `editor_delegate.js`
+  at 37,360 total chars).
+- Step 3 never happened. Polling ~5 minutes later showed the checkpoint
+  stuck at "2 steps done," 279s since last activity -- the same
+  "stalled, worker chain may have broken" status `agent_tools.js` reports
+  when `lastStepAt`/`stepStartedAt` goes stale.
+
+**Why this is a meaningfully different situation than Section 5:** Section
+5's stall (`d303f6a8`) was observed once, after the fact, with no way to
+reproduce it. This one was produced on demand, by a specific and
+replicable input shape (one step with an unusually large number of
+batched tool calls / unusually large combined result payload). That's a
+concrete, testable variable Section 5 never had.
+
+**New hypothesis (UNCONFIRMED, needs log evidence):** an oversized step --
+many tool calls and/or large truncated file contents accumulated into a
+single step's transcript/resultCache -- produces an unusually large
+checkpoint payload at `saveState`/`saveCheckpoint` time. This could fail
+or silently degrade in at least two places: (a) the Redis checkpoint write
+itself, if the serialized payload approaches a size limit, or (b) the
+subsequent QStash re-chain `publishAgentStep` call in `agent_worker.js`,
+which already has a known silent-failure path (`step-ok-rechain-failed`)
+that leaves the checkpoint validly "running" with no worker actually
+driving it -- exactly the symptom observed here and in Section 5's
+original run. This would mean oversized steps are a plausible **trigger**
+for the same failure mode Section 5 could only theorize about abstractly.
+
+**Explicitly NOT confirmed:** we have not inspected checkpoint payload
+size, Redis error logs, or QStash delivery logs for this run. The
+correlation (huge step -> stall) is suggestive, not proven -- it could
+equally be coincidental timing, an unrelated bai-side issue, or something
+else entirely. Do not treat this as a resolved root cause.
+
+**Action taken:** flipped `DEBUG_AGENT_WORKER` to default ON in
+`config.js` (previously default OFF, per Section 6's finding that it had
+been turned off after an earlier, unrelated stall was diagnosed) so that
+if this stall pattern recurs -- especially on another oversized-step run
+-- the per-invocation entry/exit logs in `agent_worker.js` are captured
+automatically rather than requiring a manual env var flip after the fact.
+Revert to default OFF once this hypothesis is confirmed or ruled out, per
+the same reasoning `config.js`'s own comment gives for why it was
+originally turned off (log volume stops earning its keep once diagnosed).
+
+**Next steps for this thread:**
+- If a future run stalls the same way, check `DEBUG_AGENT_WORKER` logs for
+  `step-ok-rechain-failed` specifically correlated with an oversized
+  preceding step.
+- Consider adding a checkpoint payload-size log line (bytes) at
+  `saveCheckpoint` time regardless of DEBUG_AGENT_WORKER, since that's the
+  one number that would most directly confirm or kill this hypothesis.
+- Try resuming the stalled run above (`c1beaeda-874a-47dd-97b0-763bff80ba6d`)
+  with an explicit `max_steps` to see whether it recovers synchronously
+  (per `agent_tools.js`'s existing stale-checkpoint fallback) -- not yet
+  attempted this session.
