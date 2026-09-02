@@ -2074,14 +2074,28 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // test). Surface the actual cause instead of just the raw enum
         // value, since "try a higher max_steps" is the fix and the caller
         // has no way to infer that from "MALFORMED_FUNCTION_CALL" alone.
-        const starvationNote = withholdTools && candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+        const starvationNote = withholdTools
           ? (isFinalStep
-              ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${effectiveOverallMaxSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+              ? (candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+                  ? ` This was the final allowed step, which never includes tools (so the model can only answer in plain text here) -- but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. This almost always means the task genuinely requires at least one tool call and max_steps (${effectiveOverallMaxSteps}) left no tool-enabled steps to make it in. Retry with a higher max_steps (at least 2, ideally the default of 6 for anything non-trivial).`
+                  : ` This was the final allowed step (no tools available), and the model stopped with an empty response instead of a real answer -- no fabricated/garbled output, but also no usable content. This means max_steps (${effectiveOverallMaxSteps}) was not enough room for the model to actually finish the task, and it gave up rather than attempting a rushed or invented answer. Retry with a higher max_steps, or narrow the task so it fits within the current budget.`)
               : pendingVerification
-              ? ` This was the verification pass (no tools offered on purpose -- see VERIFICATION_PROMPT), but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The draft answer from the step before this one was never returned to the caller as a result -- treat this run as having produced no usable answer, and consider retrying with a higher max_steps in case the verification turn simply needed more room.`
-              : ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls (same function + arguments already tried this run) -- fix #4's stuck-loop guard forces a text-only answer the same way the final step does, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`)
+              ? (candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+                  ? ` This was the verification pass (no tools offered on purpose -- see VERIFICATION_PROMPT), but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The draft answer from the step before this one was never returned to the caller as a result -- treat this run as having produced no usable answer, and consider retrying with a higher max_steps in case the verification turn simply needed more room.`
+                  : ` This was the verification pass (no tools offered on purpose), and the model stopped with an empty response rather than a corrected answer. The draft answer from the step before this one was never returned to the caller -- treat this run as having produced no usable answer, and consider retrying with a higher max_steps.`)
+              : (candidate.finishReason === "MALFORMED_FUNCTION_CALL"
+                  ? ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls (same function + arguments already tried this run) -- fix #4's stuck-loop guard forces a text-only answer the same way the final step does, but the model attempted a function call anyway, which Gemini rejects as malformed when no tools are available. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`
+                  : ` This step had no tools available because ${consecutiveAllRepeatSteps} consecutive steps consisted entirely of repeat calls, and the model stopped with an empty response instead of an answer. The task likely needs to be narrowed or rephrased so it doesn't require repeating the same information-gathering calls.`))
           : "";
-        return finishRun({ answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask });
+        // Explicitly failed: an empty/no-answer result is NOT a real
+        // completion regardless of finishReason -- finishRun defaults
+        // failed to false unless overridden, which previously let a run
+        // that produced literally no usable content (confirmed live,
+        // 2026-09-02, run 18ed8a96: finishReason "stop", empty text, no
+        // timeout, no leakage) get recorded and returned as a success. An
+        // honest empty answer is preferable to fabricated/garbled output,
+        // but it is still not a result the caller should treat as done.
+        return finishRun({ answer: `(Gemini stopped without a final answer -- finishReason: ${candidate.finishReason || "unknown"})${starvationNote}`, steps: step, transcript, runId, task: effectiveTask, failed: true });
       }
       return finishRun({ answer, steps: step, transcript, runId, task: effectiveTask });
     }
