@@ -989,3 +989,92 @@ regardless of task size.
 (the default) for `delegate_editor` tasks. `delegate_agent`'s bai path
 remains separately confirmed reliable per §1 and is not implicated by this
 finding -- this is specific to the editor tool's bai integration.
+
+---
+
+**UPDATE (2026-09-03, next session): "bai fabricates everything" ruled
+OUT for the read calls -- all 4 claimed `read_file` reads confirmed real
+via blob-SHA verification. New, code-grounded hypothesis for the actual
+stall mechanism.**
+
+**SHA verification (settles this session's open item #6 above):** all
+four files bai claimed to read in run 4
+(`c27392d3-577f-4831-a97c-ab269b598604`) were fetched at their exact
+content from `test/bai-editor-diagnostic-logging` (branch since deleted;
+re-fetched via `get_file_at_commit` at `8801a0a` once the branch ref
+stopped resolving) and hashed locally with `git hash-object`:
+
+| file | reported prefix | computed SHA | match |
+|---|---|---|---|
+| `connectors/bai/client.js` | `0f79e593...` | `0f79e593acb661bb93935d35004a431c4dd65e71` | ✅ |
+| `connectors/gemini/agent_worker.js` | `b372314d...` | `b372314d0e586a5564caacd40d7ea86c68680e4e` | ✅ |
+| `test/bai-client.test.js` | `a2100baf...` | `a2100bafc074d7027bfd6ded6096ebe4852a1d5a` | ✅ |
+| `test/agent-worker.test.js` | `9dd7636f...` | (verified this session) | ✅ |
+
+All four match. **The "bai never made real tool calls" theory is now
+fully ruled out.** bai's `read_file` calls were genuine; the open question
+is narrowed to why it never proceeds to `write_file`, and why
+`show_transcript` didn't surface a transcript.
+
+**New hypothesis for the write_file gap, found via direct code reading
+(not yet confirmed against live `usage`/`finish_reason` data -- flagging
+confidence honestly):**
+
+`editor_delegate.js` never passes `reasoningEffort` OR `maxOutputTokens`
+to `providerChat` on ANY step (re-confirmed by reading the file in full
+this session) -- unlike `agent_delegate.js`, which sets
+`reasoningEffort: "low"` specifically for bai's forced-final step (§4).
+With `maxOutputTokens` unset, `router.js`'s bai branch sends no
+`max_tokens` at all, so B.AI's own default applies -- **65536** for
+GLM-5.3-Flash, per `config.js`'s comment on `BAI_API_KEYS`.
+
+The suspected bug is in `computeRetryMaxTokens()`
+(`connectors/bai/client.js`):
+
+```js
+function computeRetryMaxTokens(originalMaxTokens) {
+  if (typeof originalMaxTokens === "number" && originalMaxTokens > 0) {
+    return Math.max(originalMaxTokens * 2, RETRY_MIN_MAX_TOKENS);
+  }
+  return RETRY_MIN_MAX_TOKENS; // = 4096
+}
+```
+
+When the caller never set `maxOutputTokens` (exactly `editor_delegate.js`'s
+case), `originalMaxTokens` is `undefined`, so this returns the **4096
+floor** -- but the budget that was actually just exhausted was B.AI's
+implicit **65536** default, not 4096. So for any caller that omits
+`maxOutputTokens`, the "retry with a larger budget" path actually retries
+with a budget **~16x smaller** than the one that just failed. That retry
+is then near-guaranteed to hit `finish_reason: "length"` again, fast and
+hard-truncated -- and since `baiChat` retries exactly once and
+unconditionally accepts whatever the retry returns as final, whatever
+truncated/garbled text survives becomes `choice.message.content`, with no
+`tool_calls` (generation never got far enough to encode one).
+
+This would explain the two inconsistent, seemingly-fabricated excuses
+from §8's original 4 runs (["tool budget... expired", "tool note excluded
+function calls"](#)) as truncated-reasoning artifacts rather than the
+model accurately describing a real constraint -- and matches
+`EDITOR_DEFAULT_STEPS = 15` (confirmed in `config.js`), which rules out a
+literal step-budget explanation for run 1's stall at step 2.
+
+**Why `agent_delegate.js` doesn't hit this:** its `reasoningEffort: "low"`
+on bai's step sharply reduces how often the 90%-reasoning-ratio exhaustion
+condition triggers in the first place, so `computeRetryMaxTokens`'s
+undefined-floor bug rarely gets exercised there even though the same code
+path exists for it too.
+
+**Not yet confirmed:** no live `usage`/`finish_reason`/`reasoning_tokens`
+data from an actual `delegate_editor(provider: "bai")` stall has been
+pulled yet -- this is a hypothesis from static code reading, consistent
+with all observed symptoms but not yet verified against a real captured
+response. §7's bai diagnostic logging (merged, PR #146) should make this
+directly checkable via Vercel logs on the next live repro.
+
+**Next step (in progress, this session):** live-test
+`delegate_editor(provider: "bai")` again with `show_transcript: true` and
+pull Vercel runtime logs for the run, specifically looking for the
+`bai: response finish_reason=... reasoning_tokens=... completion_tokens=...`
+lines §7's logging work added, to confirm or rule out the
+`computeRetryMaxTokens` theory directly.
