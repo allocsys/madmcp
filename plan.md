@@ -890,15 +890,46 @@ own checkpoint) or has quietly finished/failed without a clean log trail,
 and doesn't require guessing at log-classification semantics. This is the
 most direct next step to actually resolve item #1.
 
+**RESOLVED via direct checkpoint poll:** called `delegate_agent({
+  resume_run_id: "223d6b08-d2e1-4f23-8597-27fc48c594a3" })` with no
+`max_steps` (guaranteed read-only per the tool's own poll-vs-push
+contract). Response: **"Investigation appears stalled ... 2 step(s)
+completed, no activity in 388s (the background worker chain may have
+broken)."**
+
+This independently confirms the second explanation above and rules out
+the first: it is NOT a log-classification artifact. The checkpoint itself
+-- read straight from the MCP layer, not Vercel logs -- shows the run
+stuck at 2 steps done with no forward progress since the `01:22:45Z`
+redelivery attempt. That redelivery (`8d8b49e6`) entered, wrote its
+heartbeat, and then never advanced the checkpoint, never errored visibly,
+and was never followed by any further QStash redelivery. This is a live,
+confirmed instance of the dead-letter blind spot Section 9 identified:
+a hard platform timeout kills the function before this repo's own
+`retryCount` can increment, and here QStash's own redelivery mechanism
+also appears to have stopped after one attempt -- with nothing (neither
+this repo's `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` check nor an external
+error) ever finalizing the checkpoint as failed. The run will sit in this
+state indefinitely unless manually pushed forward.
+
 **Next steps:**
-- Poll/resume `223d6b08-d2e1-4f23-8597-27fc48c594a3` via the
-  `delegate_agent` MCP tool (not logs) to get its checkpoint status
-  directly -- this resolves the ambiguity above without depending on log
-  capture gaps.
-- If the checkpoint shows it's still "running" with `stepsDone=2` and no
-  activity since `01:22:45Z`, that's a live instance of a run stuck with
-  zero further redelivery and zero surfaced error -- report it as such
-  rather than assuming either success or a repeat timeout.
+- Do not assume this is unique to this run -- any future oversized-task
+  test that hits the 300s ceiling on its forced-final-answer step should
+  be checked the same way (direct checkpoint poll, not just Vercel logs)
+  to see whether it also stalls silently after one redelivery rather than
+  dead-lettering or retrying further.
+- This strengthens the case for Section 9's proposed fix (inspecting
+  QStash's own delivery-attempt count/headers so a stuck run can be
+  recognized and dead-lettered even when this repo's own `retryCount`
+  never gets the chance to increment) -- worth prioritizing given this is
+  now observed live, not just theorized.
 - Items #2-#4 from Section 11 (less-exhaustive re-test to isolate
   output-size, token/generation-time breakdown) remain open and untouched
   this session.
+- This specific run (`223d6b08-d2e1-4f23-8597-27fc48c594a3`) could be
+  manually pushed forward with an explicit `max_steps` on a resume call
+  to see whether the forced-final-answer step succeeds, times out again,
+  or reproduces something new -- not attempted this session; flagging as
+  an option rather than doing it unprompted, since Section 9 previously
+  cautioned against blind resumes of a run whose mechanism is already
+  understood.
