@@ -1192,7 +1192,7 @@ const TOOL_CALL_LEAKAGE_PATTERNS = [
   /"(?:name|function)"\s*:\s*"([a-zA-Z_][\w\s-]*?)"/gi,                           // JSON-shaped: {"name": "github_read_file", ...}
 ];
 
-function detectToolCallLeakage(text, knownFunctionNames) {
+export function detectToolCallLeakage(text, knownFunctionNames) {
   for (const pattern of TOOL_CALL_LEAKAGE_PATTERNS) {
     pattern.lastIndex = 0;
     let m;
