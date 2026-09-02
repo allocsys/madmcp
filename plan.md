@@ -409,6 +409,75 @@ the limit of what black-box behavior alone can resolve.
    on the true function duration) are ~5–9% of Vercel's 300s hard ceiling.
    `get_runtime_errors` for the same window: zero errors.
 
-   **Verdict: comfortably clear.** No revert needed. This closes out §6
-   item 9 — the 100000 cap is confirmed-safe against the original §3 risk,
-   not just passing on mocked unit tests.
+   **Verdict: comfortably clear.** No revert needed. This closed out §6
+   item 9's original scope — the 100000 cap is confirmed-safe against the
+   original §3 risk, not just passing on mocked unit tests.
+
+   **FOLLOW-UP (2026-09-02), 100000 -> 300000, IN PROGRESS / BLOCKED:**
+   Handoff instructions asked for a further raise to 300000, live-tested
+   *before* merge this time (the 100k rollout above was tested after merge,
+   which the handoff flagged as the wrong order).
+
+   - **Code change:** `MAX_STEP_RESULT_CHARS` 100000 -> 300000 in
+     `connectors/gemini/agent_delegate.js`, branch
+     `test/raise-max-step-result-chars-300k`, commit `80da8b7`.
+   - **Test-fixture bug found and fixed (two attempts):** the handoff
+     assumed `test/agent-oversized-step-cap.test.js` needed no changes
+     since it imports `MAX_STEP_RESULT_CHARS` dynamically -- true for the
+     *cap value*, but the fixture's ability to produce enough aggregate
+     payload to actually trip that cap does NOT scale automatically.
+     - First CI run (#1588) failed outright: pushed the code change before
+       updating the test file at all.
+     - First fix attempt (commit `b422b3c`, bumping mock file content from
+       40,000 to 90,000 chars) was itself wrong and still failed CI (run
+       #1589: `expected 150810 to be greater than 299000`). Root cause:
+       the test's mocked `github_read_file` calls carried no explicit
+       `char_limit` in their args, so `sliceFileContentForModel`'s
+       no-offset/no-limit branch silently capped every call at its own
+       hardcoded 30,000-char default regardless of how large the
+       underlying mock content was -- 5 calls x ~30,150 chars (30000 +
+       header) = ~150,810, matching the CI failure exactly, well under a
+       300,000 cap no matter what the raw mock size is.
+     - Real fix (commit `39a0614`): each call's args now explicitly pass
+       `char_limit: PER_CALL_CHAR_LIMIT` (100000 -- `sliceFileContentForModel`'s
+       own ceiling via `Math.min(char_limit, 100000)`, so this is the most
+       any single call can ever return). Mock content raised to 150,000
+       chars/file so it's never itself the limiting factor. Added a
+       fail-loud guard (`callCount * PER_CALL_CHAR_LIMIT` must clear
+       `MAX_STEP_RESULT_CHARS * 1.2`) so a future cap raise that outgrows
+       what `(MAX_TOOL_CALLS_PER_STEP - 1) * 100000` chars can produce
+       throws a clear error instead of silently degrading into a no-op
+       test again. CI green on run #1590.
+   - **PR opened, NOT merged:** #144
+     (https://github.com/allocsys/madmcp/pull/144), base `main`, head
+     `test/raise-max-step-result-chars-300k`.
+   - **BLOCKED: the live-timing test itself could not be run this
+     session.** Two structural problems, not attempted-and-failed --
+     flagging honestly rather than fabricating results:
+     1. No Vercel runtime-logs tool was available in this session's
+        toolset (searched via `tool_search` for "vercel runtime logs
+        deployment", "vercel deployment project logs", and
+        "get_runtime_logs get_runtime_errors" -- none returned a matching
+        tool). The prior session's §6 item 9 writeup above used a
+        `get_runtime_logs` tool against project
+        `prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh` that this session does not have
+        access to, for reasons not visible from here (toolset
+        configuration change, permissions, or something else).
+     2. Even with that tool available, `delegate_agent` calls hit
+        whatever's actually deployed (built from `main`), not this PR's
+        branch -- so a live call made before merging would exercise the
+        *old* 100000 cap, not the 300000 change under test. The handoff's
+        own "(on the branch (or after a preview deploy))" phrasing
+        suggests this was anticipated as a possible gap, but no tool here
+        exposes a way to target a specific preview deployment by URL.
+   - **Not done, deliberately:** did not merge to work around the
+     blocker (that would just repeat the 100k rollout's known-wrong
+     order -- test-after-merge -- which this session's handoff explicitly
+     asked to avoid this time) and did not fabricate or assume timing
+     numbers.
+   - **Next step:** needs either (a) Vercel log-access tooling restored to
+     this MCP surface, (b) a way to target `delegate_agent` at a specific
+     preview deployment, or (c) an explicit decision from whoever owns
+     this plan to accept the same test-after-merge order used for the
+     100k rollout, given the headroom evidence collected so far. Until
+     one of those happens, PR #144 should stay open and unmerged.
