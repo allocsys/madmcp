@@ -1189,7 +1189,7 @@ through unbounded when the caller doesn't supply one, and the gemini
 branch's own comment says so outright ("Gemini's existing
 unbounded-by-default behavior is left untouched"). So Gemini is equally
 exposed in principle -- it simply hasn't been the one caught live, since
-every repro this investigation has run (`223d6b08`, `124a76f8`) used
+every repro this investigation has run (the Section 11/12 run, `124a76f8`) used
 `provider: "bai"`.
 
 More importantly: the forced-final-step mechanism itself (`isFinalStep`
@@ -1234,7 +1234,7 @@ the forced-final step):
 These are now two separate sentences rather than one conflated one, so a
 model can no longer satisfy the letter of the honesty instruction by
 writing a long, honest, but still unbounded answer -- which is exactly
-what happened in both prior repros (both `223d6b08` and `124a76f8` did
+what happened in both prior repros (both the Section 11/12 run and `124a76f8` did
 attempt full exhaustive coverage, took the full 300s, and delivered
 nothing).
 
@@ -1274,7 +1274,7 @@ to try to write too much in the first place.
   hard backstop -- sized generously enough to allow a normal (even a
   reasonably thorough) answer, not so tight that a legitimate final answer
   gets truncated mid-sentence.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+- The Section 11/12 run still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
 
 ---
