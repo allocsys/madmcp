@@ -1841,9 +1841,20 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // model re-read the actual line instead of guessing which of two
     // constants it half-remembers is the real one.
     const withholdTools = isFinalStep || stuckLoopForce;
+    // bai-only, forced-final-step-only reasoning_effort override (plan.md
+    // Section 25 fix): mitigates the reasoning-token-budget-exhaustion
+    // failure mode isolated via test-bai-timeout.sh, where the forced
+    // no-tools final call can spend nearly all of max_tokens on internal
+    // reasoning before ever writing a visible answer. Scoped to isFinalStep
+    // specifically -- not the broader withholdTools (which also covers
+    // stuckLoopForce and the verification pass) -- since that's the one
+    // call site this investigation actually reproduced and root-caused;
+    // see connectors/bai/client.js's baiChat for the actual retry logic
+    // this pairs with (isReasoningBudgetExhausted).
+    const reasoningEffort = (effectiveProvider === "bai" && isFinalStep) ? "low" : undefined;
     let candidate;
     try {
-      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens });
+      candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens, reasoningEffort });
       const cascadeLog = formatCascadeLogLine(candidate, { step, fallbackModel: effectiveModel });
       if (cascadeLog) transcript.push(cascadeLog);
     } catch (err) {
