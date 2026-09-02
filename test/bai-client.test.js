@@ -283,6 +283,7 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
       const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       global.fetch = vi.fn().mockResolvedValueOnce({
         ok: true,
+        status: 200,
         text: async () => JSON.stringify({
           choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
           usage: { prompt_tokens: 10, completion_tokens: 25, reasoning_tokens: 5, total_tokens: 40 },
@@ -318,6 +319,7 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
         })
         .mockResolvedValueOnce({
           ok: true,
+          status: 200,
           text: async () => JSON.stringify({
             choices: [{ message: { content: "ok from key-b" }, finish_reason: "stop" }],
             usage: { completion_tokens: 15, total_tokens: 20 },
