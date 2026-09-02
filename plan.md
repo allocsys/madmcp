@@ -794,3 +794,113 @@ the limit of what black-box behavior alone can resolve.
      review) to isolate whether it's raw payload size or reasoning
      complexity/scope driving the stall, before attempting the original
      review task again.**
+
+---
+
+## 7. BLOCKER FOUND (2026-09-03): bai diagnostic logging is not sufficient to root-cause any of this -- logging workstream needed before further retry-logic changes
+
+**Context:** this session pulled real Vercel runtime logs (`get_runtime_errors`/
+`get_runtime_logs` against `prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh` /
+`team_LyeppGZMAygFDwBK8CuNZOWx`, both working with no access issues this
+time) for run `05b8bea5-72c1-4632-b94b-5da6f11f5ac9` specifically to check
+whether §6's stalls are caused by multiple `BAI_API_KEYS` cascading through
+cooldowns (each burning its own ~55s before rotating) rather than a single
+call hanging.
+
+**What the logs actually show, end to end for that run:**
+- `21:56:09` -- MCP request starts the run.
+- `21:56:10` -- `agent-worker` entry `afterStep=0`, heartbeat written,
+  `runInvestigation` returns `steps=1 failed=true` (step 1 advanced the
+  counter but was internally marked failed), re-chains.
+- `21:56:22` -- `agent-worker` entry `afterStep=1`, heartbeat written,
+  `entering runInvestigation` -- then **nothing** until:
+- (300s later) `Vercel Runtime Timeout Error: Task timed out after 300
+  seconds`.
+- `22:01:22` -- `agent-worker-failure` dead-letters the run via QStash's
+  failureCallback, ~5min after the timeout (QStash's own give-up delay),
+  matching the pattern already confirmed in §6.
+
+**Searched explicitly for key-rotation/cooldown evidence and found none:**
+queries for `"B.AI"`, `"configured keys"`, and `"keys"` scoped to this
+deployment (`dpl_7Am672Hkok5dvYgLDbH6jQsumV71`) across the run's whole
+window returned zero matches. If multiple `BAI_API_KEYS` had been
+cascading through 401/403/429/503/cooldown, `callChatCompletion`'s
+per-attempt `keyAttempts.push(...)` path and the eventual `"B.AI API
+error: all N configured keys are..."` throw would have surfaced as visible
+log content somewhere in this window -- it did not. **This is genuine
+evidence AGAINST the key-rotation-cascade theory for this specific run**,
+not just an absence of confirmation for it.
+
+**But this doesn't confirm the reasoning-budget theory either --
+it can't, because the actual gap is a logging gap, not just a theory
+gap:**
+- The step-1 `failed=true` result has **no accompanying error message,
+  status code, or stack trace anywhere in the logs** -- `agent_worker.js`'s
+  `debugLog` calls only ever log entry/heartbeat/`runInvestigation
+  returned steps=N failed=bool`/exit-status. None of that tells us WHAT
+  failed or why.
+- The step-2 stall has **zero log output between "entering
+  runInvestigation" and the 300s platform timeout** -- no per-key-attempt
+  log, no cooldown-set warning, no partial response, no `usage`/
+  `finish_reason` from bai even on a successful call elsewhere in the run.
+  There is currently no code path in `connectors/bai/client.js` that logs
+  ANY of: which key index is being attempted, the raw HTTP status/error
+  body on a failed `callChatCompletionOnce`, or `usage.reasoning_tokens`/
+  `finish_reason` on a call that DOES return successfully (only the
+  final-step exhaustion-retry path in `baiChat` ever inspects `usage` at
+  all, and even that isn't logged -- it's just used to decide on a retry).
+
+**Conclusion: every theory in this section (key-rotation-cascade,
+reasoning-token-budget exhaustion on a normal tool-calling step,
+pagination-timing vs. batching) remains exactly as unconfirmed as before,
+because the codebase cannot currently produce the evidence that would
+confirm or rule out any of them.** All prior conclusions in this section
+were reasoned from wall-clock timestamps and error-message text alone,
+never from an actual captured bai response or per-key-attempt trace.
+Declining to guess further, per this repo's own standing evidentiary bar
+(see e.g. §6's "honest read" framing) -- the correct next step is
+instrumentation, not another live-timing repro.
+
+**Decision (2026-09-03): pause further retry-logic design (the
+stall-detection-plus-forced-reasoning-effort-retry idea discussed this
+session) until proper bai diagnostic logging exists.** Retrying with a
+different `reasoning_effort` on stall is still the intended direction --
+specifically **retry at `"high"`, not `"low"`, per the repo owner's
+explicit instruction this session** (bai's reasoning_effort has three
+tiers -- max / high / low, not two -- and live testing already on file in
+§4 showed 0/14/171 reasoning tokens at low/high/max on an identical
+prompt, so "high" is a real middle tier, not a synonym for max or low) --
+but building that retry logic blind, with no visibility into what's
+actually happening inside a stalled or failed call, risks tuning against
+the wrong mechanism the same way §4's four rounds of prompt-only fixes did
+before the real root cause was found via `test-bai-timeout.sh`.
+
+**Logging gaps to close (scoped to `connectors/bai/client.js` and its
+call sites), assigned to a `delegate_editor` task on branch
+`bug/bai-diagnostic-logging`:**
+1. Log which key index (`BAI_API_KEYS[keyIndex]`, index only, never the
+   key itself) is being attempted on every `callChatCompletionOnce` call,
+   and the outcome (success / status code / timeout / network error) --
+   i.e. make `keyAttempts` visible in real time, not just embedded in the
+   final all-keys-exhausted error message that only fires if every key
+   fails.
+2. Log `usage` (`reasoning_tokens`/`completion_tokens`/`total_tokens` in
+   whichever shape bai actually returns -- see `isReasoningBudgetExhausted`'s
+   existing dual-shape check) and `finish_reason` on EVERY successful
+   `baiChat` response, not just when checking for reasoning-budget
+   exhaustion on the final step. This is the single biggest gap -- right
+   now there is no record of normal-case `reasoning_effort`/token-usage
+   behavior to compare a stalled/failed call against.
+3. Log a timestamp at the start of each `callChatCompletionOnce` attempt
+   and its outcome, so a stall's actual per-attempt duration is
+   reconstructable from logs afterward instead of only bounded by the
+   300s platform timeout on one end and the QStash heartbeat on the other.
+4. Ensure all of the above actually reaches Vercel's runtime logs from
+   inside `agent_worker.js`'s `failed=true` path too -- currently a
+   same-step failure that gets caught and turned into `{failed: true,
+   answer: ...}` has its `answer` text persisted to the checkpoint but is
+   never `console.error`'d, which is why step 1's failure above left no
+   trace.
+
+Not yet done: the above is the task handed to `delegate_editor`, not yet
+implemented as of this plan.md edit.
