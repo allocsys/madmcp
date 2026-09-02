@@ -2386,18 +2386,26 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // gaps; also don't try to out-write your budget) that were previously
       // collapsed into one sentence a model could satisfy by writing a long,
       // honest, but still unbounded answer.
-      // Brevity instruction below is bai-only (applyOversizedStepCaps) -- added
-      // specifically for bai's output-generation-timeout failure (plan.md
-      // Section 11/15/16), never observed on Gemini. Gemini gets only the
-      // original, unmodified "next turn has no tools" sentence, unchanged
-      // from before this session's fixes.
+      // SIMPLIFIED (2026-09-02, reverting most of Sections 16/18/20/21's
+      // bai-specific elaboration): three successive rounds of adding a
+      // brevity instruction, then increasingly detailed anti-leakage
+      // wording (XML tags -> brackets -> delimiter-free examples)
+      // correlated with the leakage MUTATING into a new syntax variant each
+      // time, not stopping -- while Gemini, which has only ever gotten this
+      // same short, example-free sentence below, has never leaked once.
+      // Hypothesis: the elaboration itself -- length, and especially citing
+      // literal example tool-call syntax right before a turn where the
+      // model can't call a tool -- may have been priming the exact
+      // completion pattern it was meant to suppress, on a small/fast model
+      // with weaker instruction-following under a dense multi-clause
+      // final-turn prompt. Testing the plainest possible instruction first
+      // rather than continuing to whack-a-mole new syntax shapes. If
+      // platform-timeout (Section 11/15) or leakage recurs without the
+      // extra wording, that's real evidence the elaboration was earning its
+      // keep and this should be revisited -- not assumed either way without
+      // a fresh live test.
       const noToolsNote = remainingAfterThisStep === 0
-        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now." +
-          (applyOversizedStepCaps
-            ? " IMPORTANT: keep this answer SHORT -- a few concise paragraphs, not the full exhaustive format originally requested (a per-file/per-item breakdown, a complete table, a line-by-line comparison, or similar). " +
-              "If you do not have the steps left to actually produce that, do NOT attempt it anyway: a long attempt at an exhaustive answer risks exceeding this platform's own execution time limit and being cut off with nothing delivered at all, which is strictly worse than a short, honest, incomplete one. Briefly summarize what you found, explicitly list what's missing or unfinished, and stop there. " +
-              "SEPARATELY: do not attempt to invoke a tool in ANY form on this turn, using ANY syntax or layout whatsoever -- no XML-style tags (e.g. <tool_name>...), no bracket-style markers (e.g. [Function call: ...]), no JSON call objects, and critically, no bare delimiter-free lines either: do NOT write a tool's name (e.g. github_read_file, github_get_file_tree, notion_get_page, or any other function name from this run) followed by its parameters separated by tabs, spaces, or newlines with no surrounding punctuation at all (e.g. \"github_read_file  owner=allocsys  path=connectors/bai/client.js  repo=madmcp\" is JUST AS MUCH a forbidden tool-call attempt as a bracketed or tagged one, even though it has no brackets, tags, or quotes). If any line of your answer would start with, or mostly consist of, a tool's name followed by parameter-like key=value pairs -- in ANY format, spacing, or delimiter style -- delete that line and instead describe what you were trying to do in ordinary prose (e.g. write \"I was unable to read editor_worker.js\" rather than attempting to write out the call itself, in any shape). No call will execute no matter how it is phrased or formatted; write ONLY your plain-text answer, and never place a tool name directly adjacent to its arguments in any layout."
-            : "")
+        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
         : "";
       responseParts.push({
         text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} Separately from the length of your response: if you cannot fully complete the task -- including any specific format requested -- say so explicitly and describe what's missing, rather than presenting a partial or reformatted answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
