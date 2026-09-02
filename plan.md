@@ -827,3 +827,78 @@ Section 10 fixed. The input-side caps have no mechanism to bound this.
   if a way to do so becomes available (not accessible via
   `get_runtime_logs`/`get_runtime_errors` alone) to confirm or rule out
   the output-generation-time theory directly rather than by inference.
+
+---
+
+## 12. Follow-up check on the Section 11 redelivery -- inconclusive, but the inconclusiveness is itself new information
+
+Checked `get_runtime_logs`/`get_runtime_errors` for `223d6b08-d2e1-4f23-
+8597-27fc48c594a3` and invocation `8d8b49e6-25a4-47e9-a856-db56146ac430`
+across a wide window (`01:20Z` through `06:00Z`) to answer Section 11's
+open item #1 (did the redelivery succeed, time out again, or dead-letter).
+
+**Full invocation history for this run, confirmed via logs:**
+1. `fa9631f1` (`01:16:47Z`, `afterStep=0`) -- completed normally, `steps=1
+   failed=true exit=chained`.
+2. `fc02173b` (`01:16:57Z`, `afterStep=1`) -- completed normally, `steps=2
+   failed=true exit=chained`.
+3. `ba8f4094` (`01:17:33Z`, `afterStep=2`) -- the forced-final-answer
+   attempt from Section 11: entered, wrote heartbeat, then hard 300s
+   timeout (`504`, `Vercel Runtime Timeout Error`).
+4. `8d8b49e6` (`01:22:45Z`, `afterStep=2`, QStash redelivery) -- entered,
+   wrote heartbeat, **then nothing**: no `runInvestigation returned` line,
+   no `exit` line, no `504`/timeout error, and no further QStash
+   redelivery of this `runId`/`afterStep=2`, anywhere in the following
+   ~4h40m of logs checked.
+
+**This is none of the three outcomes Section 11 asked about.** Not a
+clean success (no `runInvestigation returned`/`exit` line ever appears),
+not a repeat of the same 300s timeout (`get_runtime_errors` over the same
+window returns zero error groups, and a `statusCode=504` filter over the
+window returns nothing), and not a dead-letter (no dead-letter log line,
+and Section 10's `Upstash-Retried`-driven dead-letter path logs its own
+`reason` string, which also doesn't appear). The invocation's request
+itself has no logged terminal status at all in the tool's data -- it
+shows `status 0 [info/static]` rather than the `200`/`504` the other three
+invocations got.
+
+**Two explanations, neither confirmed:**
+- The runtime-logs source this session has access to may simply not
+  capture a terminal status line for every request shape (the `status 0
+  [info/static]` marking looks different from the other three entries'
+  `200`/`504 [info/serverless]` markings, suggesting it may be a
+  differently-classified log line rather than evidence the request never
+  ended).
+- Or: this genuinely is the dead-letter blind spot Section 9/10 were
+  trying to close, still open in a different shape -- the function could
+  have hard-timed-out exactly like `ba8f4094` did, but for whatever
+  reason (log ingestion lag, a timeout that occurred right at/after this
+  session's query window's practical edge, or some other gap) it didn't
+  get captured in `get_runtime_errors`' aggregation this time. If so, the
+  run is now sitting with no further QStash redelivery observed and no
+  error surfaced anywhere this session can see -- which would itself be
+  new evidence of exactly the "can loop or silently stall with nothing
+  watching" risk Section 9 flagged, just manifesting as *zero* further
+  activity rather than repeated timeouts.
+
+**Not attempted this session:** resuming or re-polling
+`223d6b08-d2e1-4f23-8597-27fc48c594a3` directly (e.g. via `delegate_agent`
+with `resume_run_id`) to check its checkpoint status/`stepsDone` from the
+MCP side rather than the Vercel-logs side -- this would give an
+independent read on whether the run is actually still "running" (per its
+own checkpoint) or has quietly finished/failed without a clean log trail,
+and doesn't require guessing at log-classification semantics. This is the
+most direct next step to actually resolve item #1.
+
+**Next steps:**
+- Poll/resume `223d6b08-d2e1-4f23-8597-27fc48c594a3` via the
+  `delegate_agent` MCP tool (not logs) to get its checkpoint status
+  directly -- this resolves the ambiguity above without depending on log
+  capture gaps.
+- If the checkpoint shows it's still "running" with `stepsDone=2` and no
+  activity since `01:22:45Z`, that's a live instance of a run stuck with
+  zero further redelivery and zero surfaced error -- report it as such
+  rather than assuming either success or a repeat timeout.
+- Items #2-#4 from Section 11 (less-exhaustive re-test to isolate
+  output-size, token/generation-time breakdown) remain open and untouched
+  this session.
