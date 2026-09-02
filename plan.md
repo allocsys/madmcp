@@ -1801,3 +1801,81 @@ since the `!(...)` guard only excludes the `=== 0` case specifically.
 - Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
   (still ON), and Section 5's "Void" mystery all remain exactly as open as
   Section 21 left them -- untouched by this section.
+
+---
+
+## 23. Section 22's experiment merged to `main` without the live repro ever
+being run, then reverted -- final-step SYSTEM NOTE restored for bai
+(2026-09-02, follow-up session)
+
+### 23.1 What happened between Section 22 and this section
+
+Section 22.4 explicitly flagged two things as not yet done before the
+`experiment/drop-bai-final-step-note` branch should be trusted: a live
+repro run against the branch, and a check of `detectToolCallLeakage`
+against the new bare-JSON leak shape found in 22.1. Neither happened.
+Instead, PR #141 (branch `experiment/drop-bai-final-step-note`, commit
+`3cc4725`, plus `1f4fe26` adding Section 22 to this file) was merged
+directly to `main` via merge commit `26c410c`, carrying the note-skip
+guard (`if (!(applyOversizedStepCaps && remainingAfterThisStep === 0))`)
+into production for every bai run.
+
+**The user subsequently reported the change did not fix bai delegation.**
+No new run ID or specific failure mode was captured for this session's
+write-up -- this section documents the revert itself, not a fresh
+repro/root-cause. Per Section 22.4's own stated criterion ("if the live
+repro shows the no-note approach performs WORSE ... that would be real
+evidence the elaborated note WAS earning its keep"), the absence of any
+observed improvement is being treated as sufficient grounds to revert, on
+the user's explicit instruction, without waiting to formally characterize
+what "didn't fix it" looked like in this instance.
+
+### 23.2 Revert implemented -- commit `3ada0c5`, direct to `main`
+
+Removed the `if (!(applyOversizedStepCaps && remainingAfterThisStep ===
+0)))` guard entirely in `connectors/gemini/agent_delegate.js`. The
+`remainingAfterThisStep <= 1` branch's `=== 0` case now unconditionally
+pushes the final-step SYSTEM NOTE for every provider again, including
+bai -- restoring exactly the behavior `main` had immediately before PR
+#141, i.e. the wording landed by `1748474` (Section 20's simplified,
+example-free note), NOT any of the earlier Section 16/18/20/21
+elaborations (XML/bracket/JSON-specific anti-leakage clauses), which were
+already superseded by `1748474` before PR #141 ever touched this code.
+
+**Deliberately unchanged, per direct code read before and after this
+revert:**
+- `isFinalStep`/`withholdTools` -- untouched, as it was through Section 22
+  as well. Tools are still genuinely withheld on the final step.
+- The `remainingAfterThisStep === 2` nudge -- untouched.
+- Non-bai providers -- unaffected by either PR #141 or this revert; they
+  never lost the note in the first place.
+
+### 23.3 Status and open questions
+
+- **This revert has NOT been live-tested either.** The same gap Section
+  22.4 flagged for the drop-note branch now applies symmetrically to the
+  revert: we don't yet have a fresh live run confirming the restored note
+  actually reduces leakage/improves bai delegation outcomes on today's
+  model behavior, vs. simply returning to a previously-observed-imperfect
+  baseline (Sections 18/20/21 all reproduced leakage WITH this same note
+  present, just in earlier, more-elaborated wording -- `1748474`'s
+  simplified version specifically had not yet been live-repro'd against
+  the original leakage repro shape before PR #141 shipped).
+- **Section 22.2's hypothesis (more note detail -> new leak variant, not
+  fewer) is neither confirmed nor refuted by this revert.** We still don't
+  know whether `1748474`'s simplified note (now restored) performs better
+  than the fully-elaborated Section 21 version, worse, or the same --
+  that A/B was never run before PR #141 preempted it by removing the note
+  altogether.
+- **Recommended next step before touching this code again:** run the
+  Section 15/17/18/20/22.1 repro shape (`provider: "bai"`, exhaustive
+  full-repo-writeup task, varying `max_steps`) against `main` now that the
+  note is restored, and actually characterize the result (clean answer,
+  which leak variant if any, or platform timeout) rather than merging the
+  next hypothesis speculatively. Three code states now exist in this
+  file's history for the `remainingAfterThisStep === 0` bai branch
+  (elaborated note / no note / simplified note) and only the first two
+  have any live data attached to them at all.
+- Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
+  (still ON), and Section 5's "Void" mystery remain exactly as open as
+  Section 22 left them -- untouched by this revert.
