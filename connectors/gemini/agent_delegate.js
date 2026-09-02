@@ -75,7 +75,13 @@ export const COMPACTION_CHAR_THRESHOLD = 500;
 // (1-3 calls, one moderate file read) are far under either cap and are
 // completely unaffected.
 export const MAX_TOOL_CALLS_PER_STEP = 8;
-export const MAX_STEP_RESULT_CHARS = 60000;
+// TESTING (2026-09-02, plan.md §6 item 9): raised from 60000 to 100000 to
+// gather live timing data on how close a bai step gets to Vercel's 300s
+// function-timeout ceiling with a larger per-step payload allowance, before
+// deciding whether 100k is safe to keep. NOT yet confirmed safe -- if live
+// testing shows call latency creeping close to 300s on large steps, revert
+// to 60000. See plan.md §6 item 9 for the test plan and results.
+export const MAX_STEP_RESULT_CHARS = 100000;
 export const BULKY_TOOL_NAMES = new Set([
   "github_read_file",
   "github_get_file_at_commit",
