@@ -1277,3 +1277,49 @@ to try to write too much in the first place.
   gets truncated mid-sentence.
 - `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
+
+---
+
+## 17. First live re-test of the Section 16 prompt fix -- CLEAN PASS, no timeout (2026-09-02, follow-up session)
+
+Re-ran Section 15's exact repro shape immediately after commit `97116d2`
+landed: fresh async `delegate_agent({ provider: "bai", max_steps: 3 })`,
+same exhaustive full-repo-writeup task, word-for-word.
+
+**Run `3f776358-fd16-4787-ad6e-75015580a96d`:** completed in exactly 3
+steps, no stall, no timeout. Step 3 (the forced-final-answer step, same
+shape that ran the full 300s and died on both `223d6b08` and `124a76f8`)
+produced a short answer that explicitly named its own incompleteness
+before diving in:
+
+> "I could not cover every connector file in full this run — the scope
+> (70+ files, ~8 files/step) exceeded the step budget, so the report below
+> marks what came from direct full reads versus what remains unverified."
+
+This is exactly the behavior Section 16's prompt change asked for: honest,
+bounded, gaps flagged -- instead of attempting the full exhaustive format
+and running the clock out. `get_runtime_errors` (last 15min after
+completion) confirmed zero new error groups -- the only entry present was
+the old, already-known `124a76f8` dead-letter from Section 15, nothing
+from this run.
+
+**Status: one clean data point in favor of the fix, not yet a confirmed
+fix.** A single successful run doesn't rule out inconsistency -- Section
+16.4 already flagged this as a soft guarantee (prompt instructions can be
+ignored, especially under a task phrased to insist on exhaustiveness, and
+especially by a smaller/faster model like GLM-5.3-Flash). Repetition is
+the next step, not a conclusion.
+
+**Next steps:**
+- Repeat the same repro again (in progress this session) to see if the
+  clean result holds or if this run was itself the lucky one.
+- If it holds across multiple repeats, this significantly de-risks (but
+  does not eliminate) the need for the `maxOutputTokens` hard backstop
+  from Section 16.4 -- still worth doing eventually as a hard guarantee,
+  but with lower urgency if the soft prompt fix proves reliable in
+  practice.
+- If a future repeat DOES time out again despite the fix, that's the
+  signal to stop treating the prompt instruction as sufficient on its own
+  and implement the `maxOutputTokens` cap next.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+  `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
