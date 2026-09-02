@@ -1118,7 +1118,7 @@ ambiguous status. The checkpoint is cleanly finalized as `"failed"`.
 
 1. **Section 11's output-generation-time hypothesis is now confirmed by a
    second, deliberately-reproduced, live-watched occurrence** -- not just
-   the one retrospective case (`223d6b08`) it was originally inferred
+   the one retrospective case it was originally inferred
    from. Same mechanism: a forced-final-answer step with no more tool
    calls available, asked to produce an exhaustive answer, runs output
    generation for the full 300s with no early exit and gets hard-killed.
@@ -1127,7 +1127,7 @@ ambiguous status. The checkpoint is cleanly finalized as `"failed"`.
    mechanism to bound step 3's generation time, exactly as Section 11
    theorized.
 2. **Section 13's failure-callback fix worked cleanly, live, this time --
-   in sharp contrast to `223d6b08`'s behavior pre-fix.** `223d6b08`
+   in sharp contrast to the Section 11/12 run's behavior pre-fix.** That run
    (Section 12) sat at `status:"running"` indefinitely after its own 300s
    timeout, with no further QStash redelivery and no error ever
    finalizing it -- discovered only much later via a manual checkpoint
@@ -1145,7 +1145,7 @@ ambiguous status. The checkpoint is cleanly finalized as `"failed"`.
 **Explicitly NOT done this session:** no fix implemented for the
 underlying output-generation-time issue itself -- this section is
 additional confirming evidence for Section 11, not a resolution of it.
-`223d6b08` still not resumed. `DEBUG_AGENT_WORKER` still ON.
+The Section 11/12 run still not resumed. `DEBUG_AGENT_WORKER` still ON.
 
 **Next steps (supersedes/reaffirms Section 11's own, now with a second
 confirmed data point instead of one):**
