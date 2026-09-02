@@ -2279,11 +2279,31 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // When remainingAfterThisStep is 0, the NEXT turn is the final step,
       // which is called with no tools at all (see isFinalStep above) -- so
       // this note can say so as a fact, not just a suggestion to wrap up.
+      // Output-generation-timeout fix (plan.md Section 11/15, prompt-side
+      // half): this final-step note used to only say "describe what's
+      // missing, rather than presenting a partial answer as if it were
+      // complete" -- true, but easy to misread as "don't be brief", which is
+      // backwards. A model asked for an exhaustive answer (every file, every
+      // field, a full line-by-line comparison) with no tools left has every
+      // incentive to attempt the full thing anyway rather than admit it
+      // can't -- and on this step there is no next step to fall back to, no
+      // maxOutputTokens cap set by default (router.js, both gemini and bai),
+      // and generation time alone can exceed Vercel's 300s hard function
+      // timeout with nothing salvaged (confirmed live twice: plan.md
+      // Section 11's runId 223d6b08, Section 15's runId 124a76f8, both bai).
+      // The added sentences make the SHORT-answer instruction explicit and
+      // separate from the existing don't-pretend-it's-complete instruction,
+      // which stays as-is -- those are two different asks (be honest about
+      // gaps; also don't try to out-write your budget) that were previously
+      // collapsed into one sentence a model could satisfy by writing a long,
+      // honest, but still unbounded answer.
       const noToolsNote = remainingAfterThisStep === 0
-        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
+        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now. " +
+          "IMPORTANT: keep this answer SHORT -- a few concise paragraphs, not the full exhaustive format originally requested (a per-file/per-item breakdown, a complete table, a line-by-line comparison, or similar). " +
+          "If you do not have the steps left to actually produce that, do NOT attempt it anyway: a long attempt at an exhaustive answer risks exceeding this platform's own execution time limit and being cut off with nothing delivered at all, which is strictly worse than a short, honest, incomplete one. Briefly summarize what you found, explicitly list what's missing or unfinished, and stop there."
         : "";
       responseParts.push({
-        text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} If you cannot fully complete the task -- including any specific format requested (e.g. an exhaustive table, per-item breakdown) -- in the remaining budget, say so explicitly and describe what's missing, rather than presenting a partial or reformatted-for-brevity answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
+        text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} Separately from the length of your response: if you cannot fully complete the task -- including any specific format requested -- say so explicitly and describe what's missing, rather than presenting a partial or reformatted answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
       });
     }
 
