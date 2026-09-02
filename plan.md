@@ -1014,3 +1014,53 @@ ever going to arrive at all.
   new failure handlers don't fire as expected in practice.
 - `DEBUG_AGENT_WORKER` left ON (unchanged). Section 5's "Void" question
   remains open, untouched.
+
+---
+
+## 14. Section 13's "no test coverage yet" item -- confirmed STALE, already resolved (2026-09-02, follow-up session)
+
+Picked up Section 13's "Not done this session" item #1 ("No test coverage
+ yet for the two new failure handlers or the new `publishJSON` call
+ shape"), intending to write it. Read the current test suite on `main`
+ first and found it already exists -- this note was stale by the time this
+ session started, not an outstanding gap.
+
+**Confirmed present and passing on `main` (no new code needed):**
+
+- `test/agent-worker.test.js` -- a full `describe("agent_worker.js —
+  handleAgentWorkerFailure")` block: signature rejection (401), unparseable
+  `sourceBody` no-op, missing-`runId` no-op, stale-checkpoint no-op (already
+  advanced), already-finished no-op (does not overwrite a real answer), and
+  the happy-path finalize (checkpoint still in the exact stalled state the
+  callback describes -> `"failed"` with the QStash-sourced reason).
+- `test/editor-worker.test.js` -- the editor-side mirror,
+  `describe("editor_worker.js — handleEditorWorkerFailure")`, same shape
+  plus its own regression check that the whole-blob checkpoint spread
+  doesn't drop `owner`/`repo`/`branch`/`contents` on finalize (relevant
+  since `editor_checkpoint.js` is a whole-blob overwrite, unlike
+  `agent_checkpoint.js`'s list+meta split).
+- `test/qstash-client-publish.test.js` -- mocks `@upstash/qstash` directly
+  (not `qstash_client.js` itself, unlike the two files above) so the real
+  `publishAgentStep`/`publishEditorStep` code runs and the actual
+  `publishJSON` call shape can be inspected: default `retries: 0` +
+  derived `failureCallback` for both agent and editor paths, a
+  `QSTASH_STEP_RETRIES` env override, omission of `failureCallback` when no
+  URL is derivable, and an explicit `AGENT_WORKER_FAILURE_URL` override.
+
+**Verification this session:** cloned `main`, ran all three files
+directly (`36 tests`, all passing), then the full suite (`45 files, 534
+tests`, all passing) to confirm nothing else regressed alongside it.
+
+**Why the discrepancy:** Section 13 was written the same session the fix
+itself landed (commits `ecbf1a3`/`fed3cc3`/`1e3aafe`/`3bb4aa8`/`24c41db`)
+and candidly flagged tests as not-yet-written at that point. The tests
+above landed in a later session that never added its own plan.md entry --
+so the code caught up before the notes did. Recorded here so the next
+session doesn't re-open this as if it were still a gap.
+
+**Still genuinely open (unaffected by this section):**
+- Section 11's root cause (output-generation-time on the forced-final-answer
+  step) -- no fix implemented yet.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` -- left unresumed, per Section 13's
+  own instruction.
+- `DEBUG_AGENT_WORKER` -- still ON.
