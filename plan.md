@@ -933,3 +933,84 @@ state indefinitely unless manually pushed forward.
   an option rather than doing it unprompted, since Section 9 previously
   cautioned against blind resumes of a run whose mechanism is already
   understood.
+
+---
+
+## 13. QStash config check -- root-caused and fixed (2026-09-02)
+
+Picked up the Section 12 open question: was QStash itself misconfigured?
+
+### 13.1 Root cause
+
+`publishAgentStep`/`publishEditorStep` in `connectors/gemini/qstash_client.js`
+called `client.publishJSON({ url, body })` with neither `retries` nor
+`failureCallback` set -- confirmed both are real supported options on the
+installed `@upstash/qstash` v2.11.3 SDK. Result: QStash's own default
+(3 retries, exponential backoff ~12s/~2m28s/~30m8s, worst case ~40min to
+exhaust) applied, on a step whose 300s platform timeout makes every retry
+deterministic, not transient -- and with no `failureCallback`, once that
+budget IS exhausted, nothing tells the app. `agent_worker.js`'s own
+dead-letter check (Section 9's `Upstash-Retried` header inspection) only
+runs inside a live invocation, so a step timing out on every delivery
+attempt means no further invocation ever arrives to run it. Real shape of
+the blind spot: a retry-budget mismatch between
+`AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` (5) and QStash's default budget
+(3 retries/4 attempts) -- QStash gives up before the app's own counter
+could ever reach its threshold, and nothing was listening for QStash's
+own give-up signal.
+
+### 13.2 `223d6b08` re-poll: mid-backoff, not actually abandoned
+
+Re-polled read-only again: "2 step(s) completed, no activity in 194s" --
+down from 388s at the end of Section 12, meaning a new heartbeat had been
+written since (consistent with QStash's n=2 backoff, ~2m28s after the
+prior timeout, firing on schedule). The Section 12 silence was a snapshot
+mid-backoff, not proof QStash had already given up.
+
+### 13.3 Fix shipped (commits `ecbf1a3`, `fed3cc3`, `1e3aafe`, `3bb4aa8`, `24c41db`, all on `main`)
+
+Decision (discussed with the user): `retries: 0`. A retry on this failure
+mode either hits the same deterministic 300s timeout for zero benefit, or
+is a genuinely transient provider error (Gemini 429/503) -- which never
+reaches QStash as a delivery failure at all, since `agent_worker.js`
+always returns 200 for that case and re-chains a fresh publish via its own
+`retryCount`, independent of QStash's retry mechanism. So `retries: 0`
+costs nothing on the case QStash's retries were ever useful for.
+
+- **`config.js`**: new `QSTASH_STEP_RETRIES` (default `0`,
+  env-overridable) and `AGENT_WORKER_FAILURE_URL`/`EDITOR_WORKER_FAILURE_URL`
+  (derived from the existing worker URLs, same pattern as
+  `deriveEditorWorkerUrl`, individually env-overridable).
+- **`qstash_client.js`**: `publishAgentStep`/`publishEditorStep` now pass
+  `retries: QSTASH_STEP_RETRIES` and, when configured, `failureCallback`.
+- **`agent_worker.js`** / **`editor_worker.js`**: new
+  `handleAgentWorkerFailure`/`handleEditorWorkerFailure` -- verify the
+  (separately-signed) QStash failure-callback request, decode `sourceBody`
+  to recover `{runId, afterStep}`, and finalize the checkpoint as
+  `"failed"` only if it's still sitting exactly where the callback
+  describes (a stale callback is a no-op, not an overwrite).
+- **`server.js`**: registers `/api/agent-worker-failure` and
+  `/api/editor-worker-failure`, same QStash-signature-only auth posture as
+  the existing worker endpoints.
+
+**Result:** a hard-timing-out step now fails cleanly in ~5min instead of
+up to ~40min followed by an indefinite hang. Section 9's
+`AGENT_WORKER_MAX_CONSECUTIVE_FAILURES`/`Upstash-Retried` path is
+unchanged and still covers the organic same-step-failure case exactly as
+before -- this fix only closes the gap where no further invocation was
+ever going to arrive at all.
+
+**Not done this session:**
+- No test coverage yet for the two new failure handlers or the new
+  `publishJSON` call shape.
+- Section 11's output-size/`maxOutputTokens` fix (the actual reason steps
+  time out) is still open -- this section only makes the failure mode
+  clean, not the underlying cause. Section 11 items #2-#4 untouched.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` not resumed or force-finalized;
+  left to resolve on its own (complete, dead-letter, or TTL-expire).
+- QStash's own dashboard/API was not checked directly -- this fix was
+  derived from the SDK's type defs and Upstash's public docs, not from
+  inspecting this account's live delivery ledger. Worth a follow-up if the
+  new failure handlers don't fire as expected in practice.
+- `DEBUG_AGENT_WORKER` left ON (unchanged). Section 5's "Void" question
+  remains open, untouched.
