@@ -958,7 +958,7 @@ the blind spot: a retry-budget mismatch between
 could ever reach its threshold, and nothing was listening for QStash's
 own give-up signal.
 
-### 13.2 `223d6b08` re-poll: mid-backoff, not actually abandoned
+### 13.2 Re-poll of the Section 11/12 run: mid-backoff, not actually abandoned
 
 Re-polled read-only again: "2 step(s) completed, no activity in 194s" --
 down from 388s at the end of Section 12, meaning a new heartbeat had been
@@ -1005,7 +1005,7 @@ ever going to arrive at all.
 - Section 11's output-size/`maxOutputTokens` fix (the actual reason steps
   time out) is still open -- this section only makes the failure mode
   clean, not the underlying cause. Section 11 items #2-#4 untouched.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` not resumed or force-finalized;
+- The Section 11/12 run not resumed or force-finalized;
   left to resolve on its own (complete, dead-letter, or TTL-expire).
 - QStash's own dashboard/API was not checked directly -- this fix was
   derived from the SDK's type defs and Upstash's public docs, not from
@@ -1060,7 +1060,7 @@ session doesn't re-open this as if it were still a gap.
 **Still genuinely open (unaffected by this section):**
 - Section 11's root cause (output-generation-time on the forced-final-answer
   step) -- no fix implemented yet.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` -- left unresumed, per Section 13's
+- The Section 11/12 run -- left unresumed, per Section 13's
   own instruction.
 - `DEBUG_AGENT_WORKER` -- still ON.
 
