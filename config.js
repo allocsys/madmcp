@@ -175,16 +175,21 @@ export const AGENT_ASYNC_STEP_DEAD_SECONDS = Number(process.env.AGENT_ASYNC_STEP
 export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) || 5;
 // Per-invocation debug logging in agent_worker.js (randomUUID() invocationId
 // logged at every entry/exit point of handleAgentWorker -- added 2026-09-01,
-// commit 2aad526, to diagnose a worker-chain stall). Default OFF: once the
-// 2026-09-01 stall was diagnosed (sustained B.AI rate-limiting driving the
-// existing retry/re-chain path, not a concurrent-duplicate idempotency bug),
-// the ongoing per-invocation log volume on
-// /api/agent-worker stops earning its keep on every step of every run.
-// Kept behind this flag rather than deleted so it can be flipped back on
-// quickly if a similar stall resurfaces. Same default-on-unless-"false"
-// pattern as EDITOR_AGENT_ENABLED above, but inverted (default OFF, not ON)
-// since this is a debug aid, not a feature.
-export const DEBUG_AGENT_WORKER = process.env.DEBUG_AGENT_WORKER === "true";
+// commit 2aad526, to diagnose a worker-chain stall). Was default OFF after
+// the 2026-09-01 stall was diagnosed (sustained B.AI rate-limiting driving
+// the existing retry/re-chain path, not a concurrent-duplicate idempotency
+// bug) -- see plan.md Section 6 for why that diagnosis does NOT explain the
+// separate, still-open "Void"/stall investigation in Section 5.
+// FLIPPED TO DEFAULT ON (2026-09-02, plan.md Section 7): a NEW,
+// reproducible-on-demand stall was found (an oversized single step -- many
+// batched tool calls / large truncated file reads -- correlating with the
+// worker chain going silent afterward). Turned logging back on by default
+// to capture entry/exit + step-ok-rechain-failed evidence automatically if
+// the pattern recurs, rather than requiring a manual flip after the fact.
+// Revert to default OFF (process.env.DEBUG_AGENT_WORKER === "true") once
+// Section 7's oversized-step hypothesis is confirmed or ruled out -- same
+// log-volume reasoning as the original OFF default above.
+export const DEBUG_AGENT_WORKER = process.env.DEBUG_AGENT_WORKER !== "false";
 
 export const EXA_API_KEYS = (process.env.EXA_API_KEYS || "")
   .split(",")
