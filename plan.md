@@ -14,7 +14,7 @@
 - **FIXED:** oversized single-step input causing Vercel's 300s serverless timeout, plus the dead-letter blind spot that let a timed-out run hang forever (§3).
 - **FIXED, MERGED TO `main` AND LIVE-CONFIRMED** (commit `ef71c05`, squash-merge of PR #142): forced-final-answer step produces garbled/empty output — turns out to be a token-budget race inside a single bai completion call, not a prompt-compliance problem. Four rounds of prompt/note wording fixes were tried and superseded by this finding (§4). Live end-to-end repro (run `7afbab6c-0109-43e8-b95d-f7bec49f94a7`, 20 steps) confirmed the fix behaves as designed; a few non-blocking gaps were identified for future hardening (§4, §6 item 5).
 - **DONE, CONFIRMED-SAFE:** §3's `MAX_STEP_RESULT_CHARS` raised 60000 → 100000 (PR #143, commit `628d1f7`); live-timing-tested against real Vercel invocation logs, gaps ~5–9% of the 300s ceiling, no revert needed (§6 item 9).
-- **IN PROGRESS, BLOCKED ON TOOLING:** follow-up raise 100000 → 300000. Code change + CI green (PR #144), **not merged** — the required live-timing test can't actually be run this session; see §6 item 9's new sub-entry for the full blocker writeup.
+- **MERGED, LIVE TEST STILL PENDING:** follow-up raise 100000 → 300000, PR #144 squash-merged to `main` as commit `ef66382`. Merge-before-test order explicitly authorized by the repo owner this session (Vercel log-access tooling wasn't available to test before merge, per the blocker below). A live timing test against real Vercel invocation logs is still needed before this can be called confirmed-safe like the 100k raise was — see §6 item 9's follow-up sub-entry.
 - **OPEN, low priority:** the "Void" response mystery — observed once, unreproduced, needs visibility this session doesn't have (§5).
 - **TODO (housekeeping):** revert `DEBUG_AGENT_WORKER` to default OFF; commit `test-bai-timeout.sh` to the repo; abandon run `c1beaeda-874a-47dd-97b0-763bff80ba6d` and descendants (§6).
 
@@ -470,14 +470,19 @@ the limit of what black-box behavior alone can resolve.
         own "(on the branch (or after a preview deploy))" phrasing
         suggests this was anticipated as a possible gap, but no tool here
         exposes a way to target a specific preview deployment by URL.
-   - **Not done, deliberately:** did not merge to work around the
-     blocker (that would just repeat the 100k rollout's known-wrong
-     order -- test-after-merge -- which this session's handoff explicitly
-     asked to avoid this time) and did not fabricate or assume timing
-     numbers.
-   - **Next step:** needs either (a) Vercel log-access tooling restored to
-     this MCP surface, (b) a way to target `delegate_agent` at a specific
-     preview deployment, or (c) an explicit decision from whoever owns
-     this plan to accept the same test-after-merge order used for the
-     100k rollout, given the headroom evidence collected so far. Until
-     one of those happens, PR #144 should stay open and unmerged.
+   - **Decision (2026-09-02):** repo owner explicitly authorized option
+     (c) above -- accept the same test-after-merge order used for the
+     100k rollout, given the headroom evidence already collected (bai
+     context window, Redis limits, QStash message size -- see this
+     section's earlier entries). **PR #144 squash-merged to `main` as
+     commit `ef66382`.** `MAX_STEP_RESULT_CHARS = 300000` is now live in
+     production.
+   - **STILL OPEN: the live timing test itself.** Merging removes
+     blocker #2 (delegate_agent now genuinely exercises the 300000 cap,
+     since it's what's deployed) but NOT blocker #1 -- this session still
+     has no Vercel runtime-logs tool, so the test can't be completed here
+     either. Deferred to a new session. **Until that live test runs and
+     confirms the same comfortable-headroom result the 100k raise got,
+     treat 300000 as merged-but-NOT-yet-confirmed-safe** -- unlike the
+     100k line above, this one hasn't been checked against a real
+     Vercel invocation gap yet.
