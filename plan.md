@@ -1396,3 +1396,66 @@ a fix, rather than assuming which code path (if any) is responsible.
   like run 3's.
 - `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
+
+---
+
+## 19. Sections 9-16's bai-timeout fixes decoupled from Gemini/GLM/Groq -- bai-only now (2026-09-02, follow-up session) -- commit `c4f1313` (PR #139, branch `fix/bai-only-oversized-step-caps`)
+
+Explicit direction this session: every repro run across Sections 7-18 used
+`provider: "bai"` exclusively, Gemini has shown none of these failure
+modes, and Gemini's tool-call batching/step behavior must not be altered by
+fixes aimed at bai's failure modes. Verified this premise at the code level
+before acting on it (not just from plan.md's own prose):
+
+- Diffed `connectors/gemini/agent_delegate.js` at `ee6560d` (the commit that
+  introduced `MAX_TOOL_CALLS_PER_STEP`/`MAX_STEP_RESULT_CHARS`, Section 9
+  priority #1) against its immediate parent `9eb0fa0` -- confirmed the caps
+  were pure additions, replacing a single unconditional
+  `const functionCalls = parts.filter((p) => p.functionCall);` with no prior
+  limiting logic of any kind.
+- Checked commit `14d7a55` (~50 commits before this session, predating the
+  whole bai investigation) directly -- confirmed tool-call batching was
+  genuinely uncapped for every provider at that point, Gemini included (the
+  same unconditional `.filter()` line, also present unmodified in
+  `designer_delegate.js`/`editor_delegate.js`, neither of which Section 9-18
+  ever touched).
+
+**Fix, via a new `applyOversizedStepCaps = effectiveProvider === "bai"` flag
+in `agent_delegate.js`'s step loop:**
+
+- `MAX_TOOL_CALLS_PER_STEP` -- Gemini/GLM/Groq/default now batch and execute
+  ALL calls the model puts in one turn, uncapped, exactly as before Section
+  9. Only `bai` runs defer calls past the 8th.
+- `MAX_STEP_RESULT_CHARS` -- the per-step truncation loop is skipped
+  entirely for non-bai providers; their tool results are never
+  withheld/truncated by this mechanism.
+- The `remainingAfterThisStep === 0` final-step SYSTEM NOTE -- non-bai
+  providers get back the original, unmodified "next turn will NOT include
+  any tools" sentence only. The Section 16 brevity/short-answer addition
+  ("IMPORTANT: keep this answer SHORT...") is now bai-only.
+
+**Deliberately left shared across ALL providers, including bai** (predate
+this investigation, not part of "these tweaks and changes" the decoupling
+was scoped to):
+- `isFinalStep`/`withholdTools` itself -- the forced-final-no-tools
+  mechanism, from 2026-07-26, well before the bai provider existed in this
+  repo.
+- The `remainingAfterThisStep === 2` softer "start wrapping up" nudge.
+- The 3-consecutive-all-repeat-steps stuck-loop guard (fix #4).
+
+**Verification:** existing `test/agent-oversized-step-cap.test.js` already
+calls `runInvestigation` with `provider: "bai"` explicitly in both tests, so
+the gating didn't require any test changes -- confirmed unaffected. Full CI
+(`#1549`) green on the branch before merge.
+
+**Status of open items, unaffected by this section:**
+- Section 18's garbled-tool-call-shaped-text-in-final-answer gap (e.g. run
+  `6ea018d5`) is still open and still applies to bai specifically (every
+  repro of it used that provider) -- NOT addressed here, out of scope for
+  this decoupling.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+  `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
+- If Gemini is ever observed hitting the 300s timeout or an
+  output-generation-timeout in the future, that would be NEW evidence this
+  section's premise (verified true as of 2026-09-02) needs revisiting -- not
+  a reason to assume the bai-only gate was wrong at the time it was added.
