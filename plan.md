@@ -1163,3 +1163,117 @@ confirmed data point instead of one):**
 - Section 11 items #2-#4 (less-exhaustive re-test to isolate output size as
   the driving variable, token/generation-time breakdown for a timed-out
   invocation) remain open and untouched.
+
+---
+
+## 16. Prompt-side fix for the Section 11/15 output-generation-timeout: final-step SYSTEM NOTE now explicitly instructs brevity (2026-09-02, follow-up session) -- commit `97116d2`
+
+Two candidate fixes were on the table for Section 11/15's confirmed root
+cause (a forced-final-answer step's own output generation, not input size,
+running the full 300s and getting hard-killed): a `maxOutputTokens` cap on
+the final step, and a prompt instruction telling the model to give a short
+incomplete-answer instead of attempting the full exhaustive format when it
+knows it can't finish. Decision: do the prompt fix first (targets the
+actual behavior -- the model *trying* to write something huge -- rather
+than just truncating the attempt after the fact), with a token cap as a
+separate, still-open follow-up hard backstop.
+
+### 16.1 Checked Gemini's exposure to this same failure mode first
+
+Before touching anything, checked whether Gemini needed separate handling
+or already had some protection bai lacked. It doesn't: `connectors/llm/
+router.js` applies a forced `maxOutputTokens` default ONLY on the glm/groq
+branches (`GLM_DEFAULT_MAX_OUTPUT_TOKENS`/`GROQ_DEFAULT_MAX_OUTPUT_TOKENS`)
+-- for an unrelated cost-runaway problem, not this timeout. Both the `bai`
+branch and the default/`gemini` branch explicitly pass `maxOutputTokens`
+through unbounded when the caller doesn't supply one, and the gemini
+branch's own comment says so outright ("Gemini's existing
+unbounded-by-default behavior is left untouched"). So Gemini is equally
+exposed in principle -- it simply hasn't been the one caught live, since
+every repro this investigation has run (`223d6b08`, `124a76f8`) used
+`provider: "bai"`.
+
+More importantly: the forced-final-step mechanism itself (`isFinalStep`
+withholding tools, and the step-budget `SYSTEM NOTE` reminder text) lives
+in `agent_delegate.js`'s shared loop body, called identically regardless of
+which provider `providerChat` ends up routing to. This means there is no
+separate "Gemini path" to patch here -- one change to the shared note
+covers Gemini, bai, GLM, and Groq at once.
+
+### 16.2 The bug in the existing note's wording
+
+The final-step note (shown on the step immediately before the no-tools
+forced-final step) already existed, added after the 2026-07-26
+resume-truncation bug specifically to stop the model from silently
+dropping quality under a tight budget. But its actual text said: *"say so
+explicitly and describe what's missing, rather than presenting a partial
+or reformatted-for-brevity answer as if it were complete."* That phrase --
+**"reformatted-for-brevity"** -- reads as an instruction against brevity
+itself, not just against pretending an incomplete answer is complete. For
+a task that explicitly demands exhaustive coverage (as Section 11 and 15's
+repro tasks deliberately did), this gave the model every incentive to
+attempt the full unbounded answer anyway rather than risk being read as
+giving a "reformatted-for-brevity" response -- exactly the failure mode
+observed live twice.
+
+### 16.3 The fix
+
+Split into two explicitly separate instructions on the no-tools-note
+branch (`remainingAfterThisStep === 0`, i.e. the note shown right before
+the forced-final step):
+
+1. **Unchanged in spirit:** don't present an incomplete answer as if it
+   were complete -- be honest about gaps.
+2. **New:** keep the answer itself SHORT -- a few concise paragraphs, not
+   the full exhaustive format originally requested -- if the remaining
+   budget doesn't actually allow producing that format for real. Explicit
+   reasoning given to the model: a long attempt risks exceeding the
+   platform's own execution time limit and being cut off with NOTHING
+   delivered, which is strictly worse than a short, honest, incomplete
+   answer that actually lands.
+
+These are now two separate sentences rather than one conflated one, so a
+model can no longer satisfy the letter of the honesty instruction by
+writing a long, honest, but still unbounded answer -- which is exactly
+what happened in both prior repros (both `223d6b08` and `124a76f8` did
+attempt full exhaustive coverage, took the full 300s, and delivered
+nothing).
+
+**Scope:** only the `remainingAfterThisStep === 0` branch (the note
+immediately preceding the actual no-tools forced-final step) was changed.
+The earlier, softer `remainingAfterThisStep === 2` nudge ("start wrapping
+up") and the `remainingAfterThisStep === 1` case (still has tools, not the
+final step) are untouched.
+
+**Verification:** full test suite re-run after the change -- `45 files, 534
+tests`, all passing, no regressions. No existing test pinned the note's
+exact old wording (only `test/openai-shape-adapter.test.js` references the
+SEPARATE `remainingAfterThisStep === 2` note, which wasn't touched), so
+nothing needed updating alongside the fix.
+
+### 16.4 What this is, and isn't
+
+This is a SOFT guarantee -- prompt instructions can be ignored, especially
+by a smaller/faster model like GLM-5.3-Flash on a task that itself insists
+on exhaustiveness. It directly targets the actual behavior (the model
+choosing to attempt an unbounded answer) rather than papering over it with
+a truncation cap, but it is not a hard ceiling on generation time or
+token count. The originally-discussed `maxOutputTokens` cap on the final
+step remains a separate, NOT YET implemented, hard backstop -- deliberately
+sequenced second, since a moderate (not tiny) cap only prevents a
+truncated/garbled cutoff, it doesn't fix the model's underlying incentive
+to try to write too much in the first place.
+
+**Next steps:**
+- Re-run the same oversized-task repro (Section 15's exact shape:
+  `provider: "bai"`, `max_steps: 3`, exhaustive full-repo-writeup task) to
+  see whether the model now actually gives a short incomplete-answer
+  instead of attempting the full exhaustive format -- not yet done this
+  session.
+- If the prompt fix alone doesn't reliably prevent the timeout in a
+  re-test, implement the `maxOutputTokens` cap on the final step as the
+  hard backstop -- sized generously enough to allow a normal (even a
+  reasonably thorough) answer, not so tight that a legitimate final answer
+  gets truncated mid-sentence.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+  `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
