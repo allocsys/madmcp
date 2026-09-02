@@ -106,8 +106,74 @@ export async function handleAgentWorker(req, res) {
   // invocations (a QStash redelivery, or a genuine concurrent duplicate)
   // both processed the same runId+afterStep" -- something timestamps
   // alone on the checkpoint can't tell apart. Log-only; no behavior change.
+  // Moved above the dead-letter check below (2026-09-02) so debugLog calls
+  // in that block can reference it -- previously only defined further down.
   const invocationId = randomUUID();
   debugLog(`agent-worker[${invocationId}]: entry runId=${runId} afterStep=${afterStep} retryCount=${retryCount}`);
+
+  // Dead-letter blind spot fix (plan.md Section 9, priority #3): `retryCount`
+  // above only reflects failures THIS handler lived long enough to observe
+  // and persist (via the publishAgentStep re-chain call below, threading
+  // newRetryCount into the next message's body). A Vercel platform timeout
+  // kills the function mid-`runInvestigation` -- before any of that code
+  // runs -- so a step that dies this way can NEVER increment `retryCount`,
+  // and AGENT_WORKER_MAX_CONSECUTIVE_FAILURES can never catch it. QStash
+  // itself, however, has no blind spot here: it retries the exact same
+  // message (same body, including this stale `retryCount`) whenever the
+  // HTTP call doesn't return within its own Max HTTP Response Duration, and
+  // stamps every such redelivery with an `Upstash-Retried` header --
+  // "0" on the first delivery attempt of a given message, incrementing by 1
+  // on each subsequent QStash-initiated redelivery -- entirely independent
+  // of whatever this repo's own code did or didn't get to run. Reading that
+  // header gives a true count of "how many times has QStash already
+  // redelivered THIS specific message" regardless of whether any of those
+  // prior attempts ever reached the point of updating our own counter.
+  const qstashRetried = Number(req.get("Upstash-Retried") ?? 0) || 0;
+  // The larger of the two is the more accurate picture of how stuck this
+  // step really is: retryCount catches ordinary (non-timeout) failures that
+  // DID complete and re-chain normally; qstashRetried catches the timeout
+  // case retryCount structurally cannot. Neither alone is complete.
+  const effectiveRetryCount = Math.max(retryCount, qstashRetried);
+
+  if (effectiveRetryCount >= AGENT_WORKER_MAX_CONSECUTIVE_FAILURES) {
+    // Dead-letter BEFORE attempting another (likely doomed, and
+    // potentially another ~300s-costing) runInvestigation call -- if
+    // QStash has already redelivered this exact message
+    // AGENT_WORKER_MAX_CONSECUTIVE_FAILURES times, further attempts are
+    // vanishingly unlikely to be the one that finally finishes, and every
+    // attempt in the meantime is real time and quota spent on a step this
+    // run has already effectively failed on. Checked here (before the
+    // idempotency/checkpoint-status checks below even load) so this can't
+    // itself be skipped by racing another invocation's status update --
+    // worst case this fires once redundantly if a genuinely-successful
+    // concurrent invocation is *also* in flight, which the checkpoint
+    // status check just below already treats as a safe no-op.
+    const checkpointForDeadLetter = await loadCheckpoint(runId);
+    if (checkpointForDeadLetter && checkpointForDeadLetter.status === "running" && checkpointForDeadLetter.stepsDone === afterStep) {
+      await saveCheckpoint(runId, {
+        newContents: [],
+        transcript: checkpointForDeadLetter.transcript,
+        stepsDone: checkpointForDeadLetter.stepsDone,
+        task: checkpointForDeadLetter.task,
+        repeatCounts: checkpointForDeadLetter.repeatCounts,
+        consecutiveAllRepeatSteps: checkpointForDeadLetter.consecutiveAllRepeatSteps,
+        provider: checkpointForDeadLetter.provider,
+        model: checkpointForDeadLetter.model,
+        maxOutputTokens: checkpointForDeadLetter.maxOutputTokens,
+        pendingVerification: checkpointForDeadLetter.pendingVerification,
+        structuralRecheckUsed: checkpointForDeadLetter.structuralRecheckUsed,
+        status: "failed",
+        finalAnswer: `Investigation stopped after QStash redelivered step ${checkpointForDeadLetter.stepsDone + 1} ${qstashRetried} time(s) without a completed attempt (likely repeated platform-level execution timeouts on an oversized step) -- this is caught by Upstash-Retried header inspection, not this worker's own in-process retryCount, since a hard platform timeout kills the function before retryCount can ever be incremented.`,
+        stepStartedAt: null,
+      });
+      console.error(`agent-worker: runId ${runId} dead-lettered via Upstash-Retried inspection (qstashRetried=${qstashRetried}, bodyRetryCount=${retryCount}) on step ${checkpointForDeadLetter.stepsDone + 1}`);
+      debugLog(`agent-worker[${invocationId}]: exit status=dead-lettered reason=qstash-retried-threshold runId=${runId} afterStep=${afterStep} qstashRetried=${qstashRetried}`);
+      return res.status(200).json({ status: "dead-lettered", reason: "qstash-retried-threshold", steps: checkpointForDeadLetter.stepsDone });
+    }
+    // Checkpoint already moved on (finished, or another invocation already
+    // handled this step) -- fall through to the ordinary idempotency checks
+    // below, which will correctly no-op on it.
+  }
 
   const checkpoint = await loadCheckpoint(runId);
   if (!checkpoint) {
@@ -176,7 +242,13 @@ export async function handleAgentWorker(req, res) {
   debugLog(`agent-worker[${invocationId}]: runInvestigation returned steps=${result.steps} failed=${!!result.failed} runId=${runId} afterStep=${afterStep}`);
 
   const advanced = result.steps > afterStep;
-  const newRetryCount = advanced ? 0 : retryCount + 1;
+  // Uses effectiveRetryCount (max of body retryCount and the
+  // Upstash-Retried header, computed above) rather than plain retryCount,
+  // so a step that failed via QStash-level redeliveries before ever
+  // reaching this line still counts those redeliveries toward the
+  // threshold below, not just whatever this repo's own code previously
+  // managed to persist.
+  const newRetryCount = advanced ? 0 : effectiveRetryCount + 1;
 
   const latest = await loadCheckpoint(runId);
   if (!latest || latest.status !== "running") {

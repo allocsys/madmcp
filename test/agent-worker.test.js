@@ -49,11 +49,15 @@ vi.mock("../connectors/github/client.js", () => ({
   githubRequest: mockGithubRequest,
 }));
 
-function makeReqRes({ body, signature = "sig", rawBody } = {}) {
+function makeReqRes({ body, signature = "sig", rawBody, upstashRetried } = {}) {
   const req = {
     body,
     rawBody: rawBody ? Buffer.from(rawBody) : Buffer.from(JSON.stringify(body || {})),
-    get: (name) => (name === "Upstash-Signature" ? signature : undefined),
+    get: (name) => {
+      if (name === "Upstash-Signature") return signature;
+      if (name === "Upstash-Retried") return upstashRetried === undefined ? undefined : String(upstashRetried);
+      return undefined;
+    },
   };
   const res = {
     statusCode: null,
@@ -207,5 +211,88 @@ describe("agent_worker.js — handleAgentWorker", () => {
     const cp = await loadCheckpoint(runId);
     expect(cp.status).toBe("failed");
     expect(cp.finalAnswer).toMatch(/consecutive failures/);
+  });
+
+  // Regression coverage for plan.md Section 9, priority #3: the dead-letter
+  // blind spot when a platform timeout kills the function before this
+  // repo's own retryCount can ever be incremented. Simulates that exact
+  // scenario -- body.retryCount stuck at 0 (as it would be on a message
+  // that was published once, after which every delivery attempt hard-timed
+  // out before reaching the re-chain code) while Upstash-Retried climbs on
+  // each simulated redelivery.
+  it("dead-letters via Upstash-Retried header even when body.retryCount never advanced (simulated platform-timeout blind spot)", async () => {
+    const runId = await seedRun({ task: "oversized step that always platform-times-out", provider: "gemini" });
+
+    // Every attempt below sends body.retryCount: 0 -- simulating the exact
+    // blind spot: a platform timeout kills the function before the re-chain
+    // code (the only place that ever persists an updated retryCount) runs,
+    // so QStash keeps redelivering the SAME original message, whose body is
+    // frozen at whatever it was when first published. Only Upstash-Retried
+    // (the header) actually climbs across these redeliveries. If dead-
+    // lettering only looked at body.retryCount, this would loop forever;
+    // the fix makes effectiveRetryCount = max(body.retryCount, header)
+    // catch it via the header instead.
+    mockProviderChat.mockRejectedValue(new Error("simulated slow call"));
+
+    // Attempts at header values 0, 1, 2, 3 all stay under the default
+    // AGENT_WORKER_MAX_CONSECUTIVE_FAILURES (5) threshold once the post-
+    // attempt failure is counted (effectiveRetryCount + 1), so none of
+    // these should dead-letter yet.
+    for (let retried = 0; retried <= 3; retried++) {
+      const { req, res } = makeReqRes({ body: { runId, afterStep: 0, retryCount: 0 }, upstashRetried: retried });
+      await handleAgentWorker(req, res);
+      expect(res.jsonBody.status).toBe("chained");
+    }
+
+    // At header value 4, effectiveRetryCount (4) + 1 = 5 reaches the
+    // threshold -- dead-letters via the ordinary post-attempt path, driven
+    // by the header since body.retryCount is still frozen at 0.
+    const { req, res } = makeReqRes({ body: { runId, afterStep: 0, retryCount: 0 }, upstashRetried: 4 });
+    await handleAgentWorker(req, res);
+    expect(res.jsonBody.status).toBe("dead-lettered");
+
+    const cp = await loadCheckpoint(runId);
+    expect(cp.status).toBe("failed");
+    expect(cp.finalAnswer).toMatch(/consecutive failures/);
+  });
+
+  it("dead-letters IMMEDIATELY (skipping the attempt entirely) when Upstash-Retried alone already meets the threshold on entry", async () => {
+    const runId = await seedRun({ task: "already redelivered many times before we ever see it", provider: "gemini" });
+    mockProviderChat.mockRejectedValue(new Error("should never be called"));
+
+    // A single request whose header ALONE already meets the threshold
+    // (body.retryCount: 0, as if this were the very first message this
+    // repo's own code has ever seen for this run, but QStash's own
+    // perspective is that it's already redelivered this exact message 5
+    // times -- i.e. every prior attempt hard-timed-out before even reaching
+    // the heartbeat write). This must dead-letter WITHOUT attempting
+    // runInvestigation again.
+    const { req, res } = makeReqRes({ body: { runId, afterStep: 0, retryCount: 0 }, upstashRetried: 5 });
+    await handleAgentWorker(req, res);
+
+    expect(res.jsonBody.status).toBe("dead-lettered");
+    expect(res.jsonBody.reason).toBe("qstash-retried-threshold");
+    expect(mockProviderChat).not.toHaveBeenCalled();
+
+    const cp = await loadCheckpoint(runId);
+    expect(cp.status).toBe("failed");
+    expect(cp.finalAnswer).toMatch(/Upstash-Retried/);
+  });
+
+  it("does not dead-letter prematurely when Upstash-Retried is present but still below the threshold", async () => {
+    const runId = await seedRun({ task: "healthy-ish task", provider: "gemini" });
+    mockGithubRequest.mockResolvedValue({ names: [] });
+    mockProviderChat.mockResolvedValueOnce({
+      content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_1" } }] },
+      finishReason: "STOP",
+    });
+
+    // A low, healthy Upstash-Retried value (e.g. 1 -- ordinary first retry
+    // after a blip) must not trip the new early dead-letter check.
+    const { req, res } = makeReqRes({ body: { runId, afterStep: 0, retryCount: 0 }, upstashRetried: 1 });
+    await handleAgentWorker(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("chained");
   });
 });
