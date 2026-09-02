@@ -562,3 +562,132 @@ mystery.
   informative anymore; the mechanism is understood. Any further testing of
   this failure mode should use a fresh, deliberately oversized task like
   Section 7's, now that we know what to look for in the logs.
+
+---
+
+## 10. Fixes implemented for Section 9's root cause (this session) -- branch `fix/oversized-step-timeout`
+
+Implemented the "Next steps" list from Section 9, in priority order. Branch
+pushed to `origin/fix/oversized-step-timeout`
+(https://github.com/allocsys/madmcp/pull/new/fix/oversized-step-timeout),
+not yet merged to `main`. Full test suite (517 tests) and lint pass clean
+after both commits below.
+
+**Priority #1 (root-cause fix) -- DONE, commit `ee6560d`:** Added two
+guardrails to `agent_delegate.js`'s step loop, independent of the existing
+per-call `sliceFileContentForModel` truncation (which alone doesn't stop
+the model from batching many individually-within-limit calls into one
+step):
+
+- `MAX_TOOL_CALLS_PER_STEP = 8` -- only the first 8 calls the model
+  batches into a single turn are actually executed. The rest
+  (`deferredFunctionCalls`) still get a `functionResponse` each (required
+  by the API contract), but a synthetic, non-executed one telling the
+  model to re-request them next step.
+- `MAX_STEP_RESULT_CHARS = 60000` -- caps the combined size of what
+  actually gets appended to `contents`/`responseParts` for one step.
+  Applied AFTER execution/caching, so `resultCache` and the Redis
+  side-store still hold the full, untruncated text (nothing is lost for
+  `findUnverifiedClaims`/history-compaction purposes) -- only the outbound
+  payload sent to the LLM on the next call is bounded. A call cut off by
+  this cap can be re-requested (e.g. via `char_offset`) in a later step.
+
+Both values are deliberately conservative but not tiny -- confirmed by the
+full pre-existing test suite passing completely unchanged (ordinary steps,
+1-3 calls with one moderate file read, are far under either cap). New
+regression test `test/agent-oversized-step-cap.test.js` reproduces the
+Section 7 repro shape (many batched calls in one step) directly against
+`runInvestigation` and asserts both caps against real observed behavior
+(actual `readFileViaBlob` call counts for the count cap; the actual
+outbound `providerChat` `contents` payload size for the size cap), not
+just transcript string matching.
+
+**Priority #2 (bai per-call timeout) -- ALREADY DONE, no fix needed
+(correction to the handoff's premise):** The handoff task description
+stated bai's client "doesn't appear to have" a `GEMINI_REQUEST_TIMEOUT_MS`
+equivalent. This was checked directly against current `main` this session
+and found to be incorrect: `connectors/bai/client.js`'s
+`callChatCompletionOnce` already wraps its `fetch` call in an
+`AbortController` + `setTimeout(..., BAI_REQUEST_TIMEOUT_MS)`, aborting
+and throwing a `.transient = true` error on timeout -- the exact same
+shape as Gemini's own timeout handling. `config.js` already exports
+`BAI_REQUEST_TIMEOUT_MS = Number(process.env.BAI_REQUEST_TIMEOUT_MS) ||
+55000` (same 55000ms default as `GEMINI_REQUEST_TIMEOUT_MS`,
+`GLM_REQUEST_TIMEOUT_MS`, `GROQ_REQUEST_TIMEOUT_MS`), and
+`test/bai-client.test.js` already covers the abort/timeout path
+(`"maps a network/abort failure to a transient error"`,
+`"rotates to the next key on a network/timeout failure and records a
+cooldown"`). Traced via `git log -S` to commit `ad99a3d`, the original
+"Add B.AI as a third delegate_agent provider" commit -- it was present
+from the start, not added since the handoff was written. No code change
+made for this item.
+
+**Priority #3 (dead-letter blind spot) -- DONE, commit `ebdb441`:** Added
+`Upstash-Retried` header inspection to `agent_worker.js`. QStash stamps
+every HTTP delivery attempt of a given message with this header (`0` on
+the first attempt, incrementing by 1 on each subsequent QStash-initiated
+redelivery -- confirmed against Upstash's own docs,
+https://upstash.com/docs/qstash/features/retry), entirely independent of
+whatever this repo's own code did or didn't get to run on a prior
+attempt. This closes the exact gap Section 9 identified: a platform
+timeout kills the function before `retryCount` (this repo's own counter,
+only ever updated via the re-chain `publishAgentStep` call) can be
+incremented, so QStash can redeliver the same message indefinitely
+without `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` ever seeing it.
+
+Implementation: `effectiveRetryCount = Math.max(bodyRetryCount,
+qstashRetried)`, used in place of plain `retryCount` in two places:
+
+- The existing post-attempt dead-letter check (now correctly reaches the
+  threshold via the header even when `body.retryCount` is stuck/stale
+  because every prior attempt was platform-killed before reaching the
+  code that would have updated it).
+- A NEW early pre-attempt check, run immediately after parsing
+  `runId`/`afterStep`/`retryCount` from the body and before the heartbeat
+  write / `runInvestigation` call: if the header alone already meets
+  `AGENT_WORKER_MAX_CONSECUTIVE_FAILURES` on entry, dead-letter
+  immediately (with its own `reason: "qstash-retried-threshold"` in the
+  response) instead of spending another likely-doomed ~300s attempt.
+  Re-checks the checkpoint's live status/stepsDone right before writing,
+  same idempotency shape as the rest of the file, so this can't stomp on
+  a checkpoint another (successful) concurrent invocation has already
+  moved past.
+
+Three new regression tests in `test/agent-worker.test.js`:
+1. Simulates `body.retryCount` frozen at 0 across five simulated
+   redeliveries while `Upstash-Retried` climbs 0->4, confirming
+   dead-lettering fires (via the post-attempt path) driven by the header,
+   not the body field.
+2. Confirms the early-skip path: a single request whose header alone
+   already meets the threshold dead-letters WITHOUT calling
+   `providerChat`/`runInvestigation` again.
+3. Confirms a low/healthy `Upstash-Retried` value (1) does not trip the
+   check prematurely on an otherwise-normal step.
+
+All 8 pre-existing `agent_worker.js` tests pass unchanged (11 total after
+the 3 new ones).
+
+**Deliberately NOT done this session (per the handoff's own scope):**
+`DEBUG_AGENT_WORKER` remains at its current default (ON, flipped in
+Section 7) -- reverting it to default-off was priority #4 in the original
+handoff but is being held for a separate step, not bundled into this
+branch. Section 5's "Void" question also remains open, as instructed --
+nothing in this session's fixes constitutes the "separate confirmation"
+that question still needs. Run `c1beaeda-874a-47dd-97b0-763bff80ba6d` was
+not touched.
+
+**Next steps:**
+- Revert `DEBUG_AGENT_WORKER` default to off (config.js) now that the
+  Section 9 root cause has both a fix and a real dead-letter safety net --
+  separate step per the handoff, deliberately not included here.
+- Open a PR from `fix/oversized-step-timeout` into `main` and merge once
+  reviewed.
+- Once merged and deployed, the real-world test is whether the Vercel
+  `Task timed out after 300 seconds` error group (Section 9) stops
+  recurring for new runs -- the 15 occurrences found this session all
+  predate this fix. Worth a follow-up `get_runtime_errors` check after a
+  reasonable interval post-deploy.
+- If a future run still exhibits stalling despite these fixes, that would
+  be new information worth its own investigation (would suggest either
+  the caps need tuning, or a genuinely different failure mode) rather
+  than assuming it's the same one Section 9 already root-caused.
