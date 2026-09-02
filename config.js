@@ -164,6 +164,46 @@ export const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEO
 export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID || "3a845572-b580-81d0-8653-f64596e45e58";
 
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
+
+// Failure-callback target + retry budget for publishAgentStep/publishEditorStep
+// (plan.md Section 13, fixing the live dead-letter blind spot confirmed in
+// Section 12). Previously client.publishJSON() was called with neither
+// `retries` nor `failureCallback` set, so QStash fell back to its own
+// defaults: 3 retries with exponential backoff (~12s, ~2m28s, ~30m8s --
+// worst case ~40min to exhaust), and, critically, NO notification to this
+// app when that budget runs out. agent_worker.js's own dead-letter check
+// (effectiveRetryCount via the Upstash-Retried header) only runs INSIDE a
+// live worker invocation -- but a step that hard-times-out on every single
+// QStash delivery attempt (the Section 11 output-size problem, not a
+// transient blip) means no further invocation ever arrives once QStash's
+// budget is spent, so that check never gets a chance to fire. The
+// checkpoint is left at status:"running" forever with nothing to catch it.
+//
+// Fix: QSTASH_STEP_RETRIES=0 (retrying a step that will deterministically
+// time out again buys nothing but another guaranteed 300s -- there's no
+// "maybe it was transient" case here worth paying for; genuinely transient
+// provider errors like Gemini 429/503 are caught and re-chained by this
+// app's OWN retryCount logic via a fresh publish, not by QStash redelivering
+// the same message, so this doesn't reduce that coverage) plus a
+// failureCallback so QStash tells the app directly, in one HTTP round trip,
+// the moment its (now much smaller) retry budget is exhausted -- instead of
+// silently going nowhere.
+export const QSTASH_STEP_RETRIES = Number.isInteger(Number(process.env.QSTASH_STEP_RETRIES)) ? Number(process.env.QSTASH_STEP_RETRIES) : 0;
+
+// Derives a sibling "-failure" endpoint URL from a worker URL by swapping
+// its path suffix, same pattern as deriveEditorWorkerUrl() further below --
+// kept as its own small helper (rather than only inline in
+// deriveEditorWorkerUrl) so both AGENT_WORKER_FAILURE_URL here and
+// EDITOR_WORKER_FAILURE_URL below can share it without one being defined in
+// terms of the other's unrelated derivation function.
+function deriveFailureUrl(workerUrl, fromSuffix, toSuffix, envOverride) {
+  if (envOverride) return envOverride;
+  if (!workerUrl) return undefined;
+  if (workerUrl.includes(fromSuffix)) return workerUrl.replace(fromSuffix, toSuffix);
+  return undefined;
+}
+export const AGENT_WORKER_FAILURE_URL = deriveFailureUrl(AGENT_WORKER_URL, "/api/agent-worker", "/api/agent-worker-failure", process.env.AGENT_WORKER_FAILURE_URL);
+
 export const DELEGATE_AGENT_ASYNC = process.env.DELEGATE_AGENT_ASYNC || "sync";
 export const AGENT_ASYNC_POLL_FRESH_SECONDS = Number(process.env.AGENT_ASYNC_POLL_FRESH_SECONDS) || 60;
 // Max plausible time a single delegate_agent step can legitimately take before
@@ -315,6 +355,9 @@ function deriveEditorWorkerUrl() {
   return undefined;
 }
 export const EDITOR_WORKER_URL = deriveEditorWorkerUrl();
+// Same failure-callback derivation as AGENT_WORKER_FAILURE_URL above --
+// see that constant's comment for the full reasoning (plan.md Section 13).
+export const EDITOR_WORKER_FAILURE_URL = deriveFailureUrl(EDITOR_WORKER_URL, "/api/editor-worker", "/api/editor-worker-failure", process.env.EDITOR_WORKER_FAILURE_URL);
 export const EDITOR_AGENT_ASYNC = process.env.EDITOR_AGENT_ASYNC || "qstash";
 // Same default as AGENT_ASYNC_POLL_FRESH_SECONDS -- no reason for the
 // freshness window itself to differ between the two workers.
