@@ -729,17 +729,68 @@ the limit of what black-box behavior alone can resolve.
      many calls into one step would trigger it -- the guardrail bounds
      fan-out-per-step, not total-context-growth.**
 
-     **Not yet done:** a second repro to confirm this is reproducible (not
-     a one-off) and isolate whether it's specifically the pagination
-     pattern or just "any run that accumulates ~168k+ chars of
-     full-detail history by step 4" regardless of how it got there; a
-     look at whether `HISTORY_FULL_DETAIL_STEPS`/`COMPACTION_CHAR_THRESHOLD`
-     tuning (currently 3 steps / 500 chars) could close this gap without
-     hurting legitimate use of pagination; the original delegated review
-     task itself (hallucination/partial-info-loss/compaction-interaction
-     analysis) never completed -- run `9c402073...` is still sitting
-     dead-lettered, unresumed as of this edit. **Recommend a follow-up
-     session resume that run explicitly (`resume_run_id` +
-     `max_steps`) to get its actual analysis, and treat this compaction-
-     timing gap as a new open item distinct from the MAX_STEP_RESULT_CHARS
-     value question §6 item 9 already closed out above.**
+     **UPDATE (2026-09-02, same session): second repro CONTRADICTS the
+     pagination-timing hypothesis above -- correcting course rather than
+     compounding a wrong theory.** The original run
+     (`9c402073-94ee-4559-b401-0a1f22c74254`) was permanently dead
+     (confirmed via an explicit `resume_run_id` + `max_steps: 11` nudge,
+     which returned the terminal QStash-exhausted-delivery-budget error
+     immediately -- no live checkpoint left to resume, it had already
+     hard-failed). A fresh run
+     (`05b8bea5-72c1-4632-b94b-5da6f11f5ac9`) was started with the SAME
+     task, but explicitly instructed to read the whole 167,939-char file
+     via 2 BATCHED calls in a single step 1 (offset 0 + offset 100000,
+     both issued in the same turn) instead of pagination across multiple
+     steps -- directly testing whether avoiding the
+     multi-step-history-accumulation pattern would avoid the stall.
+
+     **It did not.** Step 1 (the batched read) completed cleanly and
+     quickly. Step 2 -- now the very next step, with the full file already
+     in context in ONE turn rather than spread across three -- stalled the
+     same way: confirmed via real Vercel runtime logs, `afterStep=1`
+     entered at `21:56:22`, no `runInvestigation returned`/`exit` line
+     logged for it even after 230s+ of elapsed wall time (approaching the
+     300s ceiling with no response). Since the aggregate payload size
+     reaching that step was IDENTICAL either way (~167,939 chars,
+     whether assembled via 3 sequential steps or 1 batched step), the
+     original theory -- that slow pagination specifically evades
+     `MAX_STEP_RESULT_CHARS` via a `compactHistoryInPlace` timing gap --
+     is now considered LESS LIKELY to be the actual mechanism, since
+     batching (which sidesteps that exact timing gap) reproduced the same
+     stall anyway.
+
+     **Current best-guess mechanism (repo owner's read, not yet
+     code-confirmed this session):** this looks like a reasoning-load
+     problem, not a history-accumulation-timing problem -- the step that
+     has to actually REASON over ~168k chars of raw source in one
+     `providerChat` call (as opposed to just relaying/withholding tool
+     results, which is comparatively cheap) may be spending enough of its
+     token/time budget on that reasoning to approach or blow the 300s
+     ceiling, independent of which step number it lands on or how the
+     payload was assembled. This would make it a closer cousin of §4's
+     original forced-final-step token-budget-race finding
+     (`isReasoningBudgetExhausted`) than of §3's payload-size-per-step
+     finding -- worth checking whether this step was in fact a
+     tool-calling turn asked to reason+decide-next-action over the full
+     file (not a no-tools forced-final turn, so §4's existing
+     `reasoningEffort: "low"` gating -- scoped only to `isFinalStep` --
+     would NOT have applied here even if it's the same underlying
+     token-budget mechanism).
+
+     **Not yet done:** direct confirmation of the reasoning-load theory
+     (e.g. checking bai response usage/`reasoning_tokens` shape for this
+     specific step, the way §4's original root-causing did via
+     `test-bai-timeout.sh`, rather than inferring from wall-clock alone);
+     whether extending §4's `reasoningEffort: "low"` gating beyond just
+     `isFinalStep` to any step carrying an unusually large payload would
+     help, and whether that's even the right fix vs. something at the
+     `MAX_STEP_RESULT_CHARS`/prompt level instead; the original delegated
+     review task (hallucination/partial-info-loss/compaction-interaction
+     analysis) still has not completed successfully in either attempt --
+     both `9c402073...` and `05b8bea5...` hit this same wall before ever
+     producing an answer. **Recommend a follow-up session try a
+     deliberately SMALLER reasoning task first (e.g. "summarize just the
+     `MAX_STEP_RESULT_CHARS` section" rather than the full-file open-ended
+     review) to isolate whether it's raw payload size or reasoning
+     complexity/scope driving the stall, before attempting the original
+     review task again.**
