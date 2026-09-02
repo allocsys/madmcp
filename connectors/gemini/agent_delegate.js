@@ -1185,6 +1185,11 @@ function detectToolCallLeakage(text, knownFunctionNames) {
   return null;
 }
 
+// The actual set of real function names this file declares -- built once
+// from FUNCTIONS[] itself (not hand-maintained separately), so it can never
+// drift out of sync with the real tool list as FUNCTIONS[] grows/changes.
+const FUNCTION_NAME_SET = new Set(FUNCTIONS.map((f) => f.name));
+
 // SCOPE NOTE (2026-07-27): this file deliberately has NO web access (no
 // web_fetch, no Google Search grounding) -- that lives entirely in
 // connectors/exa/research_delegate.js, behind the separate delegate_research
