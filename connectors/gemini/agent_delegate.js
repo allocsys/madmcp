@@ -1810,8 +1810,15 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // run it) -- deferredFunctionCalls get a synthetic, non-executed
     // response below instead of silently vanishing, so the model sees
     // exactly why the rest didn't run and can re-request them next step.
-    const functionCalls = allFunctionCalls.slice(0, MAX_TOOL_CALLS_PER_STEP);
-    const deferredFunctionCalls = allFunctionCalls.slice(MAX_TOOL_CALLS_PER_STEP);
+    // Oversized-step caps below (MAX_TOOL_CALLS_PER_STEP, MAX_STEP_RESULT_CHARS,
+    // and the final-step brevity note) are scoped to provider "bai" only --
+    // they were added to fix bai-specific 300s platform-timeout failures
+    // (plan.md Sections 9-16), never observed on Gemini in any repro run.
+    // Gemini must not have its tool-call batching or result sizing changed
+    // by a fix aimed at a different provider's failure mode.
+    const applyOversizedStepCaps = effectiveProvider === "bai";
+    const functionCalls = applyOversizedStepCaps ? allFunctionCalls.slice(0, MAX_TOOL_CALLS_PER_STEP) : allFunctionCalls;
+    const deferredFunctionCalls = applyOversizedStepCaps ? allFunctionCalls.slice(MAX_TOOL_CALLS_PER_STEP) : [];
 
     if (!functionCalls.length) {
       const answer = parts.map((p) => p.text || "").join("").trim();
@@ -2163,18 +2170,23 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // char_offset if applicable) in a later step. Applied in array order,
       // which is call order within the step, so earlier calls in a step
       // keep priority over later ones once the cap is hit.
-      let stepResultCharsUsed = 0;
-      for (const r of results) {
-        if (stepResultCharsUsed >= MAX_STEP_RESULT_CHARS) {
-          r.resultText = `[Result withheld -- this step's combined tool-result size already reached the ${MAX_STEP_RESULT_CHARS}-char per-step cap from earlier calls in the same step. Re-request this specific call in your next step.]`;
-        } else if (stepResultCharsUsed + r.resultText.length > MAX_STEP_RESULT_CHARS) {
-          const allowed = MAX_STEP_RESULT_CHARS - stepResultCharsUsed;
-          r.resultText = `${r.resultText.slice(0, allowed)}\n...[truncated -- this step's combined tool-result cap of ${MAX_STEP_RESULT_CHARS} chars was reached; re-request the remainder (e.g. via char_offset) in a future step]`;
-          stepResultCharsUsed += allowed;
-        } else {
-          stepResultCharsUsed += r.resultText.length;
+      if (applyOversizedStepCaps) {
+        let stepResultCharsUsed = 0;
+        for (const r of results) {
+          if (stepResultCharsUsed >= MAX_STEP_RESULT_CHARS) {
+            r.resultText = `[Result withheld -- this step's combined tool-result size already reached the ${MAX_STEP_RESULT_CHARS}-char per-step cap from earlier calls in the same step. Re-request this specific call in your next step.]`;
+          } else if (stepResultCharsUsed + r.resultText.length > MAX_STEP_RESULT_CHARS) {
+            const allowed = MAX_STEP_RESULT_CHARS - stepResultCharsUsed;
+            r.resultText = `${r.resultText.slice(0, allowed)}\n...[truncated -- this step's combined tool-result cap of ${MAX_STEP_RESULT_CHARS} chars was reached; re-request the remainder (e.g. via char_offset) in a future step]`;
+            stepResultCharsUsed += allowed;
+          } else {
+            stepResultCharsUsed += r.resultText.length;
+          }
         }
       }
+      // Gemini (applyOversizedStepCaps === false): no per-step result-size cap --
+      // results are appended to contents/responseParts at their full size, exactly
+      // as before this session's bai-specific fixes.
 
       for (const r of results) {
         const cacheNote = r.servedFromCache ? " [CACHED -- identical call already made this run, not re-executed]" : "";
@@ -2297,10 +2309,17 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // gaps; also don't try to out-write your budget) that were previously
       // collapsed into one sentence a model could satisfy by writing a long,
       // honest, but still unbounded answer.
+      // Brevity instruction below is bai-only (applyOversizedStepCaps) -- added
+      // specifically for bai's output-generation-timeout failure (plan.md
+      // Section 11/15/16), never observed on Gemini. Gemini gets only the
+      // original, unmodified "next turn has no tools" sentence, unchanged
+      // from before this session's fixes.
       const noToolsNote = remainingAfterThisStep === 0
-        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now. " +
-          "IMPORTANT: keep this answer SHORT -- a few concise paragraphs, not the full exhaustive format originally requested (a per-file/per-item breakdown, a complete table, a line-by-line comparison, or similar). " +
-          "If you do not have the steps left to actually produce that, do NOT attempt it anyway: a long attempt at an exhaustive answer risks exceeding this platform's own execution time limit and being cut off with nothing delivered at all, which is strictly worse than a short, honest, incomplete one. Briefly summarize what you found, explicitly list what's missing or unfinished, and stop there."
+        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now." +
+          (applyOversizedStepCaps
+            ? " IMPORTANT: keep this answer SHORT -- a few concise paragraphs, not the full exhaustive format originally requested (a per-file/per-item breakdown, a complete table, a line-by-line comparison, or similar). " +
+              "If you do not have the steps left to actually produce that, do NOT attempt it anyway: a long attempt at an exhaustive answer risks exceeding this platform's own execution time limit and being cut off with nothing delivered at all, which is strictly worse than a short, honest, incomplete one. Briefly summarize what you found, explicitly list what's missing or unfinished, and stop there."
+            : "")
         : "";
       responseParts.push({
         text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} Separately from the length of your response: if you cannot fully complete the task -- including any specific format requested -- say so explicitly and describe what's missing, rather than presenting a partial or reformatted answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
