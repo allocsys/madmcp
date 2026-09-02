@@ -257,4 +257,176 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
     global.fetch = vi.fn().mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({}) });
     await expect(clientModule.baiChat([{ role: "user", content: "hi" }])).rejects.toThrow("B.AI returned no choices.");
   });
+
+  it("sends reasoning_effort when provided", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }),
+    });
+    await clientModule.baiChat([{ role: "user", content: "hi" }], { reasoningEffort: "low" });
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.reasoning_effort).toBe("low");
+  });
+
+  it("omits reasoning_effort from the request body entirely when not provided", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }),
+    });
+    await clientModule.baiChat([{ role: "user", content: "hi" }]);
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+
+  describe("isReasoningBudgetExhausted (plan.md Section 25 detection logic)", () => {
+    it("returns true when finish_reason is 'length' and reasoning_tokens is >=90% of completion_tokens (top-level usage shape)", () => {
+      const choice = { finish_reason: "length" };
+      const usage = { completion_tokens: 1200, reasoning_tokens: 1150 };
+      expect(clientModule.isReasoningBudgetExhausted(choice, usage)).toBe(true);
+    });
+
+    it("returns true using the nested completion_tokens_details.reasoning_tokens shape", () => {
+      const choice = { finish_reason: "length" };
+      const usage = { completion_tokens: 1200, completion_tokens_details: { reasoning_tokens: 1200 } };
+      expect(clientModule.isReasoningBudgetExhausted(choice, usage)).toBe(true);
+    });
+
+    it("returns false when finish_reason is not 'length'", () => {
+      const choice = { finish_reason: "stop" };
+      const usage = { completion_tokens: 1200, reasoning_tokens: 1150 };
+      expect(clientModule.isReasoningBudgetExhausted(choice, usage)).toBe(false);
+    });
+
+    it("returns false when reasoning_tokens is a minority of completion_tokens (a real, mostly-complete answer that ran over budget)", () => {
+      const choice = { finish_reason: "length" };
+      const usage = { completion_tokens: 1200, reasoning_tokens: 100 };
+      expect(clientModule.isReasoningBudgetExhausted(choice, usage)).toBe(false);
+    });
+
+    it("returns false when usage is missing entirely", () => {
+      const choice = { finish_reason: "length" };
+      expect(clientModule.isReasoningBudgetExhausted(choice, undefined)).toBe(false);
+    });
+
+    it("returns false when reasoning_tokens is absent from usage in both shapes", () => {
+      const choice = { finish_reason: "length" };
+      const usage = { completion_tokens: 1200 };
+      expect(clientModule.isReasoningBudgetExhausted(choice, usage)).toBe(false);
+    });
+
+    it("returns false when completion_tokens is 0", () => {
+      const choice = { finish_reason: "length" };
+      const usage = { completion_tokens: 0, reasoning_tokens: 0 };
+      expect(clientModule.isReasoningBudgetExhausted(choice, usage)).toBe(false);
+    });
+  });
+
+  describe("baiChat retry-once-on-reasoning-token-exhaustion (plan.md Section 25 fix)", () => {
+    it("retries once with a larger max_tokens on a detected exhaustion, keeping the same reasoning_effort", async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "" }, finish_reason: "length" }],
+            usage: { completion_tokens: 1200, reasoning_tokens: 1180 },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "Final answer after retry." }, finish_reason: "stop" }],
+            usage: { completion_tokens: 300, reasoning_tokens: 20 },
+          }),
+        });
+
+      const choice = await clientModule.baiChat([{ role: "user", content: "hi" }], { maxOutputTokens: 1200, reasoningEffort: "low" });
+
+      expect(choice.message.content).toBe("Final answer after retry.");
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      const firstBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+      expect(firstBody.max_tokens).toBe(1200);
+      expect(firstBody.reasoning_effort).toBe("low");
+
+      const retryBody = JSON.parse(global.fetch.mock.calls[1][1].body);
+      // Doubled from 1200 (> the 4096 floor), and reasoning_effort is
+      // reused unchanged -- never raised, per the fix's own constraint.
+      expect(retryBody.max_tokens).toBe(2400);
+      expect(retryBody.reasoning_effort).toBe("low");
+    });
+
+    it("uses the RETRY_MIN_MAX_TOKENS floor (4096) when the original call had no maxOutputTokens set", async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "" }, finish_reason: "length" }],
+            usage: { completion_tokens: 500, reasoning_tokens: 500 },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "ok now" }, finish_reason: "stop" }],
+            usage: { completion_tokens: 50, reasoning_tokens: 5 },
+          }),
+        });
+
+      const choice = await clientModule.baiChat([{ role: "user", content: "hi" }]);
+      expect(choice.message.content).toBe("ok now");
+      const retryBody = JSON.parse(global.fetch.mock.calls[1][1].body);
+      expect(retryBody.max_tokens).toBe(4096);
+    });
+
+    it("does NOT retry when the first response is a normal success", async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({
+          choices: [{ message: { content: "normal answer" }, finish_reason: "stop" }],
+          usage: { completion_tokens: 40, reasoning_tokens: 5 },
+        }),
+      });
+      const choice = await clientModule.baiChat([{ role: "user", content: "hi" }]);
+      expect(choice.message.content).toBe("normal answer");
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT retry a second time even if the retry ALSO exhausts its budget (retry is bounded to exactly one attempt)", async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "" }, finish_reason: "length" }],
+            usage: { completion_tokens: 1200, reasoning_tokens: 1180 },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "" }, finish_reason: "length" }],
+            usage: { completion_tokens: 4096, reasoning_tokens: 4000 },
+          }),
+        });
+
+      const choice = await clientModule.baiChat([{ role: "user", content: "hi" }], { maxOutputTokens: 1200 });
+      // Whatever the retry returned is accepted as final -- no third call.
+      expect(choice.message.content).toBe("");
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("throws a clear error if the retry itself returns no choices", async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "" }, finish_reason: "length" }],
+            usage: { completion_tokens: 1200, reasoning_tokens: 1180 },
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({}) });
+
+      await expect(clientModule.baiChat([{ role: "user", content: "hi" }], { maxOutputTokens: 1200 }))
+        .rejects.toThrow("B.AI returned no choices on retry");
+    });
+  });
 });
