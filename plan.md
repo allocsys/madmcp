@@ -372,3 +372,23 @@ the limit of what black-box behavior alone can resolve.
    doesn't have — flag to whoever owns that layer if it recurs.
 7. QStash's own dashboard/API has never been directly inspected — worth a
    look if the failure-callback fixes from §3 ever misbehave in practice.
+9. **IN PROGRESS (2026-09-02):** testing whether §3's `MAX_STEP_RESULT_CHARS`
+   cap can be safely raised from 60000 to 100000, to reduce how often bai
+   needs a `char_offset` re-request to see a full large file. Branch
+   `test/raise-max-step-result-chars-100k`, PR #143, commit `b442ddf`
+   (CI run #1585 triggered, not yet confirmed green as of this entry).
+   **Explicitly NOT the same fix as §4's `reasoningEffort`/retry change** —
+   confirmed via direct re-read of `agent_delegate.js`: §4 only gates the
+   forced-final-step (`isFinalStep`) OUTPUT-generation call and does
+   nothing for a normal mid-run step's INPUT payload size, which is what
+   `MAX_STEP_RESULT_CHARS` bounds (a bloated `contents` history making the
+   *next* `providerChat` call slow enough to risk Vercel's 300s ceiling —
+   §3's original root cause). Raising this cap is therefore untested
+   against that original risk and is NOT assumed safe by §4's fix.
+   `test/agent-oversized-step-cap.test.js` imports the constant dynamically
+   (not hardcoded), so it re-targets 100000 automatically — no test
+   changes were needed.
+   **Still needed before merging to `main`:** a live timing test against a
+   real `provider: "bai"` call with a payload sized near the new 100k cap,
+   to measure actual `providerChat` latency headroom before 300s. If
+   latency creeps close to that ceiling, revert to 60000.
