@@ -2360,7 +2360,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // maxOutputTokens cap set by default (router.js, both gemini and bai),
       // and generation time alone can exceed Vercel's 300s hard function
       // timeout with nothing salvaged (confirmed live twice: plan.md
-      // Section 11's runId 223d6b08, Section 15's runId 124a76f8, both bai).
+      // Section 11, Section 15's runId 124a76f8, both bai).
       // The added sentences make the SHORT-answer instruction explicit and
       // separate from the existing don't-pretend-it's-complete instruction,
       // which stays as-is -- those are two different asks (be honest about
