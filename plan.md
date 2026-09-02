@@ -710,7 +710,7 @@ seconds" error group throughout.
 group's most recent occurrence was `2026-09-02T00:42:01Z` -- strictly
 before the merge. No occurrences in the gap between merge and test start.
 
-**Run `223d6b08-d2e1-4f23-8597-27fc48c594a3` (started ~`01:16:47Z`):**
+**Run started ~`01:16:47Z`:**
 
 - Step 1: `github_get_file_tree` + `github_get_repo` -- normal.
 - Step 2: batched 6 `github_read_file` calls. **The new
@@ -814,11 +814,10 @@ Section 10 fixed. The input-side caps have no mechanism to bound this.
   detecting an unusually broad/exhaustive task description and steering
   the model toward a bounded summary rather than an unbounded exhaustive
   one) -- distinct from the existing per-step input caps.
-- Watch run `223d6b08-d2e1-4f23-8597-27fc48c594a3`'s QStash redelivery
-  chain (started `01:22:45Z`) to see whether it succeeds, times out again,
-  or eventually dead-letters -- would give direct evidence on whether this
-  is a one-off (e.g. bai latency spike) or a reliably-reproducible new
-  failure mode on this same run.
+- Watch the QStash redelivery chain (started `01:22:45Z`) to see whether
+  it succeeds, times out again, or eventually dead-letters -- would give
+  direct evidence on whether this is a one-off (e.g. bai latency spike) or
+  a reliably-reproducible new failure mode on this same run.
 - If reproducible, try the same oversized-task shape with a LESS
   exhaustively-worded final-answer ask (keeping the same batched-tool-call
   step 1/2 shape) to isolate whether output size specifically is the
