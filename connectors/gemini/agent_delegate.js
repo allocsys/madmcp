@@ -56,6 +56,26 @@ import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../config.js";
 const HARD_MAX_STEPS = 30;
 export const HISTORY_FULL_DETAIL_STEPS = 3;
 export const COMPACTION_CHAR_THRESHOLD = 500;
+
+// Oversized-step guardrails (2026-09-02, plan.md Section 9 root cause fix):
+// a single step batching many tool calls and/or large truncated file reads
+// bloats that step's contents turn, which in turn makes the FOLLOWING
+// outbound LLM call (sending that bloated history back to bai/Gemini) slow
+// enough to routinely exceed Vercel's 300s hard function timeout -- a
+// platform kill that bypasses this repo's own retry/dead-letter logic
+// entirely (see agent_worker.js's retryCount comment). These two caps bound
+// a single step's contribution to context size directly, independent of
+// per-call truncation (sliceFileContentForModel's own 30000/100000-char
+// limits), since per-call limits alone don't stop the model from batching
+// many calls -- each individually within its own limit -- into one step.
+// MAX_TOOL_CALLS_PER_STEP bounds fan-out (a step that batched 13 calls was
+// the reproduction in plan.md Section 7); MAX_STEP_RESULT_CHARS bounds the
+// aggregate payload size actually appended to `contents` regardless of call
+// count. Both are deliberately conservative but not tiny -- ordinary steps
+// (1-3 calls, one moderate file read) are far under either cap and are
+// completely unaffected.
+export const MAX_TOOL_CALLS_PER_STEP = 8;
+export const MAX_STEP_RESULT_CHARS = 60000;
 export const BULKY_TOOL_NAMES = new Set([
   "github_read_file",
   "github_get_file_at_commit",
@@ -1780,7 +1800,18 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     }
 
     const parts = candidate.content?.parts || [];
-    const functionCalls = parts.filter((p) => p.functionCall);
+    const allFunctionCalls = parts.filter((p) => p.functionCall);
+
+    // Oversized-step guardrail #1 (count cap, see MAX_TOOL_CALLS_PER_STEP's
+    // definition above): only the first MAX_TOOL_CALLS_PER_STEP calls the
+    // model batched into this turn are actually executed. Every function
+    // call in a turn still needs a functionResponse (Gemini/bai's contract
+    // requires one per functionCall.id, regardless of whether we chose to
+    // run it) -- deferredFunctionCalls get a synthetic, non-executed
+    // response below instead of silently vanishing, so the model sees
+    // exactly why the rest didn't run and can re-request them next step.
+    const functionCalls = allFunctionCalls.slice(0, MAX_TOOL_CALLS_PER_STEP);
+    const deferredFunctionCalls = allFunctionCalls.slice(MAX_TOOL_CALLS_PER_STEP);
 
     if (!functionCalls.length) {
       const answer = parts.map((p) => p.text || "").join("").trim();
@@ -2120,6 +2151,31 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       }));
       if (resultCacheWrites.length) await Promise.all(resultCacheWrites);
 
+      // Oversized-step guardrail #2 (aggregate size cap, see
+      // MAX_STEP_RESULT_CHARS's definition above): even with the count cap
+      // above, a handful of large truncated file reads can still add up to
+      // a huge combined payload for this one step. This caps only what
+      // actually gets appended to `contents`/responseParts (the outbound
+      // context sent to the LLM on the NEXT call) -- resultCache/the Redis
+      // side-store already have the FULL text from the execution above, and
+      // the transcript's own 300-char preview below is untouched, so
+      // nothing is lost: a truncated call can be re-requested (with
+      // char_offset if applicable) in a later step. Applied in array order,
+      // which is call order within the step, so earlier calls in a step
+      // keep priority over later ones once the cap is hit.
+      let stepResultCharsUsed = 0;
+      for (const r of results) {
+        if (stepResultCharsUsed >= MAX_STEP_RESULT_CHARS) {
+          r.resultText = `[Result withheld -- this step's combined tool-result size already reached the ${MAX_STEP_RESULT_CHARS}-char per-step cap from earlier calls in the same step. Re-request this specific call in your next step.]`;
+        } else if (stepResultCharsUsed + r.resultText.length > MAX_STEP_RESULT_CHARS) {
+          const allowed = MAX_STEP_RESULT_CHARS - stepResultCharsUsed;
+          r.resultText = `${r.resultText.slice(0, allowed)}\n...[truncated -- this step's combined tool-result cap of ${MAX_STEP_RESULT_CHARS} chars was reached; re-request the remainder (e.g. via char_offset) in a future step]`;
+          stepResultCharsUsed += allowed;
+        } else {
+          stepResultCharsUsed += r.resultText.length;
+        }
+      }
+
       for (const r of results) {
         const cacheNote = r.servedFromCache ? " [CACHED -- identical call already made this run, not re-executed]" : "";
         transcript.push(`[step ${step}] ${r.name}(${JSON.stringify(r.args || {})})${cacheNote} -> ${r.resultText.length > 300 ? r.resultText.slice(0, 300) + "…" : r.resultText}`);
@@ -2128,6 +2184,21 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
         // and is rejected by Gemini 3 models), and functionResponse.id echoes the model's
         // original functionCall.id so the API can thread multi-call turns correctly.
         responseParts.push({ functionResponse: { name: r.name, id: r.id, response: { result: r.resultText } } });
+      }
+
+      // Every call the model batched into this turn -- including the ones
+      // this step chose not to execute (deferredFunctionCalls, see the
+      // count-cap comment above) -- still needs a functionResponse or the
+      // next outbound call to bai/Gemini will reject the malformed turn.
+      // These are synthetic (no execute(), no cache, not counted toward
+      // repeatCounts/stuck-loop detection) and deliberately short, so they
+      // add negligible size back to the very payload this guardrail exists
+      // to bound.
+      for (const part of deferredFunctionCalls) {
+        const { name, args, id } = part.functionCall;
+        const resultText = `Error: step call limit reached (max ${MAX_TOOL_CALLS_PER_STEP} tool calls per step). This call was not executed -- request it again in a future step. Batching fewer, more targeted calls per step keeps each step fast and avoids platform timeouts.`;
+        transcript.push(`[step ${step}] ${name}(${JSON.stringify(args || {})}) [DEFERRED -- step call limit reached, not executed]`);
+        responseParts.push({ functionResponse: { name, id, response: { result: resultText } } });
       }
 
       // Stuck-loop bookkeeping (fix #4): only counts as a stuck step if
