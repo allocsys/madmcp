@@ -236,3 +236,104 @@ describe("editor_worker.js — handleEditorWorker", () => {
     expect(cp.finalAnswer).toMatch(/consecutive failures/);
   });
 });
+
+// Regression coverage for handleEditorWorkerFailure (plan.md Section 13) --
+// editor-side mirror of test/agent-worker.test.js's
+// handleAgentWorkerFailure suite. Same signature-fail/stale-no-op/
+// finished-no-op/happy-path-finalize shape; only difference is
+// editor_checkpoint.js's whole-blob spread (see editor_worker.js's own file
+// header) rather than agent_checkpoint.js's explicit-field-list write.
+describe("editor_worker.js — handleEditorWorkerFailure", () => {
+  let handleEditorWorkerFailure, seedEditorRun, loadCheckpoint, runEditorAgent;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockVerify.mockResolvedValue(true);
+    mockPublish.mockResolvedValue();
+    mockAssertNotDefaultBranch.mockResolvedValue({ default_branch: "main" });
+    ({ handleEditorWorkerFailure } = await import("../connectors/github/editor_worker.js"));
+    ({ seedEditorRun, runEditorAgent } = await import("../connectors/github/editor_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/github/editor_checkpoint.js"));
+  });
+
+  it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {
+    mockVerify.mockResolvedValue(false);
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId: "does-not-matter", afterStep: 0 } });
+    await handleEditorWorkerFailure(req, res);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("no-ops on a missing/unparseable sourceBody instead of throwing or touching a checkpoint", async () => {
+    const { req, res } = makeFailureReqRes({ rawSourceBody: "not-valid-base64-json!!!" });
+    await handleEditorWorkerFailure(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+  });
+
+  it("no-ops on a sourceBody missing runId", async () => {
+    const { req, res } = makeFailureReqRes({ sourceBody: { afterStep: 0 } });
+    await handleEditorWorkerFailure(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+  });
+
+  it("no-ops (does not clobber) when the checkpoint has already advanced past the callback's afterStep", async () => {
+    const runId = await seedEditorRun({ owner: OWNER, repo: REPO, branch: BRANCH, task: "some task" });
+    mockProviderChat.mockResolvedValueOnce(functionCallCandidate("write_file", { path: "a.md", content: "x" }));
+    mockWriteFile.mockResolvedValue({ path: "a.md", sha: "s", commitSha: "c1234567", noop: false });
+    await runEditorAgent({ resume_run_id: runId, singleStep: true });
+
+    const cpBefore = await loadCheckpoint(runId);
+    expect(cpBefore.stepsDone).toBe(1);
+
+    // Callback describes the ORIGINAL message (afterStep: 0), now stale.
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId, afterStep: 0 } });
+    await handleEditorWorkerFailure(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+
+    const cpAfter = await loadCheckpoint(runId);
+    expect(cpAfter.status).toBe("running"); // not clobbered into "failed"
+    expect(cpAfter.stepsDone).toBe(1);
+  });
+
+  it("no-ops (does not overwrite the real answer) when the run already finished before the callback arrived", async () => {
+    const runId = await seedEditorRun({ owner: OWNER, repo: REPO, branch: BRANCH, task: "one-step task" });
+    mockProviderChat.mockResolvedValueOnce(textCandidate("final answer"));
+    await runEditorAgent({ resume_run_id: runId, singleStep: true });
+
+    const cpBefore = await loadCheckpoint(runId);
+    expect(cpBefore.status).toBe("done");
+
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId, afterStep: 0 } });
+    await handleEditorWorkerFailure(req, res);
+
+    expect(res.jsonBody.status).toBe("no-op");
+    const cpAfter = await loadCheckpoint(runId);
+    expect(cpAfter.status).toBe("done");
+    expect(cpAfter.finalAnswer).toBe("final answer");
+  });
+
+  it("finalizes the checkpoint as failed with the QStash-sourced reason when it's still exactly in the stalled state the callback describes, WITHOUT dropping owner/repo/branch/contents (whole-blob spread)", async () => {
+    const runId = await seedEditorRun({ owner: OWNER, repo: REPO, branch: BRANCH, task: "oversized step that always platform-times-out" });
+    // Freshly seeded: status "running", stepsDone 0 -- matching a failure
+    // callback for the very first message (afterStep: 0).
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId, afterStep: 0 }, retried: 0, maxRetries: 0 });
+    await handleEditorWorkerFailure(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("dead-lettered");
+    expect(res.jsonBody.reason).toBe("qstash-failure-callback");
+
+    const cp = await loadCheckpoint(runId);
+    expect(cp.status).toBe("failed");
+    expect(cp.finalAnswer).toMatch(/QStash exhausted its own delivery budget/);
+    expect(cp.stepStartedAt).toBeNull();
+    // Whole-blob-spread regression check (this file's own header warning).
+    expect(cp.owner).toBe(OWNER);
+    expect(cp.repo).toBe(REPO);
+    expect(cp.branch).toBe(BRANCH);
+  });
+});
