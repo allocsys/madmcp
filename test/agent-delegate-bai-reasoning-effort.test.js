@@ -120,13 +120,18 @@ describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort 
       content: { parts: [{ functionCall: { name: "github_get_repo_topics", args: { repo: "madmcp" }, id: `call_${capturedOptsPerCall.length}` } }] },
       finishReason: "STOP",
     });
-    // 3 identical repeat calls trip consecutiveAllRepeatSteps >= 3
-    // (stuckLoopForce), forcing withholdTools WITHOUT isFinalStep being
-    // true (max_steps is generous here so the final step is never reached).
+    // consecutiveAllRepeatSteps only increments on a step whose calls are
+    // ALL repeats -- step 1's call is the FIRST occurrence of this exact
+    // signature (not a repeat, by definition), so 4 identical calls are
+    // needed to get 3 CONSECUTIVE all-repeat steps (steps 2, 3, 4 are each
+    // entirely repeats of step 1's signature) and trip stuckLoopForce on
+    // step 5 -- forcing withholdTools WITHOUT isFinalStep being true
+    // (max_steps is generous here so the final step is never reached).
     providerChatMock.mockImplementationOnce(async (_contents, opts) => { capturedOptsPerCall.push(opts); return sameCall(); });
     providerChatMock.mockImplementationOnce(async (_contents, opts) => { capturedOptsPerCall.push(opts); return sameCall(); });
     providerChatMock.mockImplementationOnce(async (_contents, opts) => { capturedOptsPerCall.push(opts); return sameCall(); });
-    // Step 4: stuckLoopForce withholds tools, but this is NOT the final step.
+    providerChatMock.mockImplementationOnce(async (_contents, opts) => { capturedOptsPerCall.push(opts); return sameCall(); });
+    // Step 5: stuckLoopForce withholds tools, but this is NOT the final step.
     providerChatMock.mockImplementationOnce(async (_contents, opts) => {
       capturedOptsPerCall.push(opts);
       return { content: { parts: [{ text: "Giving up after repeats." }] }, finishReason: "STOP" };
@@ -134,18 +139,18 @@ describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort 
 
     await runInvestigation({
       task: "repeat the same call over and over",
-      max_steps: 10, // generous -- step 4's stuckLoopForce fires well before isFinalStep ever would
+      max_steps: 10, // generous -- step 5's stuckLoopForce fires well before isFinalStep ever would
       provider: "bai",
     });
 
-    expect(capturedOptsPerCall.length).toBeGreaterThanOrEqual(4);
-    // Step 4 is the stuck-loop-forced no-tools turn -- confirm it actually
+    expect(capturedOptsPerCall.length).toBeGreaterThanOrEqual(5);
+    // Step 5 is the stuck-loop-forced no-tools turn -- confirm it actually
     // withheld tools (sanity check this test reached the intended state)...
     // tools is passed as undefined by the caller when withholdTools is true.
-    expect(capturedOptsPerCall[3].tools).toBeUndefined();
+    expect(capturedOptsPerCall[4].tools).toBeUndefined();
     // ...but reasoningEffort must still be undefined, since this is
     // stuckLoopForce, not isFinalStep.
-    expect(capturedOptsPerCall[3].reasoningEffort).toBeUndefined();
+    expect(capturedOptsPerCall[4].reasoningEffort).toBeUndefined();
 
     providerChatMock.mockRestore();
   });
