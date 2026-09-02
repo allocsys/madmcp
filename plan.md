@@ -1522,3 +1522,123 @@ data point):**
   variant or vice versa.
 - The Section 11/12 run still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
+
+---
+
+## 21. Section 18/20's fix implemented (commits `101e133`, `d16901a`) -- code-reviewed, one real gap found and fixed (commits `d7f0aa6`, `61c5c6c`), regression test added (commit `152cd8e`)
+
+A prior session implemented Section 18/20's fix candidates: (a) strengthened
+the `remainingAfterThisStep === 0` SYSTEM NOTE to explicitly forbid
+tool-call-shaped text in any form, and (b) added `detectToolCallLeakage()`,
+a mechanical regex backstop scanning a candidate final answer for
+XML-tag/bracket/JSON-shaped syntax wrapping one of this file's own real
+`FUNCTIONS[]` names, applied only on `withholdTools` turns and gated
+bai-only (`applyOversizedStepCaps`) per Section 19's decoupling. Full test
+suite (534 tests) passed and syntax was valid, but neither fix had its own
+regression test.
+
+### 21.1 Bug found: `FUNCTION_NAME_SET` referenced but never declared
+
+`101e133` called `detectToolCallLeakage(cleanedAnswer, FUNCTION_NAME_SET)`
+without ever declaring `FUNCTION_NAME_SET` anywhere in the file -- this
+would have thrown `ReferenceError` on every single bai final-step answer,
+not just the garbled ones. Already caught and fixed same-day by a follow-up
+commit (`d16901a`), which declares `const FUNCTION_NAME_SET = new
+Set(FUNCTIONS.map((f) => f.name))` immediately after `detectToolCallLeakage`
+-- confirmed the declaration sits after `FUNCTIONS[]` itself (line 409) and
+before the call site (~line 2035), so there's no ordering issue. Verified
+via `node --check` (syntax-valid) and the full suite (534/534 passing).
+
+### 21.2 Bug found: the regex backstop misses the ACTUAL literal repro text it was written to catch
+
+Tested `detectToolCallLeakage` directly against the real strings quoted in
+plan.md, not just a clean hypothetical. Section 20's bracket-style leak
+(`[Function call: github_read_file with ...]`) was caught correctly. But
+Section 18's original literal repro text is, verbatim, in plan.md:
+
+```
+<githu b_read_file><params>{"owner":"allocsys","repo":"madmcp",
+"path":"connectors/github/editor_worker.js"}</params></githu b_read_file>
+```
+
+-- note the embedded SPACE inside the tag name itself (`githu` + space +
+`b_read_file`), not just tag syntax wrapped around a clean
+`github_read_file`. The original patterns captured `[\w-]*` only
+(contiguous identifier characters, no whitespace), so against this string
+they captured `"githu"` -- not a real function name -- and
+`knownFunctionNames.has("githu")` was false. **The backstop would have
+silently let through the exact case it was built to catch, if the model
+reproduced that same space-mangled tag shape again.**
+
+(Side note: plan.md itself is internally inconsistent about this -- Section
+20's own retrospective mention of the Section 18 leak, in its "Confirmed
+this is not a masked timeout..." paragraph, paraphrases it as
+`<github_read_file><params>...` with no space, while Section 18's original
+write-up has the space. The space-containing version was treated as
+authoritative here since it's the earlier, more directly-sourced write-up
+-- Section 20's mention is a retrospective paraphrase, not a fresh
+transcript read.)
+
+**Fix (commit `d7f0aa6`):** changed all three `TOOL_CALL_LEAKAGE_PATTERNS`
+to capture `[\w\s-]*?` (tolerating internal whitespace, matched
+non-greedily up to each pattern's own closing token -- `>`, `\]`/`,`/`with`,
+or a closing `"`), then strip ALL whitespace from the captured text with
+`.replace(/\s+/g, "")` before checking `knownFunctionNames.has(...)`. This
+makes `<githu b_read_file>` and `<github_read_file>` normalize identically.
+Does not widen the false-positive surface: normalization only feeds into
+the exact-match check against real declared function names, so it still
+only fires on an actual tool name (mangled or not), never on arbitrary
+whitespace-containing text -- confirmed by testing unrelated markup
+(`<div>hello</div>`, `<foo_bar>`) and plain-English mentions of a real
+function name in prose, both still correctly return `null`.
+
+**Also exported `detectToolCallLeakage` (commit `61c5c6c`)** so it could be
+unit-tested directly rather than only indirectly through a full
+`runInvestigation` call.
+
+### 21.3 Regression test added (commit `152cd8e`, `test/agent-tool-call-leakage.test.js`)
+
+Seven tests, verified passing locally (`npx vitest run` on this file: 7/7;
+full suite: 46 files, 541 tests, all green):
+
+- Unit tests of `detectToolCallLeakage` directly: a clean XML-tag leak, the
+  ACTUAL literal Section 18 repro string (space-mangled tag -- this is the
+  test that would have failed against the pre-`d7f0aa6` code), the Section
+  20 bracket-marker leak, a JSON-shaped leak, and two false-positive checks
+  (unrelated markup, plain-English mention of a real function name).
+- Two end-to-end tests through `runInvestigation` itself, mocking
+  `providerChat` to return the space-mangled leak on a `max_steps: 1`
+  bai run: confirms the full path returns `failed: true` with a message
+  naming the leaked tool (not the raw garbled text passed off as a real
+  answer), and confirms the identical garbled text on a `provider: "gemini"`
+  run passes through UNCAUGHT -- pinning Section 19's bai-only decoupling
+  as part of this same regression, not just the leakage fix in isolation.
+
+### 21.4 Status
+
+**Section 18/20's bug is now fixed, verified against both literal repro
+strings, and has regression coverage guarding against exactly the gap this
+review found.** This closes what was the last major open item from
+Sections 18-20.
+
+**Still genuinely open, unaffected by this section:**
+- Section 16.4's `maxOutputTokens` hard backstop on the final step --
+  still not implemented; the prompt-side fix (Section 16) plus this
+  session's leakage backstop together cover the observed failure modes,
+  but neither is a hard ceiling on generation time/token count.
+- Section 11 items #2-#4 (less-exhaustive re-test to isolate output size,
+  token/generation-time breakdown) -- still open and untouched.
+- The Section 11/12 run -- still not resumed.
+- `DEBUG_AGENT_WORKER` -- still ON (was meant to be temporary, per Section
+  10's own next-steps item to revert it once the Section 9 root cause had
+  both a fix and a dead-letter safety net -- both landed since, so this is
+  now safe to revert but has not been).
+- Section 5's "Void" response mystery -- still open; Section 9 gives a
+  plausible (unconfirmed) explanation via gateway response caching.
+- Not re-run live against a fresh oversized-task repro this session (the
+  fix was verified via unit/integration tests with mocked `providerChat`,
+  not a real bai API call) -- worth one live confirmation run before
+  considering this fully closed, following the same pattern Sections 15/17/
+  20 used for the earlier fixes in this chain.
+- QStash's own dashboard/API -- never directly inspected (Section 13's own
+  note, still true).
