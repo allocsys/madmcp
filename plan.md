@@ -1459,3 +1459,67 @@ the gating didn't require any test changes -- confirmed unaffected. Full CI
   output-generation-timeout in the future, that would be NEW evidence this
   section's premise (verified true as of 2026-09-02) needs revisiting -- not
   a reason to assume the bai-only gate was wrong at the time it was added.
+
+---
+
+## 20. Post-decoupling bai re-test: caps/timeout fix still hold, but Section 18's garbled-final-answer bug reproduces again with a new syntax variant (2026-09-02, follow-up session)
+
+Re-ran the exact Section 15/17/18 repro shape (`provider: "bai"`,
+`max_steps: 3`, same exhaustive full-repo-writeup task) immediately after
+Section 19's decoupling merge (`c4f1313`), specifically to confirm the
+bai-only gating didn't regress anything on the bai path itself.
+
+**Run `ab8afaa8-e1ee-4c56-954b-ccdc925600f3`:** completed all 3 steps, no
+platform timeout -- confirmed via `get_runtime_errors` (last 15min after
+completion): zero entries. **This confirms Section 19's refactor is clean
+on the bai path**: `MAX_TOOL_CALLS_PER_STEP`/`MAX_STEP_RESULT_CHARS` still
+apply (gated on `applyOversizedStepCaps`, true for `"bai"`), and the
+forced-final-step mechanism still resolves without hitting the 300s
+ceiling, exactly as it did pre-refactor.
+
+**But the final answer itself was garbled again** -- same failure category
+as Section 18's run `6ea018d5`, different literal syntax:
+
+```
+[Function call: github_read_file with owner=allocsys, repo=madmcp, path=connectors/github/editor_worker.js]
+```
+
+Run `6ea018d5` (Section 18) leaked pseudo-XML tool-call syntax
+(`<github_read_file><params>...`); this run leaked a differently-formatted
+but equivalent pseudo-tool-call (`[Function call: ... with ...]`). Same
+underlying impulse both times: on the forced-final no-tools step, the model
+still "wants" to call a tool, and with no real functionCall channel
+available, that impulse leaks into the plain-text answer as tool-call-shaped
+text instead of a real (even if short/incomplete) answer. Confirmed this is
+not a masked timeout, not a new regression from Section 19's provider-gating
+change (the shared `isFinalStep`/`withholdTools` mechanism this bug lives in
+was explicitly left untouched by that change), and not caught by the
+existing `finishReason === "MALFORMED_FUNCTION_CALL"` check (still only
+fires when `answer` is empty -- see the code read from the prior session;
+this run's `answer` was non-empty, just garbled).
+
+**What this confirms:** Section 18's bug is not a one-off -- it reproduces
+on demand with the same task shape, across at least two different literal
+garbled-syntax forms, and now confirmed to persist after the bai-only
+decoupling (i.e. it's intrinsic to the forced-final-step/no-tools mechanism
+under bai specifically, not an artifact of the caps that were just
+decoupled).
+
+**Next steps (reaffirms Section 18's own, now with a second post-refactor
+data point):**
+- Implement the fix candidates already on the table in Section 18: (a)
+  strengthen the `remainingAfterThisStep === 0` SYSTEM NOTE to explicitly
+  forbid tool-call-shaped text in any form (XML tags, `[Function call: ...]`
+  bracket syntax, JSON-args blocks, etc.), not just the brevity instruction
+  already there; (b) add a cheap regex-based backstop in the `if (answer)`
+  return path that detects/strips obvious tool-call-shaped fragments before
+  the answer is ever returned to the caller, since a prompt-only fix is soft
+  (Section 16.4's own caveat applies equally here).
+- This run (`ab8afaa8-e1ee-4c56-954b-ccdc925600f3`) is a second live example
+  to test any future fix against, alongside `6ea018d5` -- ideally the fix
+  should be verified against BOTH literal garbled-syntax shapes, not just
+  one, since the two observed forms differ enough that a narrow
+  pattern-match (e.g. only catching `<tag>` XML) might miss the bracket-style
+  variant or vice versa.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+  `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
