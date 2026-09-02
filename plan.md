@@ -353,6 +353,21 @@ the limit of what black-box behavior alone can resolve.
    "LIVE-CONFIRMED" note for the full repro results (run
    `7afbab6c-0109-43e8-b95d-f7bec49f94a7`) and the four non-blocking gaps
    identified for possible future hardening.
+8. **DONE (2026-09-02):** follow-up live test -- deliberately over-scoped
+   `delegate_agent({ provider: "bai", max_steps: 3 })` task (read 5 large
+   files in full + cross-reference against ~10 test files -- far beyond a
+   3-step budget) to confirm graceful step-budget exhaustion. Run
+   `b64e7640-e39b-4939-88b2-b5234e3052d8`. Result: the loop correctly
+   stopped at exactly 3 steps (no drift past the caller-set ceiling), and
+   the final answer explicitly and accurately reported incomplete coverage
+   -- per-file granularity (fully read / partially read / entirely unread),
+   an honest zero on test cross-referencing, and a correct call-out of the
+   `MAX_STEP_RESULT_CHARS` 60k per-step cap (§3) as the specific mechanism
+   that withheld the `editor_delegate.js` read mid-step-2 -- rather than
+   fabricating or silently truncating content for the unread portions.
+   Confirms the forced-final-step fix (§4) doesn't just avoid garbled
+   output on genuine token-budget exhaustion; step-budget exhaustion
+   (a different, caller-controlled limit) is also handled honestly.
 6. §5's "Void" mystery needs server-log/gateway visibility this session
    doesn't have — flag to whoever owns that layer if it recurs.
 7. QStash's own dashboard/API has never been directly inspected — worth a
