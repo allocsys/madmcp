@@ -653,3 +653,40 @@ the limit of what black-box behavior alone can resolve.
      live-timing validation the handoff's step 3/4 called for. No further
      action needed on this constant unless future evidence surfaces a
      problem at 270000 specifically.
+
+     **BONUS COMBO TEST (2026-09-02, same session): §3's payload cap AND
+     §4's forced-final-step path exercised together in one run, clean
+     pass.** Same 8-call ~305,672-char batch as above, but with
+     `max_steps: 2` instead of 3 -- this makes step 2 (the call absorbing
+     the ~270k-char step-1 payload) *also* the forced-final step
+     (`isFinalStep`, tools withheld, `reasoningEffort: "low"` gated in per
+     §4), stacking both guardrails' load in a single call instead of
+     testing them separately. Run `af817175-da11-4435-8a75-3c78dceb9a27`:
+     completed in 2 steps, `failed=false`. The forced-final answer was
+     accurate and honest, not garbled -- it correctly itemized which of
+     the 8 files arrived in full (5), which was truncated mid-file (1,
+     `designer_delegate.js`), which were withheld entirely (2,
+     `editor_tool_functions.js`/`files.js`), reconstructed the exact
+     cap-accounting arithmetic (240,860 chars from the first 5 calls,
+     leaving ~29,140 of the 270,000 budget for the 6th call's partial
+     slice), and explicitly declined to guess at the withheld files'
+     contents rather than fabricating. No leaked tool-call syntax, no
+     empty/truncated-mid-reasoning answer -- exactly the behavior §4's
+     fix was designed to produce under combined load. This step did take
+     noticeably longer than the two solo-cap-test runs above (multiple
+     polls over ~2+ minutes before returning, vs. single-poll returns
+     before) -- not flagged as a problem (well within the 300s ceiling,
+     no timeout/error surfaced), but worth noting as a real cost of
+     stacking both mechanisms in one call, in case it matters for a
+     future combined-load scenario.
+
+     **Known stale artifact from this test:** the forced-final answer
+     quoted `agent_delegate.js`'s own `MAX_STEP_RESULT_CHARS` inline
+     comment verbatim, which still reads "270000 marked UNTESTED pending
+     live validation" -- accurate at the time that comment was written
+     (commit `49815a3`, before this session's live-timing runs), now
+     stale given the CONFIRMED SAFE verdict directly above. Not yet fixed
+     in code as of this plan.md edit -- flagging here so a follow-up
+     commit updates that comment to match, rather than leaving the
+     in-repo documentation and this plan's own verdict disagreeing with
+     each other.
