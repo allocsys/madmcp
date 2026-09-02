@@ -1393,7 +1393,7 @@ a fix, rather than assuming which code path (if any) is responsible.
   still open, though it's now clearly not sufficient on its own either --
   it would only bound LENGTH, not fix a malformed/garbled short answer
   like run 3's.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+- The Section 11/12 run still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
 
 ---
@@ -1452,7 +1452,7 @@ the gating didn't require any test changes -- confirmed unaffected. Full CI
   `6ea018d5`) is still open and still applies to bai specifically (every
   repro of it used that provider) -- NOT addressed here, out of scope for
   this decoupling.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+- The Section 11/12 run still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
 - If Gemini is ever observed hitting the 300s timeout or an
   output-generation-timeout in the future, that would be NEW evidence this
@@ -1520,5 +1520,5 @@ data point):**
   one, since the two observed forms differ enough that a narrow
   pattern-match (e.g. only catching `<tag>` XML) might miss the bracket-style
   variant or vice versa.
-- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+- The Section 11/12 run still not resumed.
   `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
