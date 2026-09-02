@@ -179,3 +179,57 @@ export async function handleEditorWorker(req, res) {
 
   return res.status(200).json({ status: "chained", steps: latest.stepsDone });
 }
+
+// ---------------------------------------------------------------------------
+// handleEditorWorkerFailure (plan.md Section 13) -- Express handler for
+// POST /api/editor-worker-failure, the QStash failureCallback target
+// configured in publishEditorStep (../gemini/qstash_client.js). Mirrors
+// connectors/gemini/agent_worker.js's handleAgentWorkerFailure -- see that
+// function's own header comment for the full reasoning (why this exists:
+// a step that hard-times-out on every QStash delivery attempt means no
+// further worker invocation ever arrives to run the in-process dead-letter
+// check, once publishEditorStep's retries budget, now QSTASH_STEP_RETRIES,
+// is exhausted). Only difference here: editor_checkpoint.js is a
+// whole-blob overwrite (see this file's own header), so the save below
+// spreads the loaded checkpoint rather than naming each field explicitly
+// the way agent_worker.js's split-contents checkpoint requires.
+export async function handleEditorWorkerFailure(req, res) {
+  const signature = req.get("Upstash-Signature");
+  const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
+  const verified = await verifyQStashSignature({ signature, body: rawBody });
+  if (!verified) {
+    console.warn("editor-worker-failure: rejected request with missing/invalid QStash signature");
+    return res.status(401).json({ error: "invalid or missing QStash signature" });
+  }
+
+  const { retried, maxRetries } = req.body || {};
+  let sourcePayload;
+  try {
+    sourcePayload = JSON.parse(Buffer.from(req.body?.sourceBody || "", "base64").toString("utf8"));
+  } catch (err) {
+    console.error(`editor-worker-failure: could not decode/parse sourceBody: ${err?.message ?? err}`);
+    return res.status(200).json({ status: "no-op", reason: "unparseable sourceBody" });
+  }
+
+  const { runId, afterStep = 0 } = sourcePayload || {};
+  if (!runId) {
+    return res.status(200).json({ status: "no-op", reason: "sourceBody missing runId" });
+  }
+
+  const checkpoint = await loadCheckpoint(runId);
+  if (!checkpoint || checkpoint.status !== "running" || checkpoint.stepsDone !== afterStep) {
+    // Stale callback -- the run already finished or moved on via some other
+    // recovery path before QStash's own delivery attempt to the ORIGINAL
+    // message finally gave up. Not authoritative; no-op.
+    return res.status(200).json({ status: "no-op", reason: "checkpoint not in the stalled state this callback describes" });
+  }
+
+  await saveCheckpoint(runId, {
+    ...checkpoint,
+    status: "failed",
+    finalAnswer: `Run stopped: QStash exhausted its own delivery budget (retried ${retried ?? "?"}/${maxRetries ?? "?"}) on step ${checkpoint.stepsDone + 1} without ever getting a response -- almost always a platform-level execution timeout repeating on the same oversized step. Reported via QStash's failureCallback, since a step that times out on every delivery attempt means no further worker invocation ever arrives to run this file's own in-process dead-letter check.`,
+    stepStartedAt: null,
+  });
+  console.error(`editor-worker-failure: runId ${runId} dead-lettered via QStash failureCallback (retried=${retried}, maxRetries=${maxRetries}) on step ${checkpoint.stepsDone + 1}`);
+  return res.status(200).json({ status: "dead-lettered", reason: "qstash-failure-callback", steps: checkpoint.stepsDone });
+}
