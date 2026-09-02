@@ -1272,6 +1272,34 @@ const SYSTEM_PREAMBLE =
   "code path) that changes what the match actually means; a full read does not have that limitation. " +
   "Do not let a later, narrower result override an earlier, complete one just because it came later.";
 
+// bai-specific early reinforcement (plan.md Section 24 follow-up): every note
+// version tried on the FINAL-STEP turn alone (elaborated / removed /
+// simplified-restored) has produced a different failure shape on bai --
+// most recently, the model narrating an intended tool action ("Fetching
+// those now...") on a turn where no tools exist at all, despite the
+// final-step note saying so explicitly. Hypothesis: by the time that note
+// arrives, it's competing against many turns of established tool-calling
+// momentum with nothing earlier in the conversation to counter it. This
+// adds one short, early mention -- in turn 1, before any such momentum
+// exists -- that a tool-less forced final turn is coming, so it isn't a
+// surprise sprung only at the moment tools are withdrawn.
+//
+// Kept deliberately short: per this same investigation, MORE elaboration
+// on the final-step note itself has correlated with new failure shapes,
+// not fewer (Sections 16/18/20/21), so this errs toward minimal wording
+// rather than a fuller explanation. Gemini-only runs have never exhibited
+// any of these failure shapes, so this addendum is bai-only -- see
+// buildSystemPreamble below -- to avoid changing a prompt surface that
+// isn't broken for the other provider.
+const BAI_PREAMBLE_ADDENDUM =
+  "\n\nNOTE: at some point before you must answer, tool access will be withdrawn for one forced " +
+  "final turn. When that happens, answer immediately in plain text -- do not describe what you would " +
+  "fetch or do next, since there will be nothing left to fetch.";
+
+function buildSystemPreamble(provider) {
+  return provider === "bai" ? SYSTEM_PREAMBLE + BAI_PREAMBLE_ADDENDUM : SYSTEM_PREAMBLE;
+}
+
 // Mechanical-claim extraction (2026-08-27, fix for the confident-wrong-
 // constant failure mode found in live testing, runs 3-4: the model asserted `HARD_MAX_STEPS` gated a
 // condition when the real gate was `cappedSteps`, confidently and with no
@@ -1725,7 +1753,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // tool in tools.js already guards against a missing task on a
     // non-resumable call, so `task` is trustworthy here).
     runId = randomUUID();
-    contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
+    contents = [{ role: "user", parts: [{ text: `${buildSystemPreamble(effectiveProvider)}\n\nTask: ${task}` }] }];
     transcript = [];
     startStep = 1;
   }
@@ -2419,7 +2447,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
       // keep and this should be revisited -- not assumed either way without
       // a fresh live test.
       const noToolsNote = remainingAfterThisStep === 0
-        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now."
+        ? " The next turn will NOT include any tools -- a function call is not possible; you must answer in plain text now, not describe what you would fetch or do next."
         : "";
       responseParts.push({
         text: `[SYSTEM NOTE: only ${remainingAfterThisStep} step(s) remain before this investigation is forced to stop.${noToolsNote} Separately from the length of your response: if you cannot fully complete the task -- including any specific format requested -- say so explicitly and describe what's missing, rather than presenting a partial or reformatted answer as if it were complete. Before you write your verdict, scroll back through the raw content you already fetched this run (not just your impression of it) and confirm nothing you retrieved contradicts what you're about to claim -- a contradiction sitting unused in your own transcript is a miss, not a non-finding.]`,
@@ -2536,7 +2564,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
 // risk than bending that guard's contract to serve both callers.
 export async function seedRun({ task, provider, model, maxOutputTokens, max_steps = 20 }) {
   const runId = randomUUID();
-  const contents = [{ role: "user", parts: [{ text: `${SYSTEM_PREAMBLE}\n\nTask: ${task}` }] }];
+  const contents = [{ role: "user", parts: [{ text: `${buildSystemPreamble(provider)}\n\nTask: ${task}` }] }];
   // Seeds the run's TRUE overall step ceiling (see runInvestigation's
   // effectiveOverallMaxSteps for the full rationale) -- this is what lets
   // the QStash worker's later singleStep resumes (agent_worker.js) know
