@@ -21,11 +21,13 @@ import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "..
 
 const MAX_KEY_ROTATION_PASSES = 2;
 
-async function callChatCompletionOnce(body, apiKey) {
+async function callChatCompletionOnce(body, apiKey, keyIndex = 0) {
   if (!apiKey) throw new Error("No B.AI API key available. Set BAI_API_KEYS as an environment variable on the madmcp server.");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), BAI_REQUEST_TIMEOUT_MS);
+  const startedAt = Date.now();
+  console.log(`bai: attempting key #${keyIndex} (startedAt=${startedAt})`);
 
   let res;
   try {
@@ -39,7 +41,10 @@ async function callChatCompletionOnce(body, apiKey) {
       signal: controller.signal,
     });
   } catch (err) {
+    const elapsedMs = Date.now() - startedAt;
     const isAbort = err.name === "AbortError";
+    const failureReason = isAbort ? "timeout" : "network error";
+    console.log(`bai: key #${keyIndex} attempt failed (reason=${failureReason}, durationMs=${elapsedMs})`);
     const wrapped = new Error(isAbort ? `B.AI request timed out after ${BAI_REQUEST_TIMEOUT_MS}ms` : `B.AI request failed (network error): ${err.message}`);
     wrapped.transient = true;
     throw wrapped;
@@ -48,15 +53,19 @@ async function callChatCompletionOnce(body, apiKey) {
   }
 
   const text = await res.text();
+  const elapsedMs = Date.now() - startedAt;
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
 
   if (!res.ok) {
+    console.log(`bai: key #${keyIndex} attempt failed (status=${res.status}, durationMs=${elapsedMs})`);
     const message = (data && (data.error?.message || JSON.stringify(data))) || res.statusText;
     const err = new Error(`B.AI API error (${res.status}): ${message}`);
     err.status = res.status;
     throw err;
   }
+
+  console.log(`bai: key #${keyIndex} attempt succeeded (status=${res.status}, durationMs=${elapsedMs})`);
   return data;
 }
 
@@ -85,7 +94,7 @@ async function callChatCompletion(body) {
 
       passAttemptCount++;
       try {
-        const data = await callChatCompletionOnce({ ...body, model: BAI_MODEL }, apiKey);
+        const data = await callChatCompletionOnce({ ...body, model: BAI_MODEL }, apiKey, keyIndex);
         if (keyIndex > 0) data._fallbackKeyIndex = keyIndex;
         return data;
       } catch (err) {
@@ -167,6 +176,29 @@ function computeRetryMaxTokens(originalMaxTokens) {
   return RETRY_MIN_MAX_TOKENS;
 }
 
+// Helper to extract reasoning, completion, and total tokens from either
+// the top-level usage shape (usage.reasoning_tokens) or the nested
+// OpenAI-style shape (usage.completion_tokens_details.reasoning_tokens).
+export function extractUsageDetails(usage) {
+  if (!usage) return { reasoningTokens: undefined, completionTokens: undefined, totalTokens: undefined };
+  const reasoningTokens = typeof usage.reasoning_tokens === "number"
+    ? usage.reasoning_tokens
+    : (typeof usage.completion_tokens_details?.reasoning_tokens === "number"
+      ? usage.completion_tokens_details.reasoning_tokens
+      : undefined);
+  return {
+    reasoningTokens,
+    completionTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
+    totalTokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
+  };
+}
+
+function logResponseUsage(choice, usage) {
+  const { reasoningTokens, completionTokens, totalTokens } = extractUsageDetails(usage);
+  const finishReason = choice?.finish_reason;
+  console.log(`bai: response finish_reason=${finishReason} reasoning_tokens=${reasoningTokens ?? "none"} completion_tokens=${completionTokens ?? "none"} total_tokens=${totalTokens ?? "none"}`);
+}
+
 // Detects the root-caused failure shape (plan.md Section 25): the
 // completion hit its max_tokens ceiling (finish_reason "length") with the
 // token budget spent almost entirely on internal reasoning_tokens rather
@@ -191,10 +223,7 @@ export function isReasoningBudgetExhausted(choice, usage) {
   if (choice?.finish_reason !== "length") return false;
   if (!usage) return false;
 
-  const reasoningTokens = typeof usage.reasoning_tokens === "number"
-    ? usage.reasoning_tokens
-    : usage.completion_tokens_details?.reasoning_tokens;
-  const completionTokens = usage.completion_tokens;
+  const { reasoningTokens, completionTokens } = extractUsageDetails(usage);
 
   if (typeof reasoningTokens !== "number" || typeof completionTokens !== "number" || completionTokens <= 0) {
     return false;
@@ -214,6 +243,7 @@ export async function baiChat(messages, { tools, maxOutputTokens, reasoningEffor
   if (!choice) {
     throw new Error("B.AI returned no choices.");
   }
+  logResponseUsage(choice, data.usage);
 
   // Retry ONCE, with a larger max_tokens budget, if this call's entire
   // token budget went to reasoning and produced no usable answer. Do NOT
@@ -230,6 +260,7 @@ export async function baiChat(messages, { tools, maxOutputTokens, reasoningEffor
     if (!choice) {
       throw new Error("B.AI returned no choices on retry (after reasoning-token-budget exhaustion on the first attempt).");
     }
+    logResponseUsage(choice, data.usage);
   }
 
   return choice;

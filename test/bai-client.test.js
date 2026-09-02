@@ -278,6 +278,93 @@ describe("B.AI Connector - Client and key rotation logic (client.js)", () => {
     expect(body.reasoning_effort).toBeUndefined();
   });
 
+  describe("diagnostic logging and token usage extraction", () => {
+    it("logs key attempt index, start timestamp, outcome, duration, and response usage unconditionally", async () => {
+      const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 10, completion_tokens: 25, reasoning_tokens: 5, total_tokens: 40 },
+        }),
+      });
+
+      await clientModule.baiChat([{ role: "user", content: "hi" }]);
+
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: attempting key #0 \(startedAt=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: key #0 attempt succeeded \(status=200, durationMs=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith("bai: response finish_reason=stop reasoning_tokens=5 completion_tokens=25 total_tokens=40");
+      consoleLogSpy.mockRestore();
+    });
+
+    it("logs failure reason and elapsed duration on fetch error", async () => {
+      const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      global.fetch = vi.fn().mockRejectedValue({ name: "AbortError", message: "aborted" });
+
+      await expect(clientModule.baiChat([{ role: "user", content: "hi" }])).rejects.toThrow();
+
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: attempting key #0 \(startedAt=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: key #0 attempt failed \(reason=timeout, durationMs=\d+\)$/));
+      consoleLogSpy.mockRestore();
+    });
+
+    it("logs HTTP error status and elapsed duration on non-200 response", async () => {
+      const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 429,
+          text: async () => JSON.stringify({ error: { message: "rate limited" } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            choices: [{ message: { content: "ok from key-b" }, finish_reason: "stop" }],
+            usage: { completion_tokens: 15, total_tokens: 20 },
+          }),
+        });
+
+      await clientModule.baiChat([{ role: "user", content: "hi" }]);
+
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: attempting key #0 \(startedAt=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: key #0 attempt failed \(status=429, durationMs=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: attempting key #1 \(startedAt=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/^bai: key #1 attempt succeeded \(status=200, durationMs=\d+\)$/));
+      expect(consoleLogSpy).toHaveBeenCalledWith("bai: response finish_reason=stop reasoning_tokens=none completion_tokens=15 total_tokens=20");
+      consoleLogSpy.mockRestore();
+    });
+
+    it("extractUsageDetails supports both top-level and nested reasoning_tokens shapes", () => {
+      expect(clientModule.extractUsageDetails(undefined)).toEqual({
+        reasoningTokens: undefined,
+        completionTokens: undefined,
+        totalTokens: undefined,
+      });
+
+      expect(clientModule.extractUsageDetails({
+        reasoning_tokens: 10,
+        completion_tokens: 50,
+        total_tokens: 60,
+      })).toEqual({
+        reasoningTokens: 10,
+        completionTokens: 50,
+        totalTokens: 60,
+      });
+
+      expect(clientModule.extractUsageDetails({
+        completion_tokens: 40,
+        completion_tokens_details: { reasoning_tokens: 30 },
+        total_tokens: 70,
+      })).toEqual({
+        reasoningTokens: 30,
+        completionTokens: 40,
+        totalTokens: 70,
+      });
+    });
+  });
+
   describe("isReasoningBudgetExhausted (plan.md Section 25 detection logic)", () => {
     it("returns true when finish_reason is 'length' and reasoning_tokens is >=90% of completion_tokens (top-level usage shape)", () => {
       const choice = { finish_reason: "length" };

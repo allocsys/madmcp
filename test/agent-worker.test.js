@@ -215,6 +215,20 @@ describe("agent_worker.js — handleAgentWorker", () => {
     expect(cp.finalAnswer).toBe("final answer");
   });
 
+  it("logs console.error when runInvestigation returns failed:true", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runId = await seedRun({ task: "fails task", provider: "gemini" });
+    mockProviderChat.mockRejectedValueOnce(new Error("network error"));
+
+    const { req, res } = makeReqRes({ body: { runId, afterStep: 0, retryCount: 0 } });
+    await handleAgentWorker(req, res);
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`agent-worker: runId ${runId} step failed:`)
+    );
+    consoleErrorSpy.mockRestore();
+  });
+
   it("dead-letters after AGENT_WORKER_MAX_CONSECUTIVE_FAILURES consecutive same-step failures instead of re-chaining forever", async () => {
     const runId = await seedRun({ task: "always fails", provider: "gemini" });
     // Every providerChat call throws a non-transient error -- runInvestigation's
