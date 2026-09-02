@@ -316,3 +316,93 @@ export async function handleAgentWorker(req, res) {
   debugLog(`agent-worker[${invocationId}]: exit status=chained runId=${runId} afterStep=${afterStep} steps=${latest.stepsDone}`);
   return res.status(200).json({ status: "chained", steps: latest.stepsDone });
 }
+
+// ---------------------------------------------------------------------------
+// handleAgentWorkerFailure (plan.md Section 13) -- Express handler for
+// POST /api/agent-worker-failure, the QStash failureCallback target
+// configured in publishAgentStep (qstash_client.js). QStash calls THIS
+// endpoint -- as its own separately-signed message, not a redelivery of the
+// original one -- exactly once, the moment it gives up on delivering the
+// original agent-worker message (immediately, now that publishAgentStep
+// sets retries: QSTASH_STEP_RETRIES = 0, rather than after its old
+// default ~40min/3-retry budget).
+//
+// WHY THIS EXISTS: the in-process dead-letter check earlier in this file
+// (effectiveRetryCount via the Upstash-Retried header) can only run INSIDE
+// a live invocation of THIS worker. A step that hard-times-out on every
+// single QStash delivery attempt means no further invocation of the
+// ORIGINAL endpoint ever arrives once QStash's retry budget is spent --
+// that check never gets a chance to fire, and the checkpoint is left at
+// status:"running" forever with nothing to catch it (the live blind spot
+// confirmed in Section 12 against runId 223d6b08-...). This callback is the
+// only signal QStash gives for that terminal state, so it's the only place
+// this specific gap can be closed.
+//
+// Body shape is QStash's failure-callback JSON (see
+// https://upstash.com/docs/qstash/features/callbacks#what-is-a-failure-callback),
+// NOT the original {runId, afterStep, retryCount} shape agent-worker
+// receives directly -- the original request body survives base64-encoded
+// under `sourceBody`.
+export async function handleAgentWorkerFailure(req, res) {
+  const signature = req.get("Upstash-Signature");
+  // Same rawBody/signature-verification rationale as handleAgentWorker
+  // above -- this is itself a QStash-originated request (a callback is
+  // just a new signed message), so it goes through the same fail-closed
+  // verifyQStashSignature check before anything else happens.
+  const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
+  const verified = await verifyQStashSignature({ signature, body: rawBody });
+  if (!verified) {
+    console.warn("agent-worker-failure: rejected request with missing/invalid QStash signature");
+    return res.status(401).json({ error: "invalid or missing QStash signature" });
+  }
+
+  const { retried, maxRetries } = req.body || {};
+  let sourcePayload;
+  try {
+    sourcePayload = JSON.parse(Buffer.from(req.body?.sourceBody || "", "base64").toString("utf8"));
+  } catch (err) {
+    console.error(`agent-worker-failure: could not decode/parse sourceBody: ${err?.message ?? err}`);
+    return res.status(200).json({ status: "no-op", reason: "unparseable sourceBody" });
+  }
+
+  const { runId, afterStep = 0 } = sourcePayload || {};
+  if (!runId) {
+    return res.status(200).json({ status: "no-op", reason: "sourceBody missing runId" });
+  }
+
+  const checkpoint = await loadCheckpoint(runId);
+  if (!checkpoint || checkpoint.status !== "running" || checkpoint.stepsDone !== afterStep) {
+    // Already finished, expired, or moved on -- most likely because the
+    // organic in-process retry path (agent_tools.js's stale-lastStepAt
+    // fallback, or a same-step retryCount re-chain that actually
+    // succeeded) already recovered this run before QStash's own delivery
+    // attempt to the ORIGINAL message finally gave up. This callback is
+    // then stale, not authoritative -- no-op rather than clobbering
+    // whatever more-current state the checkpoint is already in.
+    debugLog(`agent-worker-failure: no-op runId=${runId} afterStep=${afterStep} (checkpoint not in the stalled state this callback describes)`);
+    return res.status(200).json({ status: "no-op", reason: "checkpoint not in the stalled state this callback describes" });
+  }
+
+  // Same explicit-field-list shape as the Upstash-Retried-header dead-letter
+  // save earlier in this file (NOT a blind spread -- agent_checkpoint.js
+  // splits `contents` into its own Redis LIST, so a meta-only write needs
+  // newContents: [] to avoid re-appending already-persisted content).
+  await saveCheckpoint(runId, {
+    newContents: [],
+    transcript: checkpoint.transcript,
+    stepsDone: checkpoint.stepsDone,
+    task: checkpoint.task,
+    repeatCounts: checkpoint.repeatCounts,
+    consecutiveAllRepeatSteps: checkpoint.consecutiveAllRepeatSteps,
+    provider: checkpoint.provider,
+    model: checkpoint.model,
+    maxOutputTokens: checkpoint.maxOutputTokens,
+    pendingVerification: checkpoint.pendingVerification,
+    structuralRecheckUsed: checkpoint.structuralRecheckUsed,
+    status: "failed",
+    finalAnswer: `Investigation stopped: QStash exhausted its own delivery budget (retried ${retried ?? "?"}/${maxRetries ?? "?"}) on step ${checkpoint.stepsDone + 1} without ever getting a response -- almost always a platform-level execution timeout repeating on the same oversized step. Reported via QStash's failureCallback, since a step that times out on every delivery attempt means no further worker invocation ever arrives to run this file's own in-process dead-letter check.`,
+    stepStartedAt: null,
+  });
+  console.error(`agent-worker-failure: runId ${runId} dead-lettered via QStash failureCallback (retried=${retried}, maxRetries=${maxRetries}) on step ${checkpoint.stepsDone + 1}`);
+  return res.status(200).json({ status: "dead-lettered", reason: "qstash-failure-callback", steps: checkpoint.stepsDone });
+}
