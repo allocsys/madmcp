@@ -28,9 +28,21 @@ vi.mock("../connectors/shared/cooldown.js", () => ({
 }));
 
 // readFileViaBlob is the real network call github_read_file's execute()
-// wraps. Each call returns a distinct, large (40,000-char) string so the
-// aggregate-size cap has something real to bite into.
-const readFileViaBlobMock = vi.fn(async (_owner, _repo, path) => `CONTENT_FOR_${path}_`.padEnd(40000, "x"));
+// wraps. Each call returns a distinct, large string so the aggregate-size
+// cap has something real to bite into.
+//
+// Size note (2026-09-02, MAX_STEP_RESULT_CHARS 100000 -> 300000 raise):
+// this used to be 40,000 chars/file, which was plenty to blow past the old
+// 100,000 cap with the 5-call batch below (200,000 raw chars). It is NOT
+// enough at 300,000 (200,000 < 300,000 -- the cap simply wouldn't engage,
+// silently turning the second test below into a no-op that happens to pass
+// for the wrong reason). Raised to 90,000 chars/file (450,000 raw chars for
+// the same 5-call batch) to keep comfortable headroom above the cap. This
+// value is NOT derived from the real MAX_STEP_RESULT_CHARS constant -- it's
+// a hardcoded fixture size, same as it was before -- so if that constant is
+// raised again in the future, re-check this margin rather than assuming it
+// still holds.
+const readFileViaBlobMock = vi.fn(async (_owner, _repo, path) => `CONTENT_FOR_${path}_`.padEnd(90000, "x"));
 vi.mock("../connectors/github/helpers.js", () => ({
   readFileViaBlob: (...args) => readFileViaBlobMock(...args),
 }));
@@ -121,9 +133,9 @@ describe("oversized-step guardrails (plan.md Section 9 root-cause fix)", () => {
       .filter((p) => p.functionResponse)
       .reduce((sum, p) => sum + (p.functionResponse.response.result?.length || 0), 0);
 
-    // Without the cap this would be callCount * 40000 (well over 100,000
-    // for the default callCount here) -- with it, bounded at
-    // MAX_STEP_RESULT_CHARS plus truncation-notice overhead (one withheld
+    // Without the cap this would be callCount * 90000 (well over the
+    // MAX_STEP_RESULT_CHARS cap in effect at test time) -- with it, bounded
+    // at MAX_STEP_RESULT_CHARS plus truncation-notice overhead (one withheld
     // notice per call cut off by the cap, so allow generously for that
     // rather than pinning an exact byte count this test shouldn't care
     // about).
