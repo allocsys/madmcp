@@ -1280,6 +1280,79 @@ to try to write too much in the first place.
 
 ---
 
+## 18. Two more repeats of the Section 16 prompt fix -- 3/3 on the timeout goal, but a NEW quality problem surfaced (2026-09-02, follow-up session)
+
+Ran the identical Section 15/17 repro shape two more times (same task,
+`provider: "bai"`, `max_steps: 3`) to check whether Section 17's clean
+result was reliable or a lucky single data point.
+
+**Run `ce9d288e-87b7-40a1-afb3-aac48d8ef1ba` (repeat #2):** completed in 3
+steps, no timeout -- confirmed via `get_runtime_logs` directly against the
+step-3 invocation (`66fee37b`): `runInvestigation returned steps=3
+failed=false`, `exit status=done`, HTTP `200`. `get_runtime_errors` showed
+zero entries. BUT the final answer text itself was rough/abrupt --
+"Priority fetches for the withheld/truncated worker files before
+finalizing:" -- reads like an interrupted thought, not a deliberate short
+summary, even though the run genuinely completed (not platform-truncated).
+
+**Run `6ea018d5-19dc-4117-80ed-14117da6b930` (repeat #3):** also completed
+in 3 steps, `get_runtime_errors` again empty -- no timeout. But the "final
+answer" this time was actively broken: the model, on the no-tools forced-
+final step, emitted literal tool-call-shaped text instead of a plain-text
+answer -- `<githu b_read_file><params>{"owner":"allocsys","repo":"madmcp",
+"path":"connectors/github/editor_worker.js"}</params></githu b_read_file>`
+-- i.e. it tried to keep working (request another file read) rather than
+actually stopping and answering, even though tools were structurally
+withheld and the SYSTEM NOTE explicitly said a function call isn't
+possible on this turn.
+
+**Combined status across all three post-fix runs (Section 17 + this
+section): 3/3 on the actual goal (no platform timeout, no dead-letter, no
+hang).** The prompt fix from Section 16 is holding up on the thing it was
+built to fix. But a new, distinct problem is now visible across the three:
+answer QUALITY on the forced-final step is inconsistent --
+
+1. Run 1 (`3f776358`): clean, coherent, correctly explains its own gaps.
+2. Run 2 (`ce9d288e`): short but reads unfinished/awkward.
+3. Run 3 (`6ea018d5`): garbled -- a malformed attempted tool call leaking
+   into the text answer instead of an actual answer.
+
+**Why this matters:** the fix successfully stops the model from BURNING
+the full step on an unbounded exhaustive attempt, but doesn't guarantee
+what it produces INSTEAD is coherent. Run 3 in particular suggests the
+model's underlying impulse under this task shape is still "I need more
+tools/steps to actually answer this" -- the fix successfully prevents that
+impulse from turning into a 300s runaway, but here it leaked out as
+garbled pseudo-tool-call text instead. This is a NEW, separate finding
+from Section 16's original timeout problem, not a sign the timeout fix
+itself is unreliable.
+
+**Not yet checked:** whether `agent_delegate.js`'s own
+`MALFORMED_FUNCTION_CALL`/`starvationNote` handling (see its
+`isFinalStep`-aware branch around candidate.finishReason handling) was
+supposed to catch run 3's case and didn't, or whether this shape (tool-call
+syntax embedded inside an ordinary text response, not a real
+MALFORMED_FUNCTION_CALL finish reason) falls outside what that existing
+handling looks for. Worth reading that branch directly before deciding on
+a fix, rather than assuming which code path (if any) is responsible.
+
+**Next steps:**
+- Read `agent_delegate.js`'s finishReason/starvationNote handling directly
+  to determine whether run 3's garbled-tool-call-as-text output should
+  have been caught there and wasn't, or is a genuinely uncovered shape.
+- Consider whether the final-step SYSTEM NOTE (Section 16) needs a further
+  addition specifically addressing "do not attempt to call a tool in any
+  form, including writing tool-call-shaped text -- you cannot call tools
+  this turn" -- separate from the brevity instruction already added.
+- Continue treating the `maxOutputTokens` hard backstop (Section 16.4) as
+  still open, though it's now clearly not sufficient on its own either --
+  it would only bound LENGTH, not fix a malformed/garbled short answer
+  like run 3's.
+- `223d6b08-d2e1-4f23-8597-27fc48c594a3` still not resumed.
+  `DEBUG_AGENT_WORKER` still ON. Section 11 items #2-#4 still open.
+
+---
+
 ## 17. First live re-test of the Section 16 prompt fix -- CLEAN PASS, no timeout (2026-09-02, follow-up session)
 
 Re-ran Section 15's exact repro shape immediately after commit `97116d2`
