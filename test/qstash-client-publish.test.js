@@ -24,12 +24,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockPublishJSON = vi.fn();
 vi.mock("@upstash/qstash", () => ({
-  Client: vi.fn().mockImplementation(() => ({
-    publishJSON: mockPublishJSON,
-  })),
-  Receiver: vi.fn().mockImplementation(() => ({
-    verify: vi.fn(),
-  })),
+  // Arrow functions have no [[Construct]] internal slot, so `new Client(...)`
+  // (as qstash_client.js's getQStashClient() calls it) throws "is not a
+  // constructor" if the mock implementation is an arrow function -- must be
+  // a real `function` (or class) for `new` to work.
+  Client: vi.fn().mockImplementation(function MockClient() {
+    return { publishJSON: mockPublishJSON };
+  }),
+  Receiver: vi.fn().mockImplementation(function MockReceiver() {
+    return { verify: vi.fn() };
+  }),
 }));
 
 const ORIGINAL_ENV = { ...process.env };
