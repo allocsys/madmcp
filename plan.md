@@ -904,3 +904,88 @@ call sites), assigned to a `delegate_editor` task on branch
 
 Not yet done: the above is the task handed to `delegate_editor`, not yet
 implemented as of this plan.md edit.
+
+---
+
+## 8. NEW FINDING (2026-09-03): `delegate_editor(provider: "bai")` reliably stalls at step 2 and never reaches the write phase (3/3 repro)
+
+**Context:** the §7 logging task itself was dispatched via
+`delegate_editor(provider: "gemini")` (the default), which completed
+successfully in 15 steps, wrote all four files as scoped, passed CI after
+one test-fixture fix (see below), and was merged to `main` as PR #146.
+The logging implementation itself is NOT in question here.
+
+Separately, as a live test of the `bai` provider on `delegate_editor`
+specifically (not `delegate_agent`, which §1 already found reliable for
+bai), the exact same task was re-dispatched with `provider: "bai"` on a
+fresh branch (`test/bai-editor-diagnostic-logging`, off `main` @
+`8801a0a`), to compare bai's editor-loop behavior against Gemini's on
+identical input.
+
+**Result: 3 out of 3 attempts stalled at exactly step 2, zero files ever
+written, zero errors thrown:**
+
+1. Run `9a59d4ed-28ea-4d6c-8dc5-6067b95d3ecd` (default `max_steps`):
+   completed the read phase (both source files read in full, plan drafted
+   in detail matching the task's 5 scope items), then self-reported "the
+   tool budget for this session expired after the initial read phase" --
+   2 steps taken, no writes.
+2. Same run, resumed with `max_steps: 20`: returned an **identical**
+   response to (1), byte-for-byte the same plan text, still "2 step(s)
+   taken." This indicates the run had already reached a terminal state
+   internally -- raising the ceiling on a resume does not restart a loop
+   that already exited; `resume_run_id` on an already-terminal checkpoint
+   just replays the stored answer.
+3. A **fresh** run (`a7179fa8-b99f-465e-9274-0e816f168050`, new run_id,
+   same branch/task, `max_steps: 20` set from the start this time):
+   stalled identically -- 2 steps, zero writes, same shape of plan-only
+   output. Rules out a stale-checkpoint explanation for (1)/(2); this is
+   reproducible from a clean start.
+4. A fourth run (`c27392d3-577f-4831-a97c-ab269b598604`, same setup,
+   `show_transcript: true` explicitly passed): stalled identically again
+   -- 2 steps, zero writes -- and **no transcript was returned** despite
+   the flag (the tool's own docs say a failed/partial run always includes
+   the transcript regardless of the flag; this run apparently isn't being
+   classified as failed/partial by the tool, which is itself worth noting).
+   This run's self-reported explanation is a new and specific red flag:
+   *"the tool note for this turn excluded function calls entirely, so any
+   write attempt this turn was impossible."* Nothing in this pipeline
+   actually excludes function calls from a turn -- this reads like bai
+   **confabulating a justification** for not calling `write_file`, rather
+   than accurately reporting a real tool/environment constraint.
+
+**What this rules in/out:**
+- Not a `max_steps` ceiling problem -- default and 20 both stall at the
+  same step 2, well under any of the ceilings tried.
+- Not a stale-checkpoint/TTL artifact -- reproduced from a fresh run_id.
+- `show_transcript: true` did not surface the raw tool-call sequence,
+  so the actual mechanism (bai never emitting a `write_file` call vs.
+  emitting one that fails silently vs. something else) is still unseen.
+- The model's own self-reported reasons across the 4 attempts are
+  inconsistent with each other ("tool budget... expired" vs. "tool note
+  for this turn excluded function calls") and at least the second is not
+  a real system behavior -- neither should be taken at face value as an
+  accurate root cause.
+
+**Distinct from §6/§7's findings:** those are wall-clock stalls on
+tool-calling steps mid-investigation (`delegate_agent`), 300s platform
+timeouts, dead-lettered via QStash. This is a *different* tool
+(`delegate_editor`), a *different* symptom (clean self-termination at
+step 2 with a plausible-sounding but seemingly fabricated explanation,
+not a hung/timed-out call), and does not appear anywhere in Vercel's
+runtime logs as an error -- from the platform's point of view these 4
+runs likely completed normally.
+
+**Not yet done:** pulling Vercel runtime logs for these 4 run windows to
+check whether the platform-side view corroborates "clean completion" or
+shows something else; determining whether `delegate_editor`'s bai path
+has a distinct, lower-level step/turn limit independent of `max_steps`
+that causes early self-termination; retrying with an even more minimal
+task (e.g. a single-file, single-line change) to see if task complexity
+is a factor, before concluding this is inherent to bai on `delegate_editor`
+regardless of task size.
+
+**Recommendation:** until this is understood, prefer `provider: "gemini"`
+(the default) for `delegate_editor` tasks. `delegate_agent`'s bai path
+remains separately confirmed reliable per §1 and is not implicated by this
+finding -- this is specific to the editor tool's bai integration.
