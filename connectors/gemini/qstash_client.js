@@ -29,7 +29,7 @@
 // ---------------------------------------------------------------------------
 
 import { Client, Receiver } from "@upstash/qstash";
-import { AGENT_WORKER_URL, EDITOR_WORKER_URL } from "../../config.js";
+import { AGENT_WORKER_URL, AGENT_WORKER_FAILURE_URL, EDITOR_WORKER_URL, EDITOR_WORKER_FAILURE_URL, QSTASH_STEP_RETRIES } from "../../config.js";
 
 let qstashClient = null;
 let qstashInitAttempted = false;
@@ -76,9 +76,19 @@ export async function publishAgentStep({ runId, afterStep, retryCount = 0 }) {
   const client = getQStashClient();
   if (!client) throw new Error("QSTASH_TOKEN is not set -- cannot publish to QStash.");
   if (!AGENT_WORKER_URL) throw new Error("AGENT_WORKER_URL is not set -- cannot publish to QStash without a target URL for the worker endpoint.");
+  // retries/failureCallback (plan.md Section 13): see config.js's
+  // AGENT_WORKER_FAILURE_URL comment for the full reasoning -- previously
+  // neither was set, so a step that hard-timed-out on every delivery
+  // attempt could exhaust QStash's own (default 3-retry, ~40min) budget
+  // with no notification back to this app, leaving the checkpoint stuck at
+  // status:"running" forever. failureCallback is only attached if a URL was
+  // derivable/configured -- an undefined value here is simply omitted from
+  // the publish rather than sent as a broken callback target.
   await client.publishJSON({
     url: AGENT_WORKER_URL,
     body: { runId, afterStep, retryCount },
+    retries: QSTASH_STEP_RETRIES,
+    ...(AGENT_WORKER_FAILURE_URL ? { failureCallback: AGENT_WORKER_FAILURE_URL } : {}),
   });
 }
 
@@ -122,9 +132,13 @@ export async function publishEditorStep({ runId, afterStep, retryCount = 0 }) {
   const client = getQStashClient();
   if (!client) throw new Error("QSTASH_TOKEN is not set -- cannot publish to QStash.");
   if (!EDITOR_WORKER_URL) throw new Error("EDITOR_WORKER_URL is not set -- cannot publish to QStash without a target URL for the editor worker endpoint.");
+  // Same retries/failureCallback reasoning as publishAgentStep above (plan.md
+  // Section 13) -- EDITOR_WORKER_FAILURE_URL is only attached if derivable/configured.
   await client.publishJSON({
     url: EDITOR_WORKER_URL,
     body: { runId, afterStep, retryCount },
+    retries: QSTASH_STEP_RETRIES,
+    ...(EDITOR_WORKER_FAILURE_URL ? { failureCallback: EDITOR_WORKER_FAILURE_URL } : {}),
   });
 }
 
