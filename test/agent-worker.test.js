@@ -69,14 +69,14 @@ function makeReqRes({ body, signature = "sig", rawBody, upstashRetried } = {}) {
 }
 
 describe("agent_worker.js — handleAgentWorker", () => {
-  let handleAgentWorker, seedRun, loadCheckpoint;
+  let handleAgentWorker, handleAgentWorkerFailure, seedRun, loadCheckpoint;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockVerify.mockResolvedValue(true);
     mockPublish.mockResolvedValue();
-    ({ handleAgentWorker } = await import("../connectors/gemini/agent_worker.js"));
+    ({ handleAgentWorker, handleAgentWorkerFailure } = await import("../connectors/gemini/agent_worker.js"));
     ({ seedRun } = await import("../connectors/gemini/agent_delegate.js"));
     ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
   });
