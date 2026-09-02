@@ -323,3 +323,110 @@ describe("agent_worker.js — handleAgentWorker", () => {
     expect(res.jsonBody.status).toBe("chained");
   });
 });
+
+// Regression coverage for the two new failure-callback handlers added in
+// plan.md Section 13 (the fix for the live dead-letter blind spot confirmed
+// in Section 12: a step that hard-times-out on every single QStash delivery
+// attempt previously left a run stuck at status:"running" forever, with no
+// further invocation of handleAgentWorker ever arriving to run its own
+// in-process dead-letter check). Mirrors the dead-letter test patterns
+// above: signature-fail (401), stale/no-op (checkpoint already moved on or
+// finished), and happy-path finalize (checkpoint still in the exact stalled
+// state the callback describes -> "failed" with the QStash-sourced reason).
+describe("agent_worker.js — handleAgentWorkerFailure", () => {
+  let handleAgentWorkerFailure, seedRun, loadCheckpoint, runInvestigation;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockVerify.mockResolvedValue(true);
+    mockPublish.mockResolvedValue();
+    ({ handleAgentWorkerFailure } = await import("../connectors/gemini/agent_worker.js"));
+    ({ seedRun, runInvestigation } = await import("../connectors/gemini/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+  });
+
+  it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {
+    mockVerify.mockResolvedValue(false);
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId: "does-not-matter", afterStep: 0 } });
+    await handleAgentWorkerFailure(req, res);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("no-ops on a missing/unparseable sourceBody instead of throwing or touching a checkpoint", async () => {
+    const { req, res } = makeFailureReqRes({ rawSourceBody: "not-valid-base64-json!!!" });
+    await handleAgentWorkerFailure(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+  });
+
+  it("no-ops on a sourceBody missing runId", async () => {
+    const { req, res } = makeFailureReqRes({ sourceBody: { afterStep: 0 } });
+    await handleAgentWorkerFailure(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+  });
+
+  it("no-ops (does not clobber) when the checkpoint has already advanced past the callback's afterStep -- the organic retry path recovered before QStash's own budget gave up", async () => {
+    const runId = await seedRun({ task: "some task", provider: "gemini" });
+    mockGithubRequest.mockResolvedValue({ names: [] });
+    mockProviderChat.mockResolvedValueOnce({
+      content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_1" } }] },
+      finishReason: "STOP",
+    });
+    await runInvestigation({ resume_run_id: runId, max_steps: 1, provider: "gemini" });
+
+    const cpBefore = await loadCheckpoint(runId);
+    expect(cpBefore.stepsDone).toBe(1);
+
+    // Callback describes the ORIGINAL message (afterStep: 0), now stale --
+    // the live checkpoint has already moved past it.
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId, afterStep: 0 } });
+    await handleAgentWorkerFailure(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("no-op");
+
+    const cpAfter = await loadCheckpoint(runId);
+    expect(cpAfter.status).toBe("running"); // not clobbered into "failed"
+    expect(cpAfter.stepsDone).toBe(1);
+  });
+
+  it("no-ops (does not overwrite the real answer) when the run already finished before the callback arrived", async () => {
+    const runId = await seedRun({ task: "one-step task", provider: "gemini" });
+    mockProviderChat.mockResolvedValueOnce({
+      content: { role: "model", parts: [{ text: "final answer" }] },
+      finishReason: "STOP",
+    });
+    await runInvestigation({ resume_run_id: runId, max_steps: 1, provider: "gemini" });
+
+    const cpBefore = await loadCheckpoint(runId);
+    expect(cpBefore.status).toBe("done");
+
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId, afterStep: 0 } });
+    await handleAgentWorkerFailure(req, res);
+
+    expect(res.jsonBody.status).toBe("no-op");
+    const cpAfter = await loadCheckpoint(runId);
+    expect(cpAfter.status).toBe("done");
+    expect(cpAfter.finalAnswer).toBe("final answer");
+  });
+
+  it("finalizes the checkpoint as failed with the QStash-sourced reason when it's still exactly in the stalled state the callback describes", async () => {
+    const runId = await seedRun({ task: "oversized step that always platform-times-out", provider: "gemini" });
+    // Freshly seeded: status "running", stepsDone 0 -- exactly matching a
+    // failure callback for the very first message (afterStep: 0), i.e. every
+    // delivery attempt of step 1 hard-timed-out and QStash gave up.
+    const { req, res } = makeFailureReqRes({ sourceBody: { runId, afterStep: 0 }, retried: 0, maxRetries: 0 });
+    await handleAgentWorkerFailure(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody.status).toBe("dead-lettered");
+    expect(res.jsonBody.reason).toBe("qstash-failure-callback");
+
+    const cp = await loadCheckpoint(runId);
+    expect(cp.status).toBe("failed");
+    expect(cp.finalAnswer).toMatch(/QStash exhausted its own delivery budget/);
+    expect(cp.stepStartedAt).toBeNull();
+  });
+});
