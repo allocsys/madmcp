@@ -372,34 +372,41 @@ the limit of what black-box behavior alone can resolve.
    doesn't have — flag to whoever owns that layer if it recurs.
 7. QStash's own dashboard/API has never been directly inspected — worth a
    look if the failure-callback fixes from §3 ever misbehave in practice.
-9. **MERGED TO `main`, LIVE-CONFIRMATION STILL OUTSTANDING (2026-09-02):**
+9. **DONE, CONFIRMED-SAFE (2026-09-02):**
    §3's `MAX_STEP_RESULT_CHARS` cap raised from 60000 to 100000, to reduce
    how often bai needs a `char_offset` re-request to see a full large file.
    PR #143 squash-merged to `main` as commit `628d1f7` (source branch
    `test/raise-max-step-result-chars-100k`, `b442ddf`). CI green on both
    the push run (#1585) and the PR run (#1586) before merge.
-   **Explicitly NOT the same fix as §4's `reasoningEffort`/retry change** —
-   confirmed via direct re-read of `agent_delegate.js`: §4 only gates the
-   forced-final-step (`isFinalStep`) OUTPUT-generation call and does
-   nothing for a normal mid-run step's INPUT payload size, which is what
-   `MAX_STEP_RESULT_CHARS` bounds (a bloated `contents` history making the
-   *next* `providerChat` call slow enough to risk Vercel's 300s ceiling —
-   §3's original root cause). Raising this cap is therefore merged but
-   **NOT YET live-timing-tested** against that original risk, and is NOT
-   assumed safe by §4's fix.
-   `test/agent-oversized-step-cap.test.js` imports the constant dynamically
-   (not hardcoded), so it re-targeted 100000 automatically — no test
-   changes were needed, and CI passing does not itself constitute the live
-   timing confirmation below.
-   **STILL NEEDED, next session:** a live timing test against a real
-   `provider: "bai"` `delegate_agent` call, using a task deliberately
-   shaped to produce a single step whose aggregate tool-result payload
-   lands near the new 100000-char cap (e.g. several large file reads
-   batched into one step, similar to the `test/agent-oversized-step-cap.test.js`
-   mock shape but against the real repo). Measure actual `providerChat`
-   call latency on the following step (the one that sends the bloated
-   history back) and compare against Vercel's 300s hard ceiling. If
-   latency is found to creep close to that ceiling, revert `main` to 60000
-   (single-line revert in `connectors/gemini/agent_delegate.js`,
-   `MAX_STEP_RESULT_CHARS`). If comfortably clear, close out this item as
-   confirmed-safe.
+   Explicitly not the same fix as §4's `reasoningEffort`/retry change —
+   §4 only gates the forced-final-step (`isFinalStep`) OUTPUT-generation
+   call; `MAX_STEP_RESULT_CHARS` bounds a normal mid-run step's INPUT
+   payload size (a bloated `contents` history making the *next*
+   `providerChat` call slow enough to risk Vercel's 300s ceiling — §3's
+   original root cause).
+
+   **Live timing test run (2026-09-02), run `5680e1f8-d994-4fa2-a184-8fb720dbe0f4`:**
+   a real `delegate_agent({ provider: "bai", max_steps: 3 })` call was given
+   a task requiring five real repo files (including a 166,873-char file) to
+   be batch-read in a single step, to force the aggregate step-result cap
+   to actually engage. Per the transcript, it did engage — `connectors/github/tools.js`
+   was truncated by the combined-result cap on the first pass and had to be
+   fully re-read on the next step, confirming this wasn't just a
+   near-miss but a genuine trip of the 100000-char ceiling. Actual
+   `/api/agent-worker` invocation timestamps pulled directly from Vercel
+   runtime logs (project `prj_7iG65asCBZzoZsZoMY1Vuf7B5mbh`, not inferred
+   from MCP-side polling):
+   - `afterStep=0` (executes the 5 batched reads): started 19:09:56
+   - `afterStep=1` (**the at-risk call** — receives the ~100k-char step-1
+     payload, calls `providerChat`, executes step 2): started 19:10:11
+     — **15s** after the prior invocation started
+   - `afterStep=2` (finalizes, produces the answer): started 19:10:37
+     — **26s** after the at-risk invocation started
+
+   Both gaps (invocation runtime + QStash chaining latency, an upper bound
+   on the true function duration) are ~5–9% of Vercel's 300s hard ceiling.
+   `get_runtime_errors` for the same window: zero errors.
+
+   **Verdict: comfortably clear.** No revert needed. This closes out §6
+   item 9 — the 100000 cap is confirmed-safe against the original §3 risk,
+   not just passing on mocked unit tests.
