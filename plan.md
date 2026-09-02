@@ -2008,3 +2008,162 @@ repro against them, are the next session's work.
 - Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
   (still ON), and Section 5's "Void" mystery remain exactly as open as
   Section 23 left them -- untouched by this section.
+
+---
+
+## 25. Root cause reframed via isolated bai completion-call script: a
+token-budget race between reasoning and answer tokens inside a SINGLE
+completion call, not a prompt-compliance problem -- supersedes the
+Section 16-24 prompt/note-wording approach
+
+### 25.1 What was run
+
+Ran `test-bai-timeout.sh` -- a standalone script hitting bai's completion
+endpoint directly (bypassing `agent_delegate.js`/the whole step-loop
+machinery entirely), isolating input size, output cap, and
+`reasoning_effort` as independent variables:
+
+- Case 1 (baseline, small in/out): 7.59s, `finish_reason: stop`, clean.
+- Case 2 (~120k char input, normal output): 11.13s -- NOT disproportionately
+  slower than baseline.
+- Case 3 (small input, UNCAPPED output): hung to a 90s client-side timeout
+  (curl exit 28).
+- Case 4 (`max_tokens=300`, no `reasoning_effort` set, essay prompt, 5
+  runs): **5/5 runs** -- `finish_reason: length`, 295-300 of 300 tokens
+  spent on `reasoning_tokens`, answer content EMPTY every time.
+- Cases 5/6/7 (trivial prompt, `reasoning_effort` low/high/max):
+  `reasoning_tokens` 0 -> 14 -> 171 -- monotonic, `reasoning_effort` is a
+  real, honored, controllable lever on bai's API.
+- Case 8 (`reasoning_effort=low` + `max_tokens=300`, essay prompt): only
+  47 reasoning tokens spent, 253 real answer tokens returned -- a genuine
+  answer, unlike case 4 at the same cap.
+- Case 9 (`reasoning_effort=low` + `max_tokens=1200`, 5 runs): reasoning
+  token usage ranged 34 -> 1200 across identical runs (stdev 634, mean
+  504) -- **2 of 5 runs** still burned the ENTIRE 1200-token budget on
+  reasoning and returned an empty answer, despite `reasoning_effort=low`
+  being set.
+
+### 25.2 Conclusion
+
+**Input size is not the driver (case 2 rules this out, confirms Section
+9's original input-side finding was correct and complete for THAT
+mechanism).** The failure catalogued across Sections 11 and 15-24 is a
+**token-budget race inside a single bai completion call**: the model can
+spend all, or nearly all, of its `max_tokens`/`maxOutputTokens` budget on
+internal `reasoning_tokens` before ever transitioning to the answer, at
+which point `finish_reason: length` fires and whatever partial/no text
+exists at that instant is what gets returned as the "answer."
+
+**This reframes Sections 18/20/22/24's four cataloged "distinct garbled
+final-answer shapes"** (space-mangled XML tag, `[Function call: ...]`
+bracket marker, bare unwrapped JSON args object, and Section 24's
+"Fetching those now..." stated-intent-without-action) **as plausibly ONE
+underlying mechanism, not four separate bugs**: different mid-reasoning
+truncation points would produce different fragment shapes depending on
+what the model happened to be composing when the token budget ran out --
+not four independent failure modes each needing its own prompt-wording
+countermeasure, which is the path Sections 16-24 were on.
+
+**`reasoning_effort=low` is a real, honored lever (confirmed via cases
+5/6/7) but is NOT sufficient alone** -- case 9 shows it can still be
+fully consumed by reasoning in ~40% of runs even when explicitly set low.
+A fixed `max_tokens` cap alone is also not sufficient (case 4: 5/5
+failure at 300; case 9: 2/5 failure even at 1200) -- no single static cap
+value reliably avoids either truncated-empty answers or (per case 3) an
+open-ended hang.
+
+### 25.3 Fix agreed (discussed with the user this session, NOT YET
+IMPLEMENTED)
+
+Two changes, both at the bai client-call level (`connectors/bai/
+client.js`), not the agent-loop/prompt level Sections 16-24 all targeted:
+
+1. **Set `reasoning_effort: "low"` explicitly on bai's forced-final-step
+   call.** Cheap, real, lowers average reasoning-token consumption --
+   confirmed via cases 5-8 above. Effort is set LOW only, never raised;
+   Section 25.4 explains why raising effort on retry would be backwards.
+2. **Detect-and-retry on the response shape, not the prompt wording:** if
+   a completion returns `finish_reason === "length"` AND
+   `reasoning_tokens` is approximately equal to `completion_tokens` (i.e.
+   the answer is empty or near-empty because the budget was consumed by
+   reasoning, not by a real answer), treat that as a failed call and
+   retry ONCE with a larger `max_tokens` budget -- keeping
+   `reasoning_effort` at low (or lower) on the retry, never higher. This
+   is a mechanical check on the API response shape (`finish_reason` +
+   the reasoning/completion token ratio), not a prompt instruction the
+   model can fail to follow -- it directly addresses why Sections 16-24's
+   五 rounds of SYSTEM NOTE/preamble wording changes kept produc­ing new
+   failure shapes instead of converging: the lever they were pulling
+   (prompt compliance) was never the actual mechanism (token-budget
+   allocation inside one completion call).
+
+### 25.4 Why raise-effort-on-retry and lower-effort-with-retries were both
+considered and rejected
+
+- **Raising `reasoning_effort` on retry would make it worse, not
+  better.** Cases 5/6/7 show effort correlates with MORE reasoning
+  tokens (0 -> 14 -> 171 on an identical trivial prompt), and case 7
+  (max effort) spent 171 reasoning tokens on a one-word prompt. Retrying
+  a call that already failed by exhausting its budget on reasoning, with
+  a setting that produces MORE reasoning, would make budget exhaustion
+  more likely, not less.
+- **Lowering `max_tokens` or `reasoning_effort` further on retry doesn't
+  match the failure mode either** -- the problem on a failed call is
+  that there wasn't enough ROOM for the answer once reasoning finished,
+  not that reasoning itself needs to be squeezed harder a second time.
+  The retry lever that matches the observed mechanism is a bigger
+  `max_tokens` budget on the same low-effort setting, giving the same
+  restrained-reasoning call more room to actually reach and complete the
+  answer.
+
+### 25.5 Cost tradeoff considered
+
+A retry adds one extra round-trip (per case 9's timings, up to ~40s in
+the worst observed case) to delegation time on the runs that hit this
+failure. This is bounded and cheap relative to the status quo: failing
+calls today already burn 8-42s (cases 4/9) and return nothing useful,
+and -- per Sections 18/20/22/24 -- get accepted as a "completed" step
+whose garbled output then propagates into the delegation's final answer
+or feeds the stall/timeout/dead-letter chain described in Sections 5-24.
+One bounded, targeted retry is faster and cheaper than the current
+behavior of silently accepting a token-exhausted non-answer as done.
+
+### 25.6 Status and what this supersedes
+
+**Not yet implemented.** This section documents the diagnosis (via
+`test-bai-timeout.sh`, run outside the agent loop) and the agreed fix
+direction only -- no code has been changed yet for this finding.
+
+**Recommendation carried forward: do not attempt a fifth SYSTEM_PREAMBLE/
+final-step-note wording change (Section 24.4's planned next step) before
+this client-level fix is tried.** Section 22.2's observation ("more note
+detail -> new leak variant, not fewer") is now better explained by 25.2's
+reframing than by anything about note wording specifically -- the note
+was never the lever controlling which token-budget outcome occurred
+inside a given completion call, so no amount of note-editing was ever
+likely to fully resolve Sections 18/20/22/24's failure shapes. The
+preamble-level change discussed in Section 24.4 is not ruled out as
+useful in its own right, but should not be treated as a substitute for
+the client-level fix in this section.
+
+**Explicitly NOT done:**
+- No code change to `connectors/bai/client.js` yet (the `reasoning_effort`
+  param and the finish_reason/token-ratio retry check are both still to
+  be implemented).
+- `test-bai-timeout.sh` itself is not yet committed to the repo (ran
+  ad hoc against the live bai endpoint, outside `agent_delegate.js`'s own
+  loop) -- worth adding to `test/` or a `scripts/` dir as a repeatable
+  diagnostic, distinct from the existing mocked-`providerChat` unit tests.
+- Section 16.4's `maxOutputTokens` hard backstop is effectively
+  superseded by this section's more specific fix (a `reasoning_effort`
+  setting plus a targeted retry), but has not been formally closed out or
+  removed from the "still open" list in prior sections.
+- Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
+  (still ON), and Section 5's "Void" mystery remain exactly as open as
+  Section 24 left them -- untouched by this section.
+- Once implemented, the next live-test pattern should follow Sections
+  15/17/20/22's precedent: re-run the exhaustive full-repo-writeup repro
+  shape against `provider: "bai"` and confirm (a) no more empty/garbled
+  final answers, (b) the retry fires only on genuinely token-exhausted
+  calls (checked via logs, not assumed), and (c) delegation time increase
+  stays within the bounded range Section 25.5 anticipated.
