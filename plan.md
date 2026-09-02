@@ -576,3 +576,58 @@ the limit of what black-box behavior alone can resolve.
    the confirmed-safe 100000, and live-test 200000 the same way the 100k
    raise was tested before calling it safe. This edit only updates
    `plan.md`'s record -- no code change was made this session.
+
+   **FOLLOW-UP (2026-09-02, next session), 300000 -> 270000, IMPLEMENTED AND MERGED, LIVE-TIMING TEST STILL OUTSTANDING:**
+
+   - **Decision:** go straight to 270000 rather than testing 200000 first.
+     Rationale: two clean confirmed failures at 300000 and zero data points
+     anywhere between the confirmed-safe 100000 floor and the
+     confirmed-unsafe 300000 ceiling give little reason to assume 200000
+     needs testing before 270000 doesn't -- either way an untested value
+     needs live validation before being trusted, so pick the value closer
+     to the original target and validate that one instead.
+   - **Code change:** `MAX_STEP_RESULT_CHARS` 300000 -> 270000 in
+     `connectors/gemini/agent_delegate.js`, branch
+     `test/lower-max-step-result-chars-270k`, commit `49815a3`. The
+     constant's inline comment was rewritten to record the confirmed-unsafe
+     finding at 300000 and the 270000 decision above (superseding the old
+     "TESTING" comment that still described 300000 as unconfirmed).
+   - **Test fixture:** `test/agent-oversized-step-cap.test.js` needed no
+     changes -- verified this session, not just assumed per the handoff:
+     it imports `MAX_STEP_RESULT_CHARS`/`MAX_TOOL_CALLS_PER_STEP`
+     dynamically, `callCount = MAX_TOOL_CALLS_PER_STEP - 3 = 5`, and the
+     fail-loud guard (`callCount * PER_CALL_CHAR_LIMIT` must clear
+     `MAX_STEP_RESULT_CHARS * 1.2`) still passes comfortably at 270000
+     (500000 > 324000). CI confirmed green on the branch push (run #1594)
+     before merging, per the handoff's test-before-merge instruction.
+   - **PR opened and merged:** #145
+     (https://github.com/allocsys/madmcp/pull/145), base `main`, head
+     `test/lower-max-step-result-chars-270k`, squash-merged as commit
+     `d023a5c`. `MAX_STEP_RESULT_CHARS = 270000` is now live on `main`.
+   - **NOT DONE: the live-timing validation the handoff called for (its
+     step 3/4), run before or after merge.** This session had no Vercel
+     log tooling available at all -- `tool_search` for runtime
+     logs/errors/deployment tooling returned nothing, a different gap
+     from the two prior sessions' blockers on this same investigation
+     (missing tool entirely vs. 403-permission-denied on a present tool).
+     The PR was merged anyway on explicit repo-owner instruction, citing
+     the same after-merge-test-order precedent already used (with
+     authorization) for both the 100k and 300k rollouts above -- not a
+     claim that 270000 is confirmed safe. **270000 remains an untested
+     value pending live validation** the same way 100000 was validated
+     (real `delegate_agent({provider:"bai"})` run forcing step 1's
+     aggregate payload past 270000 chars, actual Vercel `/api/agent-worker`
+     invocation timestamps pulled from runtime logs, gaps checked against
+     the 300s ceiling). **Next session: check whether Vercel log access
+     has been restored before attempting this** -- if still unavailable,
+     the fallback used earlier in this investigation (forcing the cap via
+     `delegate_agent` and reading the stall/dead-letter signal from the
+     tool's own error text, without independent timestamp confirmation)
+     is weaker evidence but better than nothing; flag which method was
+     used either way rather than presenting a QStash-inferred result as
+     equivalent to a real-timestamp one. If 270000 fails the same way
+     300000 did, fall back to the confirmed-safe 100000 floor and stop
+     iterating upward on this constant until there's a different way to
+     bound the outbound payload (e.g. compressing/summarizing large file
+     reads instead of just capping raw chars) -- per the original
+     handoff's own fallback instruction.
