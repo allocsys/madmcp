@@ -1879,3 +1879,132 @@ revert:**
 - Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
   (still ON), and Section 5's "Void" mystery remain exactly as open as
   Section 22 left them -- untouched by this revert.
+
+---
+
+## 24. Live test of the Section 23 revert: worker-chain stall reproduced,
+PLUS a new (fourth) final-step failure shape -- neither leaked tool-call
+syntax nor a real answer (2026-09-02, follow-up session)
+
+### 24.1 Run and what actually happened
+
+Ran the Section 15/17/18/20/22.1 repro shape against `main` with the
+Section 23 revert live: `delegate_agent({ provider: "bai", max_steps: 3,
+show_transcript: true })`, same class of exhaustive full-repo-writeup task
+as prior sections. `run_id: 2852a658-f4a2-4299-916e-0b27739261ca`.
+
+- Steps 1-2: unremarkable, consistent with every prior repro (file tree,
+  `config.js`, both workers, then `agent_checkpoint.js` and
+  `editor_checkpoint.js` withheld for hitting the per-step 60000-char cap).
+- **Async worker chain then stalled**: polled at +2s (0 steps), +27s (2
+  steps), +63s (2 steps, unchanged), +101s (2 steps, unchanged), and
+  finally +200s, at which point the tool itself reported "Investigation
+  appears stalled ... no activity in 200s (the background worker chain may
+  have broken)" -- the exact same stall signature and wording as Sections
+  5 and 7. **This stall is not new evidence about the SYSTEM NOTE either
+  way** -- it reproduces a pre-existing, orthogonal failure mode (silent
+  `step-ok-rechain-failed` in `agent_worker.js`, per Section 7's
+  hypothesis) that the note change was never expected to touch, and
+  Section 7's own unresolved next-step (check `DEBUG_AGENT_WORKER` logs
+  for `step-ok-rechain-failed` on a future stall) still applies directly
+  to this run if logs are still available.
+- **Nudged the stalled run forward synchronously** (`resume_run_id` +
+  explicit `max_steps: 3`, per the tool's own stall-recovery instructions).
+  This drove the (still-uncompleted) step 3 -- the forced no-tools final
+  step -- and returned:
+
+  > "Before writing the final summary, I need the two checkpoint schemas
+  > (withheld last step) and the truncated tail of editor_worker.js.
+  > Fetching those now, then I will produce the summary and clearly flag
+  > anything I could not read directly."
+
+### 24.2 This is a fourth, distinct final-step failure shape
+
+Sections 18/20/22.1 catalogued three literal leaked-tool-call-syntax
+shapes (space-mangled XML tag, `[Function call: ...]` bracket marker, bare
+unwrapped JSON args object). This output contains none of those --
+`detectToolCallLeakage` would almost certainly return `null` against it
+(no XML/bracket/JSON-with-name-key syntax at all), so this was NOT caught
+or flagged as a leak, and wasn't checked against the function directly
+this session (worth confirming, not assumed).
+
+What it IS: the model treats the forced-final, tools-withheld turn as
+though it still has a next turn to act in -- it states an intent
+("fetching those now") to do something the restored SYSTEM NOTE
+explicitly told it is impossible ("The next turn will NOT include any
+tools -- a function call is not possible; you must answer in plain text
+now"), and never produces either (a) an actual synthesized answer from
+what it already retrieved, or (b) the explicit "I cannot fully complete
+this" admission the note also explicitly asks for. It does neither
+instructed behavior. This is arguably a MORE direct violation of the
+note's instructions than the syntax-leak variants were -- those at least
+attempted an answer-shaped output; this one explicitly defers to a future
+action that cannot happen.
+
+### 24.3 What this run does and doesn't tell us about the Section 23 revert
+
+- **Does NOT confirm the restored note is sufficient.** The exact failure
+  the note is meant to prevent (treating the final step as non-final)
+  still happened, just in a new textual shape not previously catalogued.
+- **Does NOT cleanly refute it either** -- one run is one data point, and
+  this run's step 3 was reached via a synchronous nudge after a stall, not
+  the ordinary async path every prior repro used. Whether the stall itself
+  (a long gap with no activity before the model finally saw the "no
+  tools" turn) interacts with the failure shape is untested and a
+  plausible confound worth flagging, not assuming away.
+- **Consistent with Section 22.2's broader pattern**: every version of
+  this note tried so far (elaborated Section 16/18/20/21 wording, no note
+  at all per Section 22, and now the restored simplified `1748474`
+  wording) has coincided with SOME final-step failure on bai, each time in
+  a shape not explicitly named by whatever note version was live at the
+  time. This is still circumstantial -- the sample is one run per code
+  state, not a controlled series -- but three different code states now
+  each having their own distinct failure shape is at minimum a discouraging
+  signal.
+
+### 24.4 Direction agreed for next session: bai-specific tweaks to BOTH the
+SYSTEM_PREAMBLE and the final-step SYSTEM NOTE
+
+Per the user, the next step is not another prompt-only tweak restricted to
+just the final-step note (the narrow surface every prior fix in this chain
+has targeted), but changes to BOTH prompt surfaces bai receives:
+
+- `SYSTEM_PREAMBLE` (defined once, shared by every provider, injected as
+  the first turn via `${SYSTEM_PREAMBLE}\n\nTask: ${task}` in both
+  `runInvestigation` and the async fresh-start path) -- currently has no
+  bai-specific branching at all; every provider gets byte-identical
+  preamble text today. Given this run's failure (deferring to a future
+  action instead of answering) surfaced on the FIRST turn's instruction
+  fidelity, not just the final-turn note, a bai-specific addendum to the
+  preamble itself -- e.g. reinforcing early and repeatedly that a forced
+  final turn WILL occur and has zero tool access, not just relying on the
+  Section 16/18/20/21/23 note to carry that entire burden alone at the
+  last moment -- is the new idea to test, not yet implemented.
+- The final-step SYSTEM NOTE itself (`remainingAfterThisStep === 0`
+  branch, `connectors/gemini/agent_delegate.js`) -- not yet re-elaborated
+  this session; per Section 22.2's caution, any new wording should be
+  weighed against the observed pattern that more explicit prohibition has
+  previously correlated with a new failure shape rather than fewer
+  failures, so a NEW round of note-elaboration alone (a fifth try at the
+  same single surface) is explicitly being treated as a weaker bet than
+  pairing it with a preamble-level change.
+
+**Explicitly not yet done:** no code change has been made this session --
+this section documents the live-test finding and the agreed direction
+only. The actual `SYSTEM_PREAMBLE`/note wording changes, and a fresh live
+repro against them, are the next session's work.
+
+### 24.5 Open items carried forward unchanged
+
+- Section 7's stall hypothesis (oversized-step -> checkpoint/re-chain
+  failure) -- this run's stall is a second on-demand-ish reproduction of
+  the same symptom (2 steps done, single step batching multiple large
+  file reads, then silent stall) and is additional circumstantial support
+  for that hypothesis, but still not confirmed via checkpoint payload
+  size or QStash/Redis logs.
+- `detectToolCallLeakage` was not run against this run's literal output to
+  confirm it returns `null` (assumed, not verified) -- worth a quick unit
+  check before assuming the leakage backstop has no coverage gap here too.
+- Sections 11 items #2-#4, the Section 11/12 run, `DEBUG_AGENT_WORKER`
+  (still ON), and Section 5's "Void" mystery remain exactly as open as
+  Section 23 left them -- untouched by this section.
