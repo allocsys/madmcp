@@ -241,6 +241,10 @@ export async function handleAgentWorker(req, res) {
   }
   debugLog(`agent-worker[${invocationId}]: runInvestigation returned steps=${result.steps} failed=${!!result.failed} runId=${runId} afterStep=${afterStep}`);
 
+  if (result.failed) {
+    console.error(`agent-worker: runId ${runId} step failed: ${result.answer}`);
+  }
+
   const advanced = result.steps > afterStep;
   // Uses effectiveRetryCount (max of body retryCount and the
   // Upstash-Retried header, computed above) rather than plain retryCount,
