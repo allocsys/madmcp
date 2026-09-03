@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_checkpoint.js -- checkpoint layer for delegate_editor.
+// connectors/delegate/editor/editor_checkpoint.js -- checkpoint layer for delegate_editor.
 //
 // Reuses connectors/frontend/designer_checkpoint.js's shape verbatim (per
 // guardrail #7: "Checkpoint/resume contract identical to delegate_designer's,
