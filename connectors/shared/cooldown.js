@@ -7,8 +7,8 @@
 // under connectors/gemini/, because Gemini, GLM, Groq, and B.AI's clients
 // (connectors/gemini/client.js, connectors/glm/client.js,
 // connectors/groq/client.js, connectors/bai/client.js) all import it
-// directly, plus connectors/gemini/agent_checkpoint.js and
-// connectors/gemini/agent_delegate.js for Redis config checks, and the
+// directly, plus connectors/delegate/agent/agent_checkpoint.js and
+// connectors/delegate/agent/agent_delegate.js for Redis config checks, and the
 // frontend/github delegate+checkpoint pairs for the same. Each provider
 // namespaces its own keys (see DEFAULT_NAMESPACE below and each caller's
 // own namespace argument) so a cooldown recorded for one provider/key never
