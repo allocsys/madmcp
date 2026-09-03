@@ -277,3 +277,107 @@ describe("connectors/llm/router.js — providerChat", () => {
     await expect(providerChat(contents, { provider: "gemini" })).rejects.toThrow("Gemini API error (503): overloaded");
   });
 });
+
+// Coverage for the decouple-gemini-delegation plan's step 5
+// (GLM_ENABLED/GROQ_ENABLED/BAI_ENABLED) -- kept as its own describe block
+// with its own config.js mock per test (via vi.doMock + vi.importActual,
+// overriding only the one flag under test) so the rest of this file's
+// tests, which rely on the REAL config.js default (all three flags on),
+// are never affected. Each test mocks config.js, resets the module
+// registry, and re-imports router.js fresh -- same dynamic-import pattern
+// this file's own beforeEach already uses -- then unmocks/resets in
+// afterEach so the next test (in this block or any other) starts clean.
+describe("connectors/llm/router.js — per-provider enable flags (step 5)", () => {
+  afterEach(() => {
+    vi.doUnmock("../config.js");
+    vi.resetModules();
+  });
+
+  it("throws a clear config error and never calls glmChat when GLM_ENABLED is false", async () => {
+    vi.doMock("../config.js", async () => {
+      const actual = await vi.importActual("../config.js");
+      return { ...actual, GLM_ENABLED: false };
+    });
+    vi.resetModules();
+    const { providerChat: providerChatGlmDisabled } = await import("../connectors/llm/router.js");
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await expect(providerChatGlmDisabled(contents, { provider: "glm" }))
+      .rejects.toThrow(/Provider "glm" is disabled \(GLM_ENABLED=false\)/);
+    expect(mockGlmChat).not.toHaveBeenCalled();
+  });
+
+  it("throws a clear config error and never calls groqChat when GROQ_ENABLED is false", async () => {
+    vi.doMock("../config.js", async () => {
+      const actual = await vi.importActual("../config.js");
+      return { ...actual, GROQ_ENABLED: false };
+    });
+    vi.resetModules();
+    const { providerChat: providerChatGroqDisabled } = await import("../connectors/llm/router.js");
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await expect(providerChatGroqDisabled(contents, { provider: "groq" }))
+      .rejects.toThrow(/Provider "groq" is disabled \(GROQ_ENABLED=false\)/);
+    expect(mockGroqChat).not.toHaveBeenCalled();
+  });
+
+  it("throws a clear config error and never calls baiChat when BAI_ENABLED is false", async () => {
+    vi.doMock("../config.js", async () => {
+      const actual = await vi.importActual("../config.js");
+      return { ...actual, BAI_ENABLED: false };
+    });
+    vi.resetModules();
+    const { providerChat: providerChatBaiDisabled } = await import("../connectors/llm/router.js");
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await expect(providerChatBaiDisabled(contents, { provider: "bai" }))
+      .rejects.toThrow(/Provider "bai" is disabled \(BAI_ENABLED=false\)/);
+    expect(mockBaiChat).not.toHaveBeenCalled();
+  });
+
+  it("gemini is unaffected by any/all of glm, groq, bai being disabled -- it has no flag of its own", async () => {
+    vi.doMock("../config.js", async () => {
+      const actual = await vi.importActual("../config.js");
+      return { ...actual, GLM_ENABLED: false, GROQ_ENABLED: false, BAI_ENABLED: false };
+    });
+    vi.resetModules();
+    const { providerChat: providerChatAllDisabled } = await import("../connectors/llm/router.js");
+    mockGeminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [{ text: "hi" }] }, finishReason: "STOP" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    const result = await providerChatAllDisabled(contents, { provider: "gemini" });
+
+    expect(result.finishReason).toBe("STOP");
+    expect(mockGeminiChat).toHaveBeenCalled();
+  });
+
+  it("still defaults to (unaffected) gemini when provider is omitted, even with every other provider disabled", async () => {
+    vi.doMock("../config.js", async () => {
+      const actual = await vi.importActual("../config.js");
+      return { ...actual, GLM_ENABLED: false, GROQ_ENABLED: false, BAI_ENABLED: false };
+    });
+    vi.resetModules();
+    const { providerChat: providerChatAllDisabled } = await import("../connectors/llm/router.js");
+    mockGeminiChat.mockResolvedValueOnce({ content: { role: "model", parts: [{ text: "hi" }] }, finishReason: "STOP" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    const result = await providerChatAllDisabled(contents);
+
+    expect(result.finishReason).toBe("STOP");
+  });
+
+  it("re-enables normally once GLM_ENABLED is back to true (default, no override) -- confirms the mock isn't sticky across tests", async () => {
+    // No vi.doMock here at all -- real config.js, real default (true).
+    // This runs AFTER the disabled-glm test above and relies on that
+    // test's afterEach having actually unmocked config.js; if it hadn't,
+    // this would fail too, making it a regression check on the block's own
+    // cleanup as much as on router.js.
+    const { providerChat: providerChatDefault } = await import("../connectors/llm/router.js");
+    mockGlmChat.mockResolvedValueOnce({ message: { content: "done" }, finish_reason: "stop" });
+    const contents = [{ role: "user", parts: [{ text: "hello" }] }];
+
+    await providerChatDefault(contents, { provider: "glm" });
+
+    expect(mockGlmChat).toHaveBeenCalled();
+  });
+});
