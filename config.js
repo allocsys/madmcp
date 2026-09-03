@@ -165,9 +165,8 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 
-// Failure-callback target + retry budget for publishAgentStep/publishEditorStep
-// (plan.md Section 13, fixing the live dead-letter blind spot confirmed in
-// Section 12). Previously client.publishJSON() was called with neither
+// Failure-callback target + retry budget for publishAgentStep/publishEditorStep.
+// Previously client.publishJSON() was called with neither
 // `retries` nor `failureCallback` set, so QStash fell back to its own
 // defaults: 3 retries with exponential backoff (~12s, ~2m28s, ~30m8s --
 // worst case ~40min to exhaust), and, critically, NO notification to this
@@ -218,16 +217,16 @@ export const AGENT_WORKER_MAX_CONSECUTIVE_FAILURES = Number(process.env.AGENT_WO
 // commit 2aad526, to diagnose a worker-chain stall). Was default OFF after
 // the 2026-09-01 stall was diagnosed (sustained B.AI rate-limiting driving
 // the existing retry/re-chain path, not a concurrent-duplicate idempotency
-// bug) -- see plan.md Section 6 for why that diagnosis does NOT explain the
-// separate, still-open "Void"/stall investigation in Section 5.
-// FLIPPED TO DEFAULT ON (2026-09-02, plan.md Section 7): a NEW,
+// bug) -- that diagnosis does NOT explain the
+// separate, still-open "Void"/stall investigation.
+// FLIPPED TO DEFAULT ON (2026-09-02): a NEW,
 // reproducible-on-demand stall was found (an oversized single step -- many
 // batched tool calls / large truncated file reads -- correlating with the
 // worker chain going silent afterward). Turned logging back on by default
 // to capture entry/exit + step-ok-rechain-failed evidence automatically if
 // the pattern recurs, rather than requiring a manual flip after the fact.
 // Revert to default OFF (process.env.DEBUG_AGENT_WORKER === "true") once
-// Section 7's oversized-step hypothesis is confirmed or ruled out -- same
+// the oversized-step hypothesis is confirmed or ruled out -- same
 // log-volume reasoning as the original OFF default above.
 export const DEBUG_AGENT_WORKER = process.env.DEBUG_AGENT_WORKER !== "false";
 
@@ -347,7 +346,7 @@ export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) ||
 export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 30;
 export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
 
-// Async delegate_editor (plan.md Step 6) -- mirrors the AGENT_WORKER_URL/
+// Async delegate_editor -- mirrors the AGENT_WORKER_URL/
 // DELEGATE_AGENT_ASYNC/AGENT_ASYNC_*_SECONDS/AGENT_WORKER_MAX_CONSECUTIVE_FAILURES
 // block above almost exactly, but kept as its own set of flags rather than
 // reusing the AGENT_* ones directly -- delegate_editor's async rollout
@@ -377,7 +376,7 @@ function deriveEditorWorkerUrl() {
 }
 export const EDITOR_WORKER_URL = deriveEditorWorkerUrl();
 // Same failure-callback derivation as AGENT_WORKER_FAILURE_URL above --
-// see that constant's comment for the full reasoning (plan.md Section 13).
+// see that constant's comment for the full reasoning.
 export const EDITOR_WORKER_FAILURE_URL = deriveFailureUrl(EDITOR_WORKER_URL, "/api/editor-worker", "/api/editor-worker-failure", process.env.EDITOR_WORKER_FAILURE_URL);
 export const EDITOR_AGENT_ASYNC = process.env.EDITOR_AGENT_ASYNC || "qstash";
 // Same default as AGENT_ASYNC_POLL_FRESH_SECONDS -- no reason for the
