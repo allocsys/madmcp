@@ -47,8 +47,8 @@ describe("agent_delegate.js — single-step resume chaining (async delegate_agen
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    ({ runInvestigation } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("preserves (does not delete) the checkpoint when a caller's max_steps is exhausted below HARD_MAX_STEPS, and it can still be resumed", async () => {
