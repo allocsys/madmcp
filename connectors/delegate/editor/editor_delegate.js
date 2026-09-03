@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // connectors/delegate/editor/editor_delegate.js -- core agent loop for delegate_editor ("Limited GitHub write access for agent").
 //
-// Adapts connectors/frontend/designer_delegate.js's runDesignAgent shape --
+// Adapts connectors/delegate/designer/designer_delegate.js's runDesignAgent shape --
 // same multi-step Gemini function-calling loop, same checkpoint/resume
 // contract (guardrail #7: reuse designer_checkpoint.js's shape, here via
-// connectors/github/editor_checkpoint.js, a same-shape sibling with its own
+// connectors/delegate/editor/editor_checkpoint.js, a same-shape sibling with its own
 // Redis key prefix), same stuck-loop/repeat-detection and final-step tool
 // withholding fixes -- but:
 //
@@ -61,7 +61,7 @@ import {
   EDITOR_MAX_VALIDATE_CALLS,
 } from "../../../config.js";
 
-// Same reasoning as connectors/gemini/agent_delegate.js's
+// Same reasoning as connectors/delegate/agent/agent_delegate.js's
 // isTransientGeminiError / designer_delegate.js's copy of it: only 429
 // (rate limit) and 503 (overloaded) are worth resuming past -- everything
 // else reproduces identically on a resume.
