@@ -409,6 +409,47 @@ connectors/
      frozen step-1 tables, and one test-fixture string in
      agent-tool-call-leakage.test.js. Verified clean via a final
      repo-wide search_code sweep of every old path pattern.
+   - FOLLOW-UP 2 (behavioral comment-drift audit, requested separately
+     after the path-staleness sweep above): delegated a `delegate_agent`
+     investigation (run_id c4b05c33-9fb3-49c6-9e17-926421bc5aba) across the
+     files not yet fully manually audited, scoped specifically to genuine
+     comment-vs-code BEHAVIORAL drift (wrong default, wrong gating
+     condition, wrong control flow, a nonexistent function/variable name) --
+     not path staleness, already covered above. It reported 3 candidates;
+     each was independently re-verified against the actual file content
+     before touching anything, per the same reproduce-before-fix discipline
+     step 7 used for its own findings:
+     - GENUINE, FIXED: `connectors/delegate/agent/agent_delegate.js`'s
+       comment above `isTransientGeminiError` said 429/503 were the only
+       cases treated as transient, but the function body also returns true
+       on `err?.transient === true` (the adapter-level flag bai's own code
+       uses to mark its errors retryable independent of HTTP status). The
+       comment's own "everything else... is a config or request problem"
+       framing was therefore incomplete. Fixed by describing the
+       `err.transient` branch explicitly rather than silently omitting it.
+     - FALSE POSITIVE, DISMISSED: `agent_tools.js`'s `max_steps` tool
+       description ("hard cap 30 regardless of this value") was flagged as
+       unenforced because `agent_tools.js`'s own validation only rejects
+       values below 1, with no explicit upper clamp visible in that file.
+       Re-verified against `test/agent-seedrun-max-steps-regression.test.js`,
+       which has a passing test literally titled "max_steps above
+       HARD_MAX_STEPS (30) is clamped down to 30, not passed through raw" --
+       the clamp genuinely exists, just downstream in `runInvestigation`/
+       `seedRun`, not in `agent_tools.js`'s own input-validation function.
+       The tool description is accurate about overall behavior; no fix
+       needed.
+     - FALSE POSITIVE, DISMISSED: `connectors/github/editor_tool_functions.js`'s
+       comment on `buildUnifiedDiff` ("Same LCS-based diff algorithm as
+       edit_file's inline diff builder in files.js") was flagged as false,
+       claiming files.js uses "an external utility or different approach".
+       Re-read `connectors/github/files.js`'s `edit_file` replacements-mode
+       diff code directly: it builds the identical m×n LCS DP table, the
+       same backtrace loop, the same `CONTEXT = 3` context-window logic, and
+       the same `@@ ... @@` hunk-gap marker as `buildUnifiedDiff` -- the
+       comment is accurate; no fix needed.
+     Net: one real fix committed (commit f9cbf7c); two flagged items
+     verified as not drift and left unchanged, so as not to "fix" correct
+     comments based on an unverified claim.
 
 9. **Final review**
    - Confirm `connectors/gemini/` only contains Gemini API-wrapper code.
