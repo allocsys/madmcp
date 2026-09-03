@@ -58,7 +58,7 @@ const HARD_MAX_STEPS = 30;
 export const HISTORY_FULL_DETAIL_STEPS = 3;
 export const COMPACTION_CHAR_THRESHOLD = 500;
 
-// Oversized-step guardrails (2026-09-02, plan.md Section 9 root cause fix):
+// Oversized-step guardrails and truncation (root cause fix for step timeouts):
 // a single step batching many tool calls and/or large truncated file reads
 // bloats that step's contents turn, which in turn makes the FOLLOWING
 // outbound LLM call (sending that bloated history back to bai/Gemini) slow
