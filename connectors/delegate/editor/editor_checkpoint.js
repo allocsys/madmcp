@@ -59,7 +59,7 @@
 // NOT YET WIRED to any agent loop or MCP tool registration.
 // ---------------------------------------------------------------------------
 
-import { getRedis } from "../shared/cooldown.js";
+import { getRedis } from "../../shared/cooldown.js";
 
 const CHECKPOINT_KEY_PREFIX = "editor:checkpoint:";
 // Same reasoning as every other checkpoint module in this repo -- only
