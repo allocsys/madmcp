@@ -36,7 +36,7 @@ vi.mock("../connectors/delegate/agent/agent_delegate.js", () => ({
 vi.mock("../connectors/delegate/agent/agent_checkpoint.js", () => ({
   loadCheckpoint: mockLoadCheckpoint,
 }));
-vi.mock("../connectors/gemini/qstash_client.js", () => ({
+vi.mock("../connectors/delegate/qstash_client.js", () => ({
   publishAgentStep: mockPublishAgentStep,
   isQStashConfigured: mockIsQStashConfigured,
 }));
