@@ -291,7 +291,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   // and reported a result. This is also what makes resume_run_id usable as
   // a cheap poll handle for a background/worker-driven run: polling a
   // finished run is now a Redis read, not a re-run. Mirrors
-  // connectors/gemini/agent_delegate.js's runInvestigation, which has the
+  // connectors/delegate/agent/agent_delegate.js's runInvestigation, which has the
   // same short-circuit for the same reason.
   if (checkpoint && checkpoint.status === "done") {
     return {
@@ -496,7 +496,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
       // window in which a "done" status could be observed. Still expires via
       // the normal checkpoint TTL like any other checkpoint -- this is a
       // bounded-lifetime record for polling, not a permanent store. Mirrors
-      // connectors/gemini/agent_delegate.js's finishRun, which made the same
+      // connectors/delegate/agent/agent_delegate.js's finishRun, which made the same
       // change and no longer calls deleteCheckpoint on its success path
       // either.
       await saveCheckpoint(runId, {
