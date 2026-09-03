@@ -184,7 +184,10 @@ connectors/
 
 7. **Update tests**
    - Move/rename test files to match new module locations
-     (`test/agent-delegate*.test.js`, `test/editor-delegate*.test.js`, etc.).
+     (`test/agent-delegate*.test.js`, `test/editor-delegate*.test.js`,
+     designer's equivalents if any exist under test/, etc.) and fix every
+     mocked/imported path found in step 1's consumer tables (including the
+     designer table added in step 1).
    - Add coverage for the new enable-flag behavior (disabled provider ->
      clear error, gemini unaffected).
 
@@ -203,6 +206,7 @@ connectors/
 - [ ] Step 2
 - [ ] Step 2a
 - [ ] Step 3
+- [ ] Step 3b
 - [ ] Step 4
 - [ ] Step 5
 - [ ] Step 6
