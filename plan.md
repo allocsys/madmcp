@@ -97,6 +97,7 @@ so it can be turned off independently without touching gemini code.
 ## Status
 - [ ] Step 1
 - [ ] Step 2
+- [ ] Step 2a
 - [ ] Step 3
 - [ ] Step 4
 - [ ] Step 5
