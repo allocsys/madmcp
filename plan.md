@@ -156,7 +156,7 @@ connectors/
      modules. No move needed there, just confirm during step 9 that nothing
      new accidentally reintroduces a gemini-specific Redis path.
 
-3. **Move the editor loop to connectors/delegate/editor/**
+3. **Move the editor loop to connectors/delegate/editor/** ✅ DONE
    - Move `connectors/github/editor_delegate.js`, `editor_checkpoint.js`,
      `editor_worker.js`, `editor_tools.js` to `connectors/delegate/editor/`.
    - Fix the confirmed `../gemini/qstash_client.js` import (step 1) to point
@@ -165,6 +165,32 @@ connectors/
      client, write-policy/deny-list logic, etc.) -- nothing loop-shaped.
    - Update all imports across the repo (server.js, tests, etc.) to the new
      paths.
+   - DONE NOTE: the four files had already been moved to
+     `connectors/delegate/editor/` on the branch, but two functional bugs
+     from that move were still live: `editor_tools.js` imported
+     `qstash_client.js` via `../delegate/qstash_client.js` (double
+     `delegate/`, since the file itself now already lives under
+     `connectors/delegate/`) and imported `config.js` via `../../config.js`
+     (one level short of repo root from the new location) -- both would have
+     thrown at import time. Fixed to `../qstash_client.js` and
+     `../../../config.js` respectively. Also fixed the stale consumer
+     imports left pointing at the old `connectors/github/` location:
+     `server.js` (`handleEditorWorker`/`handleEditorWorkerFailure`) and
+     `connectors/github/tools.js` (`registerEditor`). Updated every
+     mocked/dynamic-import path in the five affected test files
+     (`editor-delegate.test.js`, `editor-delegate-async-checkpoint.test.js`,
+     `editor-tools.test.js`, `editor-tools-async.test.js`,
+     `editor-worker.test.js`) and cleaned up stale header-comment paths in
+     the four moved files plus an example path string in
+     `agent-tool-call-leakage.test.js` via `delegate_editor`. Verified with a
+     repo-wide `search_code` sweep for `await import("../connectors/github/editor_`,
+     `vi.mock("../connectors/github/editor_`, and
+     `vi.doMock("../connectors/github/editor_` -- zero functional hits
+     remain (only cosmetic prose mentions and this plan's own frozen step-1
+     inventory tables). Confirmed `connectors/github/` now contains only the
+     three domain-tool files (`editor_policy.js`, `editor_tool_functions.js`,
+     `editor_validate.js`) plus everything unrelated to the editor loop, with
+     no duplicate loop files left behind.
 
 3b. **Move the designer loop to connectors/delegate/designer/**
    - Move `connectors/frontend/designer_delegate.js`, `designer_checkpoint.js`,
