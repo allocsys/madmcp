@@ -29,11 +29,11 @@ const mockPublishAgentStep = vi.fn();
 const mockIsQStashConfigured = vi.fn(() => false);
 const mockDoCreatePage = vi.fn();
 
-vi.mock("../connectors/gemini/agent_delegate.js", () => ({
+vi.mock("../connectors/delegate/agent/agent_delegate.js", () => ({
   runInvestigation: mockRunInvestigation,
   seedRun: mockSeedRun,
 }));
-vi.mock("../connectors/gemini/agent_checkpoint.js", () => ({
+vi.mock("../connectors/delegate/agent/agent_checkpoint.js", () => ({
   loadCheckpoint: mockLoadCheckpoint,
 }));
 vi.mock("../connectors/gemini/qstash_client.js", () => ({
@@ -51,7 +51,7 @@ describe("delegate_agent failure path compacting", () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockIsQStashConfigured.mockReturnValue(false); // this describe's real config.js defaults DELEGATE_AGENT_ASYNC to "sync" anyway, but keep it explicit
-    ({ register } = await import("../connectors/gemini/agent_tools.js"));
+    ({ register } = await import("../connectors/delegate/agent/agent_tools.js"));
   });
 
   it("returns compact summary on failure when show_transcript is false", async () => {
@@ -145,7 +145,7 @@ describe("delegate_agent poll-branch transcript (regression guard)", () => {
       lastStepAt: Date.now() - 3000, // 3s ago, well inside the 25s fresh window
       transcript: ["github_get_repo_topics(a, b)"],
     });
-    ({ register } = await import("../connectors/gemini/agent_tools.js"));
+    ({ register } = await import("../connectors/delegate/agent/agent_tools.js"));
   });
 
   it("includes the transcript on a fresh poll when show_transcript is omitted (default false)", async () => {
