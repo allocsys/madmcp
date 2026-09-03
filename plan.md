@@ -24,12 +24,28 @@ so it can be turned off independently without touching gemini code.
 
 2. **Move the read-only agent loop out of connectors/gemini/**
    - Move `agent_delegate.js`, `agent_checkpoint.js`, `agent_worker.js`,
-     `agent_tools.js`, `qstash_client.js` (if generic) to a new neutral
-     home: `connectors/delegate/agent/`.
+     `agent_tools.js` to a new neutral home: `connectors/delegate/agent/`.
    - Update all imports across the repo (server.js, tests, etc.) to the new
      paths.
    - `connectors/gemini/` keeps only `client.js` (the actual Gemini API
      wrapper) and anything strictly Gemini-request-shaped.
+
+2a. **Move qstash_client.js to the neutral delegate dir**
+   - CONFIRMED not Gemini-specific: it already backs BOTH the agent worker
+     chain (`publishAgentStep`, `AGENT_WORKER_URL`) and the editor worker
+     chain (`publishEditorStep`, `EDITOR_WORKER_URL`) side by side, and its
+     own file header notes it's the same Upstash account as Redis
+     checkpointing, just a different product (QStash vs Redis).
+   - Move `connectors/gemini/qstash_client.js` -> `connectors/delegate/qstash_client.js`
+     (one shared file, not agent/editor-split, since it already serves both).
+   - Update imports in `agent_worker.js`, `agent_tools.js`, `editor_worker.js`,
+     `editor_tools.js`, and any tests that mock this module's path.
+   - Note for contrast: `connectors/shared/cooldown.js` (Upstash Redis,
+     backs checkpointing) is ALREADY correctly neutral -- it lives under
+     `connectors/shared/` and is imported directly by every provider's own
+     client.js (gemini/glm/groq/bai) plus the agent/editor checkpoint
+     modules. No move needed there, just confirm during step 9 that nothing
+     new accidentally reintroduces a gemini-specific Redis path.
 
 3. **Move the editor loop to a neutral home**
    - `connectors/github/editor_delegate.js`, `editor_tools.js`,
