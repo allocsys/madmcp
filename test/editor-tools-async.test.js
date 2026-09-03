@@ -62,11 +62,11 @@ async function setup({ editorAgentAsync = "sync", pollFreshSeconds = 60, stepDea
     EDITOR_ASYNC_POLL_FRESH_SECONDS: pollFreshSeconds,
     EDITOR_ASYNC_STEP_DEAD_SECONDS: stepDeadSeconds,
   }));
-  vi.doMock("../connectors/github/editor_delegate.js", () => ({
+  vi.doMock("../connectors/delegate/editor/editor_delegate.js", () => ({
     runEditorAgent: mockRunEditorAgent,
     seedEditorRun: mockSeedEditorRun,
   }));
-  vi.doMock("../connectors/github/editor_checkpoint.js", () => ({
+  vi.doMock("../connectors/delegate/editor/editor_checkpoint.js", () => ({
     loadCheckpoint: mockLoadCheckpoint,
   }));
   vi.doMock("../connectors/delegate/qstash_client.js", () => ({
@@ -74,7 +74,7 @@ async function setup({ editorAgentAsync = "sync", pollFreshSeconds = 60, stepDea
     isEditorQStashConfigured: mockIsEditorQStashConfigured,
   }));
 
-  const { register } = await import("../connectors/github/editor_tools.js");
+  const { register } = await import("../connectors/delegate/editor/editor_tools.js");
   const server = makeFakeServer();
   register(server);
   return server.tools.delegate_editor;
