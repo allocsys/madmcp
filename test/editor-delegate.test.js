@@ -143,8 +143,11 @@ describe("guardrail #6 -- per-run and per-file write caps", () => {
       max_steps: EDITOR_MAX_FILES_PER_RUN + 2,
     });
 
-    // writeFile was actually invoked exactly EDITOR_MAX_FILES_PER_RUN times
-    // -- the (N+1)th attempt never reached it.
+    // writeFile was actually invoked EDITOR_MAX_FILES_PER_RUN times
+    // (the N successful writes). The (N+1)th attempt hits the cap check in
+    // execute() and returns an error string without calling writeFile().
+    // Thus writeFile.mock.calls.length is EDITOR_MAX_FILES_PER_RUN (30),
+    // and writtenFiles.length matches that count.
     expect(writeFile).toHaveBeenCalledTimes(EDITOR_MAX_FILES_PER_RUN);
     expect(result.transcript.join("\n")).toMatch(/per-run cap \(EDITOR_MAX_FILES_PER_RUN=/i);
     expect(result.writtenFiles).toHaveLength(EDITOR_MAX_FILES_PER_RUN);
@@ -170,6 +173,9 @@ describe("guardrail #6 -- per-run and per-file write caps", () => {
       max_steps: EDITOR_MAX_WRITES_PER_FILE + 2,
     });
 
+    // writeFile was invoked EDITOR_MAX_WRITES_PER_FILE times (1 successful write).
+    // The subsequent write attempt hits the per-file cap check in execute() and
+    // returns an error string without calling writeFile again.
     expect(writeFile).toHaveBeenCalledTimes(EDITOR_MAX_WRITES_PER_FILE);
     expect(result.transcript.join("\n")).toMatch(/per-file cap \(EDITOR_MAX_WRITES_PER_FILE=/i);
   });
@@ -178,13 +184,20 @@ describe("guardrail #6 -- per-run and per-file write caps", () => {
     providerChat.mockResolvedValueOnce(
       functionCallCandidate([{ name: "write_file", args: { path: "denied.js", content: "x" } }])
     );
+    providerChat.mockResolvedValueOnce(
+      functionCallCandidate([{ name: "write_file", args: { path: "allowed.md", content: "y" } }])
+    );
     providerChat.mockResolvedValueOnce(textCandidate("done"));
 
+    // First attempt (denied path) fails at writeFile layer
     writeFile.mockRejectedValueOnce(new Error('path "denied.js" matches deny pattern'));
+    // Second attempt (allowed path) succeeds
+    writeFile.mockResolvedValueOnce({ path: "allowed.md", content: "y", sha: "s", commitSha: "c1234567", diff: null, created: true, noop: false });
 
-    const result = await runEditorAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "try a denied path" });
+    const result = await runEditorAgent({ owner: OWNER, repo: REPO, branch: BRANCH, task: "try a denied path then a valid one" });
 
-    expect(result.writtenFiles).toEqual([]);
+    // The rejected write should NOT be in writtenFiles. Only the successfully committed "allowed.md" should be present.
+    expect(result.writtenFiles).toEqual(["allowed.md"]);
     expect(result.transcript.join("\n")).toMatch(/deny pattern/i);
   });
 });
