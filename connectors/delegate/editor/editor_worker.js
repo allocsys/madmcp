@@ -181,7 +181,7 @@ export async function handleEditorWorker(req, res) {
 }
 
 // ---------------------------------------------------------------------------
-// handleEditorWorkerFailure (plan.md Section 13) -- Express handler for
+// handleEditorWorkerFailure -- Express handler for
 // POST /api/editor-worker-failure, the QStash failureCallback target
 // configured in publishEditorStep (../delegate/qstash_client.js). Mirrors
 // connectors/delegate/agent/agent_worker.js's handleAgentWorkerFailure -- see that
