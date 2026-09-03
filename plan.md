@@ -271,8 +271,8 @@ connectors/
 - [x] Step 1
 - [x] Step 2
 - [x] Step 2a
-- [ ] Step 3
-- [ ] Step 3b
+- [x] Step 3
+- [x] Step 3b
 - [ ] Step 4
 - [ ] Step 5
 - [ ] Step 6
