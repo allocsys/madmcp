@@ -312,11 +312,13 @@ export const BAI_MODEL = process.env.BAI_MODEL || "glm-5.3-flash";
 export const BAI_REQUEST_TIMEOUT_MS = Number(process.env.BAI_REQUEST_TIMEOUT_MS) || 55000;
 // Same enable-flag pattern as GLM_ENABLED/GROQ_ENABLED above -- see
 // GLM_ENABLED's comment for the full reasoning (decouple-gemini-delegation
-// plan, step 5). Defaults to true, matching current behavior. Note this is
-// independent of HISTORY_COMPACTION_PROVIDERS/connectors/bai/
-// delegate_hooks.js above -- BAI_ENABLED gates whether bai is reachable as
-// a provider at all, not its delegate-loop-specific behavior once selected.
-export const BAI_ENABLED = process.env.BAI_ENABLED !== "false";
+// plan, step 5). FLIPPED TO DEFAULT OFF (2026-09-03): unlike GLM_ENABLED/
+// GROQ_ENABLED, this now requires an explicit BAI_ENABLED=true to reach the
+// bai provider at all -- set it to opt back in. Note this is independent of
+// HISTORY_COMPACTION_PROVIDERS/connectors/bai/delegate_hooks.js above --
+// BAI_ENABLED gates whether bai is reachable as a provider at all, not its
+// delegate-loop-specific behavior once selected.
+export const BAI_ENABLED = process.env.BAI_ENABLED === "true";
 
 export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSIONS || ".html,.css,.scss,.jsx,.tsx,.vue")
   .split(",")
