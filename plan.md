@@ -375,9 +375,22 @@ connectors/
        same precedent steps 2/3/3b's own sweeps already established for
        leaving those alone.
 
-8. **Docs**
+8. **Docs** ✅ DONE
    - Update README.md / docs/ if they reference `connectors/gemini/` paths
      for the delegation loop.
+   - DONE NOTE: swept README.md and docs/ (`API_KEYS.md`, `demo.html`,
+     `env.html`) via `search_code` for `connectors/gemini`. README.md and
+     the two HTML files don't reference module paths at all -- README
+     discusses the Gemini delegation feature conceptually (env vars, tool
+     names, behavior), never a file path. Found one genuinely stale
+     reference in `docs/API_KEYS.md`'s Upstash Redis entry: it credited
+     cooldown persistence to `connectors/gemini/cooldown.js`, which hasn't
+     been the real path since before this refactor even started (it's
+     `connectors/shared/cooldown.js`, already confirmed provider-neutral
+     back in step 2a's notes -- shared by Gemini/GLM/Groq/B.AI's clients
+     plus both checkpoint modules). Fixed the path and reworded the
+     sentence to credit all four providers instead of just Gemini, so the
+     doc now matches what step 2a already established about that file.
 
 9. **Final review**
    - Confirm `connectors/gemini/` only contains Gemini API-wrapper code.
