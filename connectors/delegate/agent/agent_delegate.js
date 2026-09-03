@@ -51,7 +51,8 @@ import { cfAccountRequest } from "../../cloudflare/client.js";
 import { context7Request } from "../../context7/client.js";
 import { mem0Request } from "../../mem/client.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../../notion/client.js";
-import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../../config.js";
+import { DEFAULT_OWNER } from "../../../config.js";
+import { getDelegateHooks } from "../provider_hooks.js";
 
 const HARD_MAX_STEPS = 30;
 export const HISTORY_FULL_DETAIL_STEPS = 3;
