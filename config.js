@@ -310,6 +310,13 @@ export const BAI_API = "https://api.b.ai/v1/chat/completions";
 export const BAI_MODEL = process.env.BAI_MODEL || "glm-5.3-flash";
 // Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
 export const BAI_REQUEST_TIMEOUT_MS = Number(process.env.BAI_REQUEST_TIMEOUT_MS) || 55000;
+// Same enable-flag pattern as GLM_ENABLED/GROQ_ENABLED above -- see
+// GLM_ENABLED's comment for the full reasoning (decouple-gemini-delegation
+// plan, step 5). Defaults to true, matching current behavior. Note this is
+// independent of HISTORY_COMPACTION_PROVIDERS/connectors/bai/
+// delegate_hooks.js above -- BAI_ENABLED gates whether bai is reachable as
+// a provider at all, not its delegate-loop-specific behavior once selected.
+export const BAI_ENABLED = process.env.BAI_ENABLED !== "false";
 
 export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSIONS || ".html,.css,.scss,.jsx,.tsx,.vue")
   .split(",")
