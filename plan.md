@@ -451,11 +451,45 @@ connectors/
      verified as not drift and left unchanged, so as not to "fix" correct
      comments based on an unverified claim.
 
-9. **Final review**
+9. **Final review** ✅ DONE
    - Confirm `connectors/gemini/` only contains Gemini API-wrapper code.
    - Confirm setting `BAI_ENABLED=false` requires zero diffs inside
      `connectors/gemini/` or the neutral delegate loop.
    - Run full test suite.
+   - DONE NOTE: verification split across a `delegate_agent` investigation
+     (structural/reference checks, read-only) run in parallel with an
+     actual fresh-clone test run (which delegate_agent cannot do itself,
+     being read-only), then independently spot-checked rather than taken
+     on trust:
+     - `connectors/gemini/` contents: delegate_agent read the directory and
+       reported it contains only `client.js` (pure Gemini REST wrapper --
+       `callGenerateContentOnce`/`callGenerateContent`/`geminiGenerate`/
+       `geminiChat`: request cascade, key rotation, cooldown tracking,
+       timeouts/error handling -- no agent-loop/checkpoint/worker/dispatch
+       logic). Independently re-confirmed via a direct `get_file_tree` on
+       this branch: `connectors/gemini/` lists exactly one file,
+       `client.js`. Matches steps 2/2a/3/3b's own end-state claims.
+     - `BAI_ENABLED=false` isolation: delegate_agent confirmed `config.js`
+       defines `BAI_ENABLED` as `process.env.BAI_ENABLED !== "false"`
+       (default true), `connectors/llm/router.js`'s `providerChat` calls
+       `assertProviderEnabled("bai", BAI_ENABLED)` before dispatching to
+       `baiChat` (throwing a clear config error, not a special-cased
+       failure), and that `BAI_ENABLED` is referenced nowhere else in the
+       repo -- not in `connectors/gemini/`, not anywhere under
+       `connectors/delegate/`. The disabled-provider error path is fully
+       contained in `connectors/llm/router.js`. Consistent with step 5's
+       own findings; no drift found since.
+     - Full test suite: since delegate_agent has no code-execution
+       capability, this was run directly -- minted a single-use
+       read-write clone token via `get_repo_clone_token`, cloned this
+       exact branch fresh into the sandbox (not the working copy prior
+       edits were made in), `npm install`, then `npx vitest run`.
+       **Result: 47 test files, 573 tests, all passing** (20.88s total).
+       No failures, no skips. Matches step 7's own from-scratch-clone
+       result exactly (same file/test counts), confirming nothing
+       regressed between step 7 and this final review.
+   - All three step-9 checks pass; no further code changes required by
+     this refactor.
 
 ## Status
 - [x] Step 1
