@@ -183,8 +183,8 @@ export async function handleEditorWorker(req, res) {
 // ---------------------------------------------------------------------------
 // handleEditorWorkerFailure (plan.md Section 13) -- Express handler for
 // POST /api/editor-worker-failure, the QStash failureCallback target
-// configured in publishEditorStep (../gemini/qstash_client.js). Mirrors
-// connectors/gemini/agent_worker.js's handleAgentWorkerFailure -- see that
+// configured in publishEditorStep (../delegate/qstash_client.js). Mirrors
+// connectors/delegate/agent/agent_worker.js's handleAgentWorkerFailure -- see that
 // function's own header comment for the full reasoning (why this exists:
 // a step that hard-times-out on every QStash delivery attempt means no
 // further worker invocation ever arrives to run the in-process dead-letter
