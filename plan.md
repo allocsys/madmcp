@@ -192,7 +192,7 @@ connectors/
      `editor_validate.js`) plus everything unrelated to the editor loop, with
      no duplicate loop files left behind.
 
-3b. **Move the designer loop to connectors/delegate/designer/**
+3b. **Move the designer loop to connectors/delegate/designer/** ✅ DONE
    - Move `connectors/frontend/designer_delegate.js`, `designer_checkpoint.js`,
      `designer_tools.js` to `connectors/delegate/designer/`.
    - Leave `designer_tool_functions.js` and `validate.js` in
@@ -203,6 +203,28 @@ connectors/
    - Update server.js's `import * as frontend from "./connectors/frontend/designer_tools.js"` to the new path.
    - No qstash_client.js involvement here -- designer confirmed sync-only
      (no worker/async file exists under connectors/frontend/ today).
+   - DONE NOTE: moved all three files via create+delete (content identical
+     apart from import paths). Fixed imports in the moved files:
+     designer_delegate.js now pulls `providerChat` from `../../llm/router.js`,
+     `readFile/writeFile/validateFile` from `../../frontend/designer_tool_functions.js`,
+     `isRedisConfigured` from `../../shared/cooldown.js`, `githubRequest` from
+     `../../github/client.js`, and config from `../../../config.js`;
+     designer_checkpoint.js's `getRedis` import updated to `../../shared/cooldown.js`;
+     designer_tools.js's config import updated to `../../../config.js` (its
+     same-dir import of designer_delegate.js needed no change). Updated the
+     one production consumer (server.js's `import * as frontend`) and the one
+     test file with real (non-cosmetic) references to the moved paths
+     (test/frontend-agent-loop.test.js's `vi.mock` of designer_checkpoint.js
+     and its `import` of runDesignAgent from designer_delegate.js) --
+     test/frontend-agent-tools.test.js only imports designer_tool_functions.js/
+     validate.js, which didn't move, so it needed no change. Verified with a
+     repo-wide `search_code` sweep for the old paths afterward: zero
+     functional hits remain, only cosmetic prose mentions in files that
+     weren't touched by this move (editor_delegate.js, editor_policy.js,
+     editor_checkpoint.js, this plan's own frozen step-1 inventory tables,
+     and comments inside the moved/updated files themselves) -- left alone,
+     same precedent as step 3's own sweep. Confirmed `connectors/frontend/`
+     now contains only `designer_tool_functions.js` and `validate.js`.
 
 4. **Extract provider-specific hooks out of the shared loop**
    - `HISTORY_COMPACTION_PROVIDERS` gating and the bai `reasoningEffort`
