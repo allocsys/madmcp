@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_tools.js -- MCP tool registration for delegate_editor
+// connectors/delegate/editor/editor_tools.js -- MCP tool registration for delegate_editor
 // ("Limited GitHub write access for delegate_agent (non-default-branch only)").
 //
 // Thin wrapper around runEditorAgent (editor_delegate.js), same shape as
