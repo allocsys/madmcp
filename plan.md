@@ -297,11 +297,26 @@ connectors/
      `ENABLED` across the repo, only hits are the three config.js
      definitions and their three router.js call sites.
 
-6. **Update delegate_agent / delegate_editor tool schemas**
+6. **Update delegate_agent / delegate_editor tool schemas** ✅ DONE
    - No change to the `provider` enum (`["gemini", "bai"]`) unless we decide
      to also expose glm/groq at the tool layer -- out of scope here.
    - Confirm error messaging when a disabled provider is requested is clear
      and surfaces to the caller.
+   - DONE NOTE: verification only, no code changes needed. Confirmed both
+     `connectors/delegate/agent/agent_tools.js` and
+     `connectors/delegate/editor/editor_tools.js` already declare
+     `provider: z.enum(["gemini", "bai"]).optional()` unchanged (no glm/groq
+     exposure). Traced the call path for both: `providerChat()` (which
+     throws `assertProviderEnabled`'s error, step 5) is called inside a
+     `try/catch` in each loop's per-step block
+     (`connectors/delegate/agent/agent_delegate.js`,
+     `connectors/delegate/editor/editor_delegate.js`) -- a disabled-provider
+     error is caught there, checkpointed, and returned as e.g. `(Gemini call
+     failed on step N: Provider "bai" is disabled (BAI_ENABLED=false)....
+     failed: true)`, which the tool-layer handler (`agent_tools.js`/
+     `editor_tools.js`) surfaces to the caller as `isError: true` with the
+     full message text intact. No gap found -- both tools already surface a
+     clear, actionable error for a disabled provider.
 
 7. **Update tests**
    - Move/rename test files to match new module locations
