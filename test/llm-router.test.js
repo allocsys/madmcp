@@ -32,10 +32,25 @@ vi.mock("../connectors/openai_shape/adapter.js", () => ({
 describe("connectors/llm/router.js — providerChat", () => {
   let providerChat;
 
+  // This block tests bai's DISPATCH behavior (adapter shape, tool/
+  // maxOutputTokens/reasoningEffort passthrough, error propagation) --
+  // not the BAI_ENABLED gate itself, which is covered in its own describe
+  // block below. BAI_ENABLED now defaults to false (flipped 2026-09-03),
+  // so it's force-enabled here via a scoped config.js mock, same pattern
+  // the enable-flags block below already uses -- everything else in
+  // config.js stays real/default.
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
+    vi.doMock("../config.js", async () => {
+      const actual = await vi.importActual("../config.js");
+      return { ...actual, BAI_ENABLED: true };
+    });
     ({ providerChat } = await import("../connectors/llm/router.js"));
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../config.js");
   });
 
   it("defaults to gemini when provider is omitted", async () => {
@@ -282,11 +297,14 @@ describe("connectors/llm/router.js — providerChat", () => {
 // (GLM_ENABLED/GROQ_ENABLED/BAI_ENABLED) -- kept as its own describe block
 // with its own config.js mock per test (via vi.doMock + vi.importActual,
 // overriding only the one flag under test) so the rest of this file's
-// tests, which rely on the REAL config.js default (all three flags on),
-// are never affected. Each test mocks config.js, resets the module
-// registry, and re-imports router.js fresh -- same dynamic-import pattern
-// this file's own beforeEach already uses -- then unmocks/resets in
-// afterEach so the next test (in this block or any other) starts clean.
+// tests -- which force BAI_ENABLED:true via their own scoped mock (see the
+// providerChat describe block's beforeEach above) since GLM_ENABLED/
+// GROQ_ENABLED are real-default-on but BAI_ENABLED is real-default-off as
+// of 2026-09-03 -- are never affected. Each test mocks config.js, resets
+// the module registry, and re-imports router.js fresh -- same
+// dynamic-import pattern this file's own beforeEach already uses -- then
+// unmocks/resets in afterEach so the next test (in this block or any
+// other) starts clean.
 describe("connectors/llm/router.js — per-provider enable flags (step 5)", () => {
   afterEach(() => {
     vi.doUnmock("../config.js");
@@ -321,7 +339,7 @@ describe("connectors/llm/router.js — per-provider enable flags (step 5)", () =
     expect(mockGroqChat).not.toHaveBeenCalled();
   });
 
-  it("throws a clear config error and never calls baiChat when BAI_ENABLED is false", async () => {
+  it("throws a clear config error and never calls baiChat when BAI_ENABLED is false (the real, unmocked default as of 2026-09-03)", async () => {
     vi.doMock("../config.js", async () => {
       const actual = await vi.importActual("../config.js");
       return { ...actual, BAI_ENABLED: false };
