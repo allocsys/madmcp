@@ -265,14 +265,14 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   // The provider actually in effect for this run -- the caller-supplied one
   // on a fresh run, or the one restored from a resumed checkpoint (see
   // `checkpoint.provider || provider` below). Same reasoning as
-  // connectors/gemini/agent_delegate.js's runInvestigation: resuming on a
+  // connectors/delegate/agent/agent_delegate.js's runInvestigation: resuming on a
   // DIFFERENT provider than the one that started the run risks corrupting
   // the conversation shape, not just a preference mismatch. Threaded
   // through every providerChat/saveCheckpoint call below exactly like
   // effectiveTask is.
   let effectiveProvider = provider;
   // Stuck-loop detection -- same shape as designer_delegate.js's copy of
-  // connectors/gemini/agent_delegate.js's fix #4. See that file's comments
+  // connectors/delegate/agent/agent_delegate.js's fix #4. See that file's comments
   // for the full reasoning; unchanged here.
   let repeatCounts = new Map();
   let resultCache = new Map();
