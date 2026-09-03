@@ -42,7 +42,7 @@ describe("detectToolCallLeakage (plan.md Section 21 fix: whitespace-mangled tag 
     // would have captured "githu" (not a real function name) and silently
     // passed through as an unhandled answer. This is the case the
     // whitespace-normalization fix exists for.
-    const leaked = '<githu b_read_file><params>{"owner":"allocsys","repo":"madmcp","path":"connectors/github/editor_worker.js"}</params></githu b_read_file>';
+    const leaked = '<githu b_read_file><params>{"owner":"allocsys","repo":"madmcp","path":"connectors/delegate/editor/editor_worker.js"}</params></githu b_read_file>';
     expect(detectToolCallLeakage(leaked, known)).toBe("github_read_file");
   });
 
