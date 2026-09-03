@@ -55,11 +55,11 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25, stepD
     AGENT_ASYNC_POLL_FRESH_SECONDS: pollFreshSeconds,
     AGENT_ASYNC_STEP_DEAD_SECONDS: stepDeadSeconds,
   }));
-  vi.doMock("../connectors/gemini/agent_delegate.js", () => ({
+  vi.doMock("../connectors/delegate/agent/agent_delegate.js", () => ({
     runInvestigation: mockRunInvestigation,
     seedRun: mockSeedRun,
   }));
-  vi.doMock("../connectors/gemini/agent_checkpoint.js", () => ({
+  vi.doMock("../connectors/delegate/agent/agent_checkpoint.js", () => ({
     loadCheckpoint: mockLoadCheckpoint,
   }));
   vi.doMock("../connectors/gemini/qstash_client.js", () => ({
@@ -70,7 +70,7 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25, stepD
     doCreatePage: mockDoCreatePage,
   }));
 
-  const { register } = await import("../connectors/gemini/agent_tools.js");
+  const { register } = await import("../connectors/delegate/agent/agent_tools.js");
   const server = makeFakeServer();
   register(server);
   return server.tools.delegate_agent;
