@@ -25,7 +25,7 @@ export const baiDelegateHooks = {
   // literal "bai" string, at all.
   historyCompactionEnabled: HISTORY_COMPACTION_PROVIDERS.includes("bai"),
 
-  // Forced-final-step reasoningEffort (plan.md Section 4/25 fix): bai gets
+  // Forced-final-step reasoningEffort gating fix: bai gets
   // "low" reasoning effort on its forced final step (no tools available,
   // must answer in plain text) to keep that turn fast and deterministic --
   // see agent_delegate.js's BAI_PREAMBLE_ADDENDUM comment for the related
