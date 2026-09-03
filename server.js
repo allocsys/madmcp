@@ -23,7 +23,7 @@ import * as agent      from "./connectors/delegate/agent/agent_tools.js";
 import { handleAgentWorker, handleAgentWorkerFailure } from "./connectors/delegate/agent/agent_worker.js";
 import { handleEditorWorker, handleEditorWorkerFailure } from "./connectors/delegate/editor/editor_worker.js";
 import * as research   from "./connectors/exa/research_tools.js";
-import * as frontend   from "./connectors/frontend/designer_tools.js";
+import * as frontend   from "./connectors/delegate/designer/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
 
