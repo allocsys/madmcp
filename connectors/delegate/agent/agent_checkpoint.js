@@ -21,7 +21,7 @@
 // failure can't be resumed, same as before this file existed.
 // ---------------------------------------------------------------------------
 
-import { getRedis } from "../shared/cooldown.js";
+import { getRedis } from "../../shared/cooldown.js";
 
 const CHECKPOINT_KEY_PREFIX = "gemini:checkpoint:";
 // A checkpoint only needs to survive long enough for the caller to retry
