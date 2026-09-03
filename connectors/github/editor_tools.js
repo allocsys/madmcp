@@ -27,7 +27,7 @@
 import { z } from "zod";
 import { runEditorAgent, seedEditorRun } from "./editor_delegate.js";
 import { loadCheckpoint } from "./editor_checkpoint.js";
-import { publishEditorStep, isEditorQStashConfigured } from "../gemini/qstash_client.js";
+import { publishEditorStep, isEditorQStashConfigured } from "../delegate/qstash_client.js";
 import {
   DEFAULT_OWNER,
   EDITOR_ALLOWED_EXTENSIONS,
