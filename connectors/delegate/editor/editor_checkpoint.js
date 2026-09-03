@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/delegate/editor/editor_checkpoint.js -- checkpoint layer for delegate_editor.
 //
-// Reuses connectors/frontend/designer_checkpoint.js's shape verbatim (per
+// Reuses connectors/delegate/designer/designer_checkpoint.js's shape verbatim (per
 // guardrail #7: "Checkpoint/resume contract identical to delegate_designer's,
 // not a new one -- reuse designer_checkpoint.js's shape ... rather than
 // inventing a fourth checkpoint schema alongside agent_checkpoint.js and
@@ -9,7 +9,7 @@
 // module's checkpointed run state doesn't collide with delegate_designer's.
 //
 // Same reasoning as designer_checkpoint.js for why the simpler whole-blob
-// save (vs. connectors/gemini/agent_checkpoint.js's list+meta split) is the
+// save (vs. connectors/delegate/agent/agent_checkpoint.js's list+meta split) is the
 // right call here too: delegate_editor's tool set (read_file/write_file
 // against one repo/branch, bounded by EDITOR_HARD_MAX_STEPS) is closer in
 // shape/size to delegate_designer's three-function loop than to
