@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/editor-tools-async.test.js
 //
-// Covers connectors/github/editor_tools.js's async branching logic (plan.md
+// Covers connectors/delegate/editor/editor_tools.js's async branching logic (plan.md
 // Step 7): test/editor-worker.test.js and
 // test/editor-delegate-async-checkpoint.test.js cover the worker endpoint
 // and the underlying runEditorAgent resume mechanics respectively, but
