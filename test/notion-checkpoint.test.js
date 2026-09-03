@@ -4,8 +4,8 @@
 // NOTE on mocking strategy: an earlier version of this file mocked
 // connectors/notion/tools.js itself (vi.mock + `import * as tools`) and
 // expected doCheckpoint's internal calls to findPageByEntityId/doCreatePage/
-// replaceSyncedRange to route through those mocks. That doesn't work in real
-// ESM: a function calling a sibling export FROM THE SAME MODULE binds
+// replaceCheckpointRange to route through those mocks. That doesn't work in
+// real ESM: a function calling a sibling export FROM THE SAME MODULE binds
 // directly to the local declaration, never through the module's exported
 // namespace object -- vi.mock only intercepts what OTHER modules import, not
 // intra-module references. The mocks were silently never called, the real
@@ -13,14 +13,21 @@
 // with "Cannot read properties of undefined (reading 'results')".
 //
 // Fix: mock only notionRequest, the one true I/O boundary in client.js, and
-// let doCheckpoint/findPageByEntityId/doCreatePage/replaceSyncedRange run for
-// real -- driving them purely through canned notionRequest responses, the
+// let doCheckpoint/findPageByEntityId/doCreatePage/replaceCheckpointRange run
+// for real -- driving them purely through canned notionRequest responses, the
 // same way the real Notion API would.
+//
+// 2026-09-04: updated to the dedicated checkpoint marker convention
+// (buildCheckpointStartText/buildCheckpointEndText/findCheckpointRange) --
+// doCheckpoint no longer touches the mem0 sync markers at all (see
+// client.js's "Checkpoint marker convention" comment), so these tests need
+// to seed/assert against checkpoint markers instead of sync markers or they
+// never actually exercise the real code path.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
-import { buildSyncStartText, buildSyncEndText } from "../connectors/notion/client.js";
+import { buildCheckpointStartText, buildCheckpointEndText } from "../connectors/notion/client.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
   const actual = await importOriginal();
@@ -43,7 +50,7 @@ describe("Notion checkpoint tool", () => {
     vi.clearAllMocks();
   });
 
-  it("save creates a new page when none exists, seeding the synced range directly (no separate patch)", async () => {
+  it("save creates a new page when none exists, seeding the checkpoint range directly (no separate patch)", async () => {
     client.notionRequest.mockImplementation(async (path, opts = {}) => {
       const method = opts.method || "GET";
 
@@ -72,8 +79,8 @@ describe("Notion checkpoint tool", () => {
     expect(createCall).toBeTruthy();
     const childTexts = createCall[1].body.children.map(blockText);
     expect(childTexts.some((t) => t.includes("Working on checkpoint feature"))).toBe(true);
-    expect(childTexts.some((t) => t.startsWith("⬇️ SYNCED FROM MEM0"))).toBe(true);
-    expect(childTexts.some((t) => t === buildSyncEndText())).toBe(true);
+    expect(childTexts.some((t) => t.startsWith("✅ Checkpoint saved with MCP tool call"))).toBe(true);
+    expect(childTexts.some((t) => t === buildCheckpointEndText())).toBe(true);
 
     // No follow-up patch to any /blocks/.../children path -- confirms the
     // range was seeded in the create call, not added afterward.
@@ -83,11 +90,11 @@ describe("Notion checkpoint tool", () => {
     expect(blocksChildrenPatches.length).toBe(0);
   });
 
-  it("save overwrites/replaces the synced range on an existing page without creating a new page", async () => {
-    const oldSyncedAt = "2026-01-01T00:00:00.000Z";
-    const startBlock = { id: "start-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildSyncStartText(oldSyncedAt) }] } };
+  it("save overwrites/replaces the checkpoint range on an existing page without creating a new page", async () => {
+    const oldUpdatedAt = "2026-01-01T00:00:00.000Z";
+    const startBlock = { id: "start-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildCheckpointStartText(oldUpdatedAt) }] } };
     const oldNoteBlock = { id: "note-old", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Old handoff notes" }] } };
-    const endBlock = { id: "end-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildSyncEndText() }] } };
+    const endBlock = { id: "end-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildCheckpointEndText() }] } };
 
     client.notionRequest.mockImplementation(async (path, opts = {}) => {
       const method = opts.method || "GET";
@@ -146,9 +153,9 @@ describe("Notion checkpoint tool", () => {
   });
 
   it("load returns the current notes when a page exists", async () => {
-    const startBlock = { id: "start-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildSyncStartText("2026-01-01T00:00:00.000Z") }] } };
+    const startBlock = { id: "start-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildCheckpointStartText("2026-01-01T00:00:00.000Z") }] } };
     const noteBlock = { id: "note-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Here are my notes" }] } };
-    const endBlock = { id: "end-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildSyncEndText() }] } };
+    const endBlock = { id: "end-1", type: "paragraph", paragraph: { rich_text: [{ plain_text: buildCheckpointEndText() }] } };
 
     client.notionRequest.mockImplementation(async (path, opts = {}) => {
       const method = opts.method || "GET";
