@@ -103,9 +103,9 @@ describe("agent_worker.js — handleAgentWorker", () => {
     vi.clearAllMocks();
     mockVerify.mockResolvedValue(true);
     mockPublish.mockResolvedValue();
-    ({ handleAgentWorker, handleAgentWorkerFailure } = await import("../connectors/gemini/agent_worker.js"));
-    ({ seedRun } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ handleAgentWorker, handleAgentWorkerFailure } = await import("../connectors/delegate/agent/agent_worker.js"));
+    ({ seedRun } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {
