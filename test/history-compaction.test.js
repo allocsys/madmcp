@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { compactHistoryInPlace, findUnverifiedClaims, BULKY_TOOL_NAMES, lineIsVerbatimInToolResults } from "../connectors/gemini/agent_delegate.js";
+import { compactHistoryInPlace, findUnverifiedClaims, BULKY_TOOL_NAMES, lineIsVerbatimInToolResults } from "../connectors/delegate/agent/agent_delegate.js";
 
 // Minimal in-memory fake of the @upstash/redis surface agent_checkpoint.js
 // uses, same shape as test/agent-checkpoint.test.js's makeFakeRedis --
@@ -246,7 +246,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
     // Uses this file's own fakeRedis mock (see top of file) via the real
     // saveCheckpoint/loadCheckpoint persistence functions -- not manually
     // invoked compaction on hand-built arrays like the tests above.
-    const { saveCheckpoint, loadCheckpoint, getPreCompactionResults } = await import("../connectors/gemini/agent_checkpoint.js");
+    const { saveCheckpoint, loadCheckpoint, getPreCompactionResults } = await import("../connectors/delegate/agent/agent_checkpoint.js");
     
     const originalText = "BULKY_PAYLOAD_CONTENT_" + "X".repeat(600);
     const runId = "test-integration-compaction-roundtrip";
@@ -289,8 +289,8 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
 
   it("integration test: resume -> recompaction code path in runInvestigation exercises re-compaction and populates preCompactionResults", async () => {
     // 1. Simulate a checkpoint saved BEFORE a turn was ever compacted (uncompacted full-size functionResponse in fake Redis)
-    const { saveCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { saveCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     
     const resumeRunId = "test-resume-recompaction-integration";
     const bulkyToolResponseText = "AGED_OUT_BULKY_TOOL_RESULT_CONTENT_" + "Y".repeat(800);
@@ -359,7 +359,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
       // `meta` only carries the compacted id now (plan.md step 3) -- read
       // the actual text back via the side-store (step 2's write, step 4's
       // batched fetch), same as the round-trip test above.
-      const { loadCheckpoint, getPreCompactionResults } = await import("../connectors/gemini/agent_checkpoint.js");
+      const { loadCheckpoint, getPreCompactionResults } = await import("../connectors/delegate/agent/agent_checkpoint.js");
       const savedCheckpointAfterRun = await loadCheckpoint(resumeRunId);
       expect(savedCheckpointAfterRun.preCompactionResultIds).toContain("call_aged_1");
       const sideStore = await getPreCompactionResults(resumeRunId, savedCheckpointAfterRun.preCompactionResultIds);
@@ -378,7 +378,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
   });
 
   it("deleteCheckpoint GCs precompact:{runId}:* side-store keys, not just contents/meta (plan.md step 5)", async () => {
-    const { saveCheckpoint, loadCheckpoint, deleteCheckpoint, getPreCompactionResults } = await import("../connectors/gemini/agent_checkpoint.js");
+    const { saveCheckpoint, loadCheckpoint, deleteCheckpoint, getPreCompactionResults } = await import("../connectors/delegate/agent/agent_checkpoint.js");
     const runId = "test-gc-precompact-keys";
     const originalTextA = "GC_TEST_TEXT_A_" + "Q".repeat(600);
     const originalTextB = "GC_TEST_TEXT_B_" + "Q".repeat(600);
@@ -426,7 +426,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
   });
 
   it("checkpoint meta write persists only preCompactionResult ids, not the bulky text -- write size stays flat as compacted text grows (plan.md step 6)", async () => {
-    const { saveCheckpoint, loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js");
+    const { saveCheckpoint, loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js");
     const runId = "test-meta-flat-size";
     const preCompactionResults = new Map();
     const BULKY_CHAR = "V";
@@ -467,7 +467,7 @@ describe("History Compaction Feature & Verification (agent_delegate.js)", () => 
   });
 
   it("no preCompactionResults entry is lost mid-run even past the old 200-entry eviction threshold (regression guard against re-adding 2eea726-style eviction)", async () => {
-    const { saveCheckpoint, loadCheckpoint, getPreCompactionResults, savePreCompactionResult } = await import("../connectors/gemini/agent_checkpoint.js");
+    const { saveCheckpoint, loadCheckpoint, getPreCompactionResults, savePreCompactionResult } = await import("../connectors/delegate/agent/agent_checkpoint.js");
     const runId = "test-no-eviction-past-200";
     const preCompactionResults = new Map();
     // Past the old MAX_PRE_COMPACTION_RESULTS_ENTRIES (200) the now-removed
