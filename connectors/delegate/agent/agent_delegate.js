@@ -124,8 +124,11 @@ export const BULKY_TOOL_NAMES = new Set([
 // 2. Do NOT break functionCall/functionResponse id pairing or role alternation.
 // 3. Only edit the text inside an existing functionResponse part in place.
 //
-// Gated on HISTORY_COMPACTION_PROVIDERS.includes(provider) so non-opted-in
-// providers (like default gemini) remain completely unaffected byte-for-byte.
+// Gated on getDelegateHooks(provider).historyCompactionEnabled (see
+// connectors/delegate/provider_hooks.js) so non-opted-in providers (like
+// default gemini) remain completely unaffected byte-for-byte -- which
+// providers are opted in is bai's own concern (connectors/bai/
+// delegate_hooks.js), not something this file branches on directly.
 
 // `functionResponse.id` only needs to be unique WITHIN a single turn for Gemini's
 // own call/response pairing -- nothing in this codebase or in Gemini's contract
@@ -159,7 +162,7 @@ export async function compactHistoryInPlace(contents, currentStep, preCompaction
   provider,
   runId,
 } = {}) {
-  const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
+  const isEnabled = provider ? getDelegateHooks(provider).historyCompactionEnabled : false;
   if (!isEnabled || !Array.isArray(contents)) return;
 
   // Side-store writes (addressing state-checkpoint bloat): every
