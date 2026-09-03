@@ -9,7 +9,7 @@ import {
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, entityMarkerBlock, notionBlockPlainText, parseMarkers,
   buildChangelogEntryText, isChangelogEntryText,
   buildRelationBlocks, parseRelationBlocks,
-  buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
+  buildSyncStartText, buildSyncEndText, buildSyncRangeBlocks, findSyncRange, textBlock,
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
 
@@ -488,27 +488,32 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
 // ---------------------------------------------------------------------------
 export async function doCheckpoint({ action, notes }) {
   if (action === "save") {
-    let existing = await findPageByEntityId("checkpoint-latest");
-    let pageId;
-    let url;
+    const existing = await findPageByEntityId("checkpoint-latest");
+    const notesLines = (notes || "").split("\n");
+    const synced_at = new Date().toISOString();
+
     if (!existing) {
+      // Seed the synced range directly in the page's initial content
+      // instead of creating an empty page and immediately patching the
+      // range into it via replaceSyncedRange -- that would leave the page
+      // briefly rangeless, and replaceSyncedRange always re-reads the
+      // page's blocks first to check for an existing range, which a
+      // brand-new page can never have. doCreatePage's content splitting
+      // (one paragraph block per non-empty line) matches the shape
+      // buildSyncRangeBlocks produces, so the markers survive intact.
+      const contentText = [buildSyncStartText(synced_at), ...notesLines, buildSyncEndText()].join("\n");
       const created = await doCreatePage({
         parent_id: NOTION_SYNC_PARENT_PAGE_ID,
         parent_type: "page",
         title: "Session Checkpoint",
         entity_id: "checkpoint-latest",
-        content: "",
+        content: contentText,
       });
-      pageId = created.id;
-      url = created.url;
-    } else {
-      pageId = existing.pageId;
-      url = existing.url;
+      return `Checkpoint saved successfully.\nURL: ${created.url}`;
     }
-    const contentLines = (notes || "").split("\n");
-    const synced_at = new Date().toISOString();
-    await replaceSyncedRange({ page_id: pageId, contentLines, synced_at });
-    return `Checkpoint saved successfully.\nURL: ${url}`;
+
+    await replaceSyncedRange({ page_id: existing.pageId, contentLines: notesLines, synced_at });
+    return `Checkpoint saved successfully.\nURL: ${existing.url}`;
   } else if (action === "load") {
     const existing = await findPageByEntityId("checkpoint-latest");
     if (!existing) {
