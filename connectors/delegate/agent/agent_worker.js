@@ -50,8 +50,11 @@
 import { randomUUID } from "node:crypto";
 import { runInvestigation } from "./agent_delegate.js";
 import { loadCheckpoint, saveCheckpoint } from "./agent_checkpoint.js";
-import { publishAgentStep, verifyQStashSignature } from "./qstash_client.js";
-import { AGENT_WORKER_MAX_CONSECUTIVE_FAILURES, DEBUG_AGENT_WORKER } from "../../config.js";
+// TEMPORARY: qstash_client.js hasn't moved yet (plan.md step 2a) -- still
+// points back at its current home under connectors/gemini/. Update to
+// "../qstash_client.js" once step 2a lands.
+import { publishAgentStep, verifyQStashSignature } from "../../gemini/qstash_client.js";
+import { AGENT_WORKER_MAX_CONSECUTIVE_FAILURES, DEBUG_AGENT_WORKER } from "../../../config.js";
 
 // Gated wrapper for the agent-worker[<id>]: invocation-id debug logging added
 // 2026-09-01 (commit 2aad526) to diagnose a worker-chain stall. Default OFF
