@@ -52,7 +52,7 @@ vi.mock("../connectors/github/client.js", () => ({
 // fakeCheckpoints directly from the factory without vi.hoisted would hit
 // the temporal dead zone.
 const fakeCheckpoints = vi.hoisted(() => new Map());
-vi.mock("../connectors/frontend/designer_checkpoint.js", () => ({
+vi.mock("../connectors/delegate/designer/designer_checkpoint.js", () => ({
   saveCheckpoint: vi.fn(async (runId, state) => { fakeCheckpoints.set(runId, state); }),
   loadCheckpoint: vi.fn(async (runId) => fakeCheckpoints.get(runId) ?? null),
   deleteCheckpoint: vi.fn(async (runId) => { fakeCheckpoints.delete(runId); }),
@@ -60,7 +60,7 @@ vi.mock("../connectors/frontend/designer_checkpoint.js", () => ({
 
 import { geminiChat } from "../connectors/gemini/client.js";
 import { readFile, writeFile } from "../connectors/frontend/designer_tool_functions.js";
-import { runDesignAgent } from "../connectors/frontend/designer_delegate.js";
+import { runDesignAgent } from "../connectors/delegate/designer/designer_delegate.js";
 
 const OWNER = "allocsys";
 const REPO = "madmcp";
