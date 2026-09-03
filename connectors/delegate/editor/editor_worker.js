@@ -22,8 +22,8 @@
 //
 // WHOLE-BLOB CHECKPOINT CAVEAT: unlike agent_checkpoint.js (which splits
 // `contents` into its own Redis LIST, untouched by a meta-only write),
-// editor_checkpoint.js is a whole-blob overwrite (see its own header,
-// plan.md Step 1). A meta-shaped heartbeat/dead-letter write here -- naming
+// editor_checkpoint.js is a whole-blob overwrite (see its own header).
+// A meta-shaped heartbeat/dead-letter write here -- naming
 // only a few fields, the way agent_worker.js's own heartbeat write does --
 // would silently ERASE contents/writtenFiles/writesPerFile/validateCounts/
 // owner/repo/branch on the very first worker invocation, before
