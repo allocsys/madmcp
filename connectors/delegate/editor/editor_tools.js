@@ -106,8 +106,8 @@ export function register(server) {
       // connectors/delegate/agent/agent_tools.js draws for delegate_agent.
       const maxStepsProvided = max_steps !== undefined;
 
-      // Async delegate_editor (plan.md Step 7): gated behind BOTH the
-      // rollout flag and QStash actually being reachable -- if either is
+      // Async delegate_editor: gated behind BOTH the
+      // rollout flag and QStash actually being reachable -- if
       // off/unconfigured, every branch below is skipped and this falls
       // straight through to today's fully-synchronous runEditorAgent call
       // further down, unchanged. Mirrors agent_tools.js's asyncEnabled gate.
