@@ -3,7 +3,7 @@
 // ("Limited GitHub write access for delegate_agent (non-default-branch only)").
 //
 // Thin wrapper around runEditorAgent (editor_delegate.js), same shape as
-// connectors/frontend/designer_tools.js's delegate_designer wrapper: same
+// connectors/delegate/designer/designer_tools.js's delegate_designer wrapper: same
 // resume_run_id / max_steps / show_transcript conventions, same
 // writtenFiles/transcript response shaping (guardrail #9's audit trail --
 // the transcript/writtenFiles reporting IS the audit trail, per the
@@ -103,7 +103,7 @@ export function register(server) {
       // explicitly wants to push the run forward" apart from "caller is
       // just checking status and max_steps happens to be undefined", so it
       // reads this BEFORE any defaulting happens. Same distinction
-      // connectors/gemini/agent_tools.js draws for delegate_agent.
+      // connectors/delegate/agent/agent_tools.js draws for delegate_agent.
       const maxStepsProvided = max_steps !== undefined;
 
       // Async delegate_editor (plan.md Step 7): gated behind BOTH the
