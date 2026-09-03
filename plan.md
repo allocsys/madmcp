@@ -88,7 +88,7 @@ connectors/
    | agent_checkpoint.js | agent_delegate.js, agent_tools.js, agent_worker.js; tests: agent-checkpoint, agent-delegate-async-checkpoint, agent-delegate-loop (mocked), agent-worker-tool-withholding-regression, agent-worker.test |
    | agent_worker.js | server.js (`handleAgentWorker`, `handleAgentWorkerFailure`); tests: agent-worker.test (direct) |
    | agent_tools.js | server.js (`import * as agent`); tests: agent-delegate-loop, agent-seedrun-max-steps-regression, agent-tools-async |
-   | qstash_client.js | agent_tools.js, agent_worker.js (same dir, relative import) **and** `connectors/github/editor_tools.js` (`from "../gemini/qstash_client.js"`) **and** server.js (`isQStashConfigured`, `isEditorQStashConfigured`); tests: agent-delegate-loop (mocked), agent-worker.test (mocked), editor-worker.test (mocked), qstash-client-publish.test (direct) |
+   | qstash_client.js | agent_tools.js, agent_worker.js (same dir, relative import) **and** `connectors/github/editor_tools.js` (`from "../gemini/qstash_client.js"`) **and** `connectors/github/editor_worker.js` (same import, missed in this table originally) **and** server.js (`isQStashConfigured`, `isEditorQStashConfigured`); tests: agent-delegate-loop (mocked), agent-worker.test (mocked), editor-worker.test (mocked), qstash-client-publish.test (direct), **and** agent-tools-async.test.js / editor-tools-async.test.js (both via `vi.doMock`, not `vi.mock` -- missed in this table originally, caught only during step 2a's actual execution by a follow-up repo-wide grep after the first edit pass) |
 
    Confirmed NOT moving / already correctly neutral (no change needed):
    - `connectors/llm/router.js` — already shared by designer_delegate.js, agent_delegate.js, AND editor_delegate.js. Good home already.
@@ -113,15 +113,21 @@ connectors/
 
    No code changes made in this step.
 
-2. **Move the read-only agent loop out of connectors/gemini/**
+2. **Move the read-only agent loop out of connectors/gemini/** ✅ DONE
    - Move `agent_delegate.js`, `agent_checkpoint.js`, `agent_worker.js`,
      `agent_tools.js` to a new neutral home: `connectors/delegate/agent/`.
    - Update all imports across the repo (server.js, tests, etc.) to the new
      paths.
    - `connectors/gemini/` keeps only `client.js` (the actual Gemini API
      wrapper) and anything strictly Gemini-request-shaped.
+   - DONE NOTE: the file moves and most import updates were already present
+     on the branch when this step was picked up; the one gap found was
+     `test/history-compaction.test.js`, which still had 7 stale dynamic
+     imports (`await import("../connectors/gemini/agent_delegate.js")` /
+     `agent_checkpoint.js`) left over from before the move. Fixed and
+     verified with a repo-wide `search_code` sweep for both old paths.
 
-2a. **Move qstash_client.js to the neutral delegate dir**
+2a. **Move qstash_client.js to the neutral delegate dir** ✅ DONE
    - CONFIRMED not Gemini-specific: it already backs BOTH the agent worker
      chain (`publishAgentStep`, `AGENT_WORKER_URL`) and the editor worker
      chain (`publishEditorStep`, `EDITOR_WORKER_URL`) side by side, and its
@@ -131,6 +137,18 @@ connectors/
      (one shared file, not agent/editor-split, since it already serves both).
    - Update imports in `agent_worker.js`, `agent_tools.js`, `editor_worker.js`,
      `editor_tools.js`, and any tests that mock this module's path.
+   - DONE NOTE: moved via `rename_file`, then repointed all 5 production
+     consumers (server.js, agent_tools.js, agent_worker.js, editor_tools.js,
+     editor_worker.js) plus 7 test files. A first pass caught 5 test files
+     (agent-worker.test.js, editor-worker.test.js, agent-delegate-loop.test.js,
+     qstash-client-publish.test.js's 4 dynamic imports); a follow-up
+     repo-wide `search_code` for `gemini/qstash_client` turned up 2 more
+     (`agent-tools-async.test.js`, `editor-tools-async.test.js`, both using
+     `vi.doMock` rather than `vi.mock`, which the first pass's targeted
+     reads had missed) plus a stray explanatory comment in editor_worker.js.
+     Final sweep confirmed zero remaining references outside this plan's own
+     frozen step-1 inventory tables, and `connectors/gemini/` now contains
+     only `client.js`.
    - Note for contrast: `connectors/shared/cooldown.js` (Upstash Redis,
      backs checkpointing) is ALREADY correctly neutral -- it lives under
      `connectors/shared/` and is imported directly by every provider's own
