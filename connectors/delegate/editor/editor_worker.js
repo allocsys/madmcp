@@ -130,7 +130,7 @@ export async function handleEditorWorker(req, res) {
   const latest = await loadCheckpoint(runId);
   if (!latest || latest.status !== "running") {
     // Finished this step -- runEditorAgent's own completion path already
-    // persists status "done" itself (see plan.md Step 2). Nothing more to
+    // persists status "done" itself. Nothing more to
     // chain.
     return res.status(200).json({ status: latest?.status || "gone", steps: result.steps });
   }
