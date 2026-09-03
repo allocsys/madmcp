@@ -28,13 +28,13 @@ vi.mock("../connectors/shared/cooldown.js", () => ({
 
 describe("detectToolCallLeakage (plan.md Section 21 fix: whitespace-mangled tag names)", () => {
   it("catches a clean XML-tag-shaped leak of a real function name", async () => {
-    const { detectToolCallLeakage } = await import("../connectors/gemini/agent_delegate.js");
+    const { detectToolCallLeakage } = await import("../connectors/delegate/agent/agent_delegate.js");
     const known = new Set(["github_read_file", "github_get_file_tree"]);
     expect(detectToolCallLeakage("<github_read_file><params>{}</params></github_read_file>", known)).toBe("github_read_file");
   });
 
   it("catches the ACTUAL literal repro text from plan.md Section 18 (run 6ea018d5): a tag name garbled with an embedded space", async () => {
-    const { detectToolCallLeakage } = await import("../connectors/gemini/agent_delegate.js");
+    const { detectToolCallLeakage } = await import("../connectors/delegate/agent/agent_delegate.js");
     const known = new Set(["github_read_file", "github_get_file_tree"]);
     // Literal text from plan.md Section 18: <githu b_read_file>... -- the
     // ORIGINAL (pre-fix) version of detectToolCallLeakage's patterns only
@@ -47,20 +47,20 @@ describe("detectToolCallLeakage (plan.md Section 21 fix: whitespace-mangled tag 
   });
 
   it("catches the bracket-marker-shaped leak from plan.md Section 20 (run ab8afaa8)", async () => {
-    const { detectToolCallLeakage } = await import("../connectors/gemini/agent_delegate.js");
+    const { detectToolCallLeakage } = await import("../connectors/delegate/agent/agent_delegate.js");
     const known = new Set(["github_read_file", "github_get_file_tree"]);
     const leaked = "[Function call: github_read_file with owner=allocsys, repo=madmcp, path=connectors/github/editor_worker.js]";
     expect(detectToolCallLeakage(leaked, known)).toBe("github_read_file");
   });
 
   it("catches a JSON-shaped leak of a real function name", async () => {
-    const { detectToolCallLeakage } = await import("../connectors/gemini/agent_delegate.js");
+    const { detectToolCallLeakage } = await import("../connectors/delegate/agent/agent_delegate.js");
     const known = new Set(["github_read_file", "github_get_file_tree"]);
     expect(detectToolCallLeakage('{"name": "github_read_file", "args": {}}', known)).toBe("github_read_file");
   });
 
   it("does NOT false-positive on legitimate markup/code examples unrelated to any real tool name", async () => {
-    const { detectToolCallLeakage } = await import("../connectors/gemini/agent_delegate.js");
+    const { detectToolCallLeakage } = await import("../connectors/delegate/agent/agent_delegate.js");
     const known = new Set(["github_read_file", "github_get_file_tree"]);
     expect(detectToolCallLeakage("Here's an example: <div>hello</div> and an unrelated <foo_bar> tag.", known)).toBeNull();
     expect(detectToolCallLeakage("The function is called github_get_file_tree in this codebase.", known)).toBeNull();
@@ -69,7 +69,7 @@ describe("detectToolCallLeakage (plan.md Section 21 fix: whitespace-mangled tag 
 
 describe("bai forced-final-step tool-call-leakage backstop, end-to-end (plan.md Section 18/20/21)", () => {
   it("returns a clean failed:true result instead of the raw garbled text when the model leaks a space-mangled tag on bai's forced-final step", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     const providerChatMock = vi.spyOn(routerModule, "providerChat");
@@ -96,7 +96,7 @@ describe("bai forced-final-step tool-call-leakage backstop, end-to-end (plan.md 
   });
 
   it("does NOT trigger the backstop for the same garbled text on a non-bai provider (Section 19 decoupling must hold)", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     const providerChatMock = vi.spyOn(routerModule, "providerChat");
