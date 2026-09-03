@@ -15,8 +15,8 @@
 // shape/size to delegate_designer's three-function loop than to
 // delegate_agent's open-ended, multi-KB-blob-per-call investigation surface.
 //
-// ASYNC STATUS FIELDS (plan.md Step 1, groundwork for the upcoming
-// QStash-backed delegate_editor -- mirrors agent_checkpoint.js's own
+// ASYNC STATUS FIELDS (groundwork for QStash-backed async delegate_editor
+// -- mirrors agent_checkpoint.js's own
 // status/lastStepAt/stepStartedAt/finalAnswer fields, but layered onto THIS
 // file's whole-blob save rather than that file's list+meta split):
 //   - status: "running" | "done" | "failed". Defaults to "running" when the
