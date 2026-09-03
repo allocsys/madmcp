@@ -3,7 +3,7 @@
 // as plain, dependency-free functions. Deliberately built and
 // tested in isolation before any tool-layer or agent-loop code exists,
 // mirroring how designer_tool_functions.js's extension check was
-// built/tested independently of connectors/frontend/designer_delegate.js's
+// built/tested independently of connectors/delegate/designer/designer_delegate.js's
 // loop.
 //
 // NOT YET WIRED UP anywhere -- no tool, no agent loop, no MCP registration.
