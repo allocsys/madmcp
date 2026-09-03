@@ -17,10 +17,37 @@ so it can be turned off independently without touching gemini code.
 
 ## Sequential steps
 
-1. **Inventory & freeze current behavior**
-   - Confirm test coverage for agent_delegate.js, editor_delegate.js,
-     agent_worker.js, editor_worker.js, router.js before moving anything.
-   - No code changes in this step.
+1. **Inventory & freeze current behavior** ✅ DONE
+
+   Files that WILL move (all currently under connectors/gemini/):
+   - agent_delegate.js
+   - agent_checkpoint.js
+   - agent_worker.js
+   - agent_tools.js
+   - qstash_client.js (step 2a)
+
+   Confirmed consumers of each, by direct import (not just comment mentions):
+
+   | Moving file | Imported by |
+   |---|---|
+   | agent_delegate.js | agent_tools.js, agent_worker.js; tests: agent-delegate-async-checkpoint, agent-delegate-loop (mocked), agent-resultcache-resume, agent-tool-call-leakage, agent-worker-tool-withholding-regression, agent-worker.test, history-compaction.test |
+   | agent_checkpoint.js | agent_delegate.js, agent_tools.js, agent_worker.js; tests: agent-checkpoint, agent-delegate-async-checkpoint, agent-delegate-loop (mocked), agent-worker-tool-withholding-regression, agent-worker.test |
+   | agent_worker.js | server.js (`handleAgentWorker`, `handleAgentWorkerFailure`); tests: agent-worker.test (direct) |
+   | agent_tools.js | server.js (`import * as agent`); tests: agent-delegate-loop, agent-seedrun-max-steps-regression, agent-tools-async |
+   | qstash_client.js | agent_tools.js, agent_worker.js (same dir, relative import) **and** `connectors/github/editor_tools.js` (`from "../gemini/qstash_client.js"`) **and** server.js (`isQStashConfigured`, `isEditorQStashConfigured`); tests: agent-delegate-loop (mocked), agent-worker.test (mocked), editor-worker.test (mocked), qstash-client-publish.test (direct) |
+
+   Confirmed NOT moving / already correctly neutral (no change needed):
+   - `connectors/llm/router.js` — already shared by designer_delegate.js, agent_delegate.js, AND editor_delegate.js. Good home already.
+   - `connectors/shared/cooldown.js` (Redis) — already shared by every provider client.js plus both checkpoint modules.
+   - `connectors/frontend/designer_delegate.js` / `designer_tool_functions.js` — only reference agent_delegate.js in comments as a design pattern they parallel; NOT an actual import. No coupling to undo there.
+
+   Cross-directory import confirmed as the concrete coupling to fix: `connectors/github/editor_tools.js` currently imports `qstash_client.js` via a `../gemini/` relative path — this is the literal case of "can't touch bai/editor async plumbing without reaching into connectors/gemini/" the whole plan exists to fix.
+
+   Editor-side files (already outside connectors/gemini/, confirmed for completeness, no move needed):
+   - `connectors/github/editor_delegate.js` — imported by editor_worker.js, editor_tools.js; tests: editor-delegate-async-checkpoint, editor-delegate.test (mocked), editor-tools.test (mocked), editor-worker.test
+   - `connectors/github/editor_checkpoint.js`, `editor_tools.js`, `editor_worker.js` — all already in connectors/github/, no move planned (step 3 only fixes their qstash_client.js import path)
+
+   No code changes made in this step.
 
 2. **Move the read-only agent loop out of connectors/gemini/**
    - Move `agent_delegate.js`, `agent_checkpoint.js`, `agent_worker.js`,
