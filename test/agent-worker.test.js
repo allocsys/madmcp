@@ -34,7 +34,7 @@ vi.mock("../connectors/shared/cooldown.js", () => ({
 
 const mockVerify = vi.fn();
 const mockPublish = vi.fn();
-vi.mock("../connectors/gemini/qstash_client.js", () => ({
+vi.mock("../connectors/delegate/qstash_client.js", () => ({
   verifyQStashSignature: (...args) => mockVerify(...args),
   publishAgentStep: (...args) => mockPublish(...args),
 }));
