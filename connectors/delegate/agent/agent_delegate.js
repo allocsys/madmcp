@@ -39,19 +39,19 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { providerChat } from "../llm/router.js";
-import { formatCascadeLogLine } from "../llm/cascade_log.js";
+import { providerChat } from "../../llm/router.js";
+import { formatCascadeLogLine } from "../../llm/cascade_log.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults, saveResultCacheEntry, getResultCacheEntries } from "./agent_checkpoint.js";
-import { isRedisConfigured } from "../shared/cooldown.js";
-import { githubRequest } from "../github/client.js";
-import { readFileViaBlob } from "../github/helpers.js";
-import { extractRepoQualifier, fallbackCodeSearch } from "../github/search.js";
-import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
-import { cfAccountRequest } from "../cloudflare/client.js";
-import { context7Request } from "../context7/client.js";
-import { mem0Request } from "../mem/client.js";
-import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
-import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../config.js";
+import { isRedisConfigured } from "../../shared/cooldown.js";
+import { githubRequest } from "../../github/client.js";
+import { readFileViaBlob } from "../../github/helpers.js";
+import { extractRepoQualifier, fallbackCodeSearch } from "../../github/search.js";
+import { queryTelemetry, toEpochMillis } from "../../cloudflare/observability.js";
+import { cfAccountRequest } from "../../cloudflare/client.js";
+import { context7Request } from "../../context7/client.js";
+import { mem0Request } from "../../mem/client.js";
+import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../../notion/client.js";
+import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../../config.js";
 
 const HARD_MAX_STEPS = 30;
 export const HISTORY_FULL_DETAIL_STEPS = 3;
