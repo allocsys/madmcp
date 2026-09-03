@@ -21,7 +21,7 @@ import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
 import * as agent      from "./connectors/delegate/agent/agent_tools.js";
 import { handleAgentWorker, handleAgentWorkerFailure } from "./connectors/delegate/agent/agent_worker.js";
-import { handleEditorWorker, handleEditorWorkerFailure } from "./connectors/github/editor_worker.js";
+import { handleEditorWorker, handleEditorWorkerFailure } from "./connectors/delegate/editor/editor_worker.js";
 import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/frontend/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
