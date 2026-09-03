@@ -166,8 +166,8 @@ export const GEMINI_NOTION_ROOT_PAGE_ID = process.env.GEMINI_NOTION_ROOT_PAGE_ID
 export const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 
 // Failure-callback target + retry budget for publishAgentStep/publishEditorStep
-// (plan.md Section 13, fixing the live dead-letter blind spot confirmed in
-// Section 12). Previously client.publishJSON() was called with neither
+// (fixing the live dead-letter blind spot confirmed in live runs
+// where QStash silent failures left steps running indefinitely). Previously client.publishJSON() was called with neither
 // `retries` nor `failureCallback` set, so QStash fell back to its own
 // defaults: 3 retries with exponential backoff (~12s, ~2m28s, ~30m8s --
 // worst case ~40min to exhaust), and, critically, NO notification to this
