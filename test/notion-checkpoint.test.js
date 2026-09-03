@@ -31,13 +31,12 @@ describe("Notion checkpoint tool", () => {
     vi.clearAllMocks();
   });
 
-  it("save creates a new page when none exists", async () => {
+  it("save creates a new page when none exists, seeding the synced range directly (no separate replaceSyncedRange call)", async () => {
     tools.findPageByEntityId.mockResolvedValueOnce(null);
     tools.doCreatePage.mockResolvedValueOnce({
       id: "page-123",
       url: "https://notion.so/page-123",
     });
-    tools.replaceSyncedRange.mockResolvedValueOnce({ action: "created", blockCount: 3 });
 
     const result = await doCheckpoint({ action: "save", notes: "Working on checkpoint feature" });
 
@@ -46,14 +45,13 @@ describe("Notion checkpoint tool", () => {
       expect.objectContaining({
         title: "Session Checkpoint",
         entity_id: "checkpoint-latest",
+        content: expect.stringContaining("Working on checkpoint feature"),
       })
     );
-    expect(tools.replaceSyncedRange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        page_id: "page-123",
-        contentLines: ["Working on checkpoint feature"],
-      })
-    );
+    // The created page's content already contains the full synced range
+    // (start marker + notes + end marker) via doCreatePage -- no follow-up
+    // patch is needed or expected.
+    expect(tools.replaceSyncedRange).not.toHaveBeenCalled();
     expect(result).toContain("Checkpoint saved successfully");
     expect(result).toContain("https://notion.so/page-123");
   });
