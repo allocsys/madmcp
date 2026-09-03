@@ -246,7 +246,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   // isFinalStep below. Restored from the checkpoint on a singleStep resume;
   // established fresh (or updated, on a manual resume with a new max_steps)
   // otherwise. Persisted in every checkpoint write below so it survives a
-  // resume -- same split as connectors/gemini/agent_delegate.js's
+  // resume -- same split as connectors/delegate/agent/agent_delegate.js's
   // runInvestigation.
   let effectiveOverallMaxSteps;
   let cappedSteps;
