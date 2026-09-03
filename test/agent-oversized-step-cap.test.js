@@ -101,7 +101,7 @@ describe("oversized-step guardrails (plan.md Section 9 root-cause fix)", () => {
   });
 
   it("caps the combined tool-result size appended to context in a single step", async () => {
-    const { runInvestigation, MAX_TOOL_CALLS_PER_STEP, MAX_STEP_RESULT_CHARS } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation, MAX_TOOL_CALLS_PER_STEP, MAX_STEP_RESULT_CHARS } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     // Fewer calls than MAX_TOOL_CALLS_PER_STEP (so the count cap doesn't
