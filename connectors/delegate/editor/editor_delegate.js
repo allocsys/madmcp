@@ -631,7 +631,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 
 // Seeds a fresh checkpoint (status "running", stepsDone 0, no steps taken
 // yet) WITHOUT running any part of the editor loop -- mirrors
-// connectors/gemini/agent_delegate.js's seedRun. Meant for the upcoming
+// connectors/delegate/agent/agent_delegate.js's seedRun. Meant for the upcoming
 // editor_tools.js async-start path (Step 7) to return a run_id immediately
 // and let the editor worker (Step 4) take step 1 in the background, rather
 // than this call itself blocking on step 1 synchronously before returning.
