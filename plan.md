@@ -138,14 +138,27 @@ connectors/
      modules. No move needed there, just confirm during step 9 that nothing
      new accidentally reintroduces a gemini-specific Redis path.
 
-3. **Move the editor loop to a neutral home**
-   - `connectors/github/editor_delegate.js`, `editor_tools.js`,
-     `editor_worker.js`, `editor_checkpoint.js` (if present) are already
-     outside `connectors/gemini/`, but audit for any direct
-     `connectors/gemini/*` imports beyond `client.js` and cut those over to
-     the new `connectors/delegate/agent/` equivalents or to router.js.
-   - Rename to `connectors/delegate/editor/` if it clarifies the split from
-     GitHub-specific tooling; otherwise leave in place and just fix imports.
+3. **Move the editor loop to connectors/delegate/editor/**
+   - Move `connectors/github/editor_delegate.js`, `editor_checkpoint.js`,
+     `editor_worker.js`, `editor_tools.js` to `connectors/delegate/editor/`.
+   - Fix the confirmed `../gemini/qstash_client.js` import (step 1) to point
+     at `connectors/delegate/qstash_client.js` instead.
+   - `connectors/github/` keeps only domain tools (files.js, GitHub API
+     client, write-policy/deny-list logic, etc.) -- nothing loop-shaped.
+   - Update all imports across the repo (server.js, tests, etc.) to the new
+     paths.
+
+3b. **Move the designer loop to connectors/delegate/designer/**
+   - Move `connectors/frontend/designer_delegate.js`, `designer_checkpoint.js`,
+     `designer_tools.js` to `connectors/delegate/designer/`.
+   - Leave `designer_tool_functions.js` and `validate.js` in
+     `connectors/frontend/` -- domain-specific tools, not loop scaffolding
+     (see "Consolidation scope" section above). Update designer_delegate.js's
+     import of `readFile, writeFile, validate` to the new relative path back
+     into `connectors/frontend/`.
+   - Update server.js's `import * as frontend from "./connectors/frontend/designer_tools.js"` to the new path.
+   - No qstash_client.js involvement here -- designer confirmed sync-only
+     (no worker/async file exists under connectors/frontend/ today).
 
 4. **Extract provider-specific hooks out of the shared loop**
    - `HISTORY_COMPACTION_PROVIDERS` gating and the bai `reasoningEffort`
