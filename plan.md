@@ -1078,3 +1078,88 @@ pull Vercel runtime logs for the run, specifically looking for the
 `bai: response finish_reason=... reasoning_tokens=... completion_tokens=...`
 lines §7's logging work added, to confirm or rule out the
 `computeRetryMaxTokens` theory directly.
+
+---
+
+**LIVE-TEST RESULT (2026-09-02/03, same session): `computeRetryMaxTokens` theory DISCONFIRMED for this run shape -- real cause is a bai tool-following reliability gap, not token-budget exhaustion. Fix for the (still real, still worth having) `computeRetryMaxTokens` bug shipped via `provider: "gemini"` after bai itself failed to land it.**
+
+Branch `test/bai-editor-diagnostic-logging-2` (fresh branch off `main`,
+since the original `test/bai-editor-diagnostic-logging` branch was
+deleted mid-investigation). Two live `delegate_editor` runs against the
+same task -- fixing `computeRetryMaxTokens`'s undefined-`originalMaxTokens`
+fallback branch itself, chosen because it's simultaneously a real repro
+vector (a genuine, moderately-complex multi-file edit) and a real fix
+worth having regardless of outcome:
+
+1. **First run, `provider: "bai"` (run `bb42c2ae-3a1b-475f-9d69-c02b31c6981c`):**
+   dispatched with a logging task that turned out to already be fully done
+   on `main` (PR #146 covers all four §7 gaps, confirmed by direct code
+   read of `agent_worker.js`'s `console.error` on `failed=true` -- gap 4
+   was also already present, not just gaps 1-3 as §8's original run 4
+   assumed). bai correctly identified this and made zero writes -- a
+   valid outcome, but not a repro (nothing needed writing). Notable
+   secondary finding: bai's own summary said "I ran out of turns" despite
+   using only 2 of 20 available steps -- a milder instance of the same
+   inaccurate-self-report pattern as §8's original fabricated excuses,
+   though harmless here since no write was actually blocked.
+
+2. **Second run, `provider: "bai"` (run `bb67f81d-5035-4944-a894-108bf13c1f93`):**
+   dispatched with the real `computeRetryMaxTokens` fix task. Real Vercel
+   logs for this run, pulled directly (not inferred):
+   - Step 1: `finish_reason=tool_calls`, `reasoning_tokens=29`,
+     `completion_tokens=61`, `durationMs=6418` -- bai attempted to read
+     `connectors/bai/config.js` (a wrong path guess; the real `config.js`
+     lives at the repo root, not under `connectors/bai/`) and got a 404.
+   - Step 2: `finish_reason=stop` (**not** `"length"`), `reasoning_tokens=512`,
+     `completion_tokens=1223`, `durationMs=37034` -- a clean, complete
+     generation, not a truncation. `reasoning_tokens/completion_tokens ≈ 0.42`,
+     well under the `0.9` `isReasoningBudgetExhausted` threshold even if
+     `finish_reason` had been `"length"`.
+   - **The `computeRetryMaxTokens` retry path never engaged in this run at
+     all** -- neither condition (`finish_reason === "length"`, ratio ≥ 0.9)
+     was met. The prior session's hypothesis (§8's earlier "UPDATE" entry)
+     is **disconfirmed as the mechanism for this specific stall shape**.
+   - What actually happened instead: after the 404 on its wrong path
+     guess, bai gave up rather than retrying with a corrected path --
+     its step-2 final answer correctly and honestly described the exact
+     fix needed (matching what was actually wanted, near word-for-word),
+     but never called `write_file` to apply it. Unlike §8's original 4
+     runs, this self-report was accurate, not fabricated -- a real
+     process improvement from the §7 logging work, even though the
+     underlying non-completion behavior persists.
+
+3. **Third run, `provider: "gemini"` (run `d172d267-c83b-4057-80ba-7731282f8f45`),
+   same task, corrected to explicitly point at the right `config.js` path:**
+   completed successfully in 8 steps (~4 minutes wall-clock). Both files
+   written correctly and verified by direct read afterward:
+   `connectors/bai/client.js` now has `BAI_IMPLICIT_DEFAULT_MAX_TOKENS = 65536`
+   and `computeRetryMaxTokens`'s fallback branch returns
+   `Math.max(BAI_IMPLICIT_DEFAULT_MAX_TOKENS * 2, RETRY_MIN_MAX_TOKENS)`
+   (131072) instead of the old bare `RETRY_MIN_MAX_TOKENS` (4096);
+   `test/bai-client.test.js`'s corresponding test updated to expect 131072.
+   **Not yet merged to `main`** -- still sitting on
+   `test/bai-editor-diagnostic-logging-2`, no PR opened yet.
+
+**Revised understanding of §8's original finding:** the `computeRetryMaxTokens`
+bug is real, reproducible by direct code reading, and worth fixing
+regardless (now implemented, pending merge) -- but it is very likely NOT
+the explanation for `delegate_editor(provider: "bai")` stalling short of
+`write_file` in general. The actual mechanism looks like a plainer bai
+tool-following reliability gap on this specific editor loop: bai can
+correctly reason out a fix in prose but doesn't reliably follow through
+with the corresponding `write_file` call, particularly after an earlier
+tool call didn't go as expected (e.g. a 404 on a wrong path). This is
+harder to fix with a client-level patch than a token-budget issue would
+have been. **Recommendation reaffirmed and now evidence-backed, not just
+precautionary: prefer `provider: "gemini"` (the default) for `delegate_editor`
+tasks.** `delegate_agent`'s bai path remains separately confirmed reliable
+per §1 and is unaffected by this finding.
+
+**Not yet done:** open a PR for the `computeRetryMaxTokens` fix and merge
+it to `main`; no further live reproduction of the original §8 stall shape
+(fabricated excuses, zero steps of real progress) has been attempted post-§7-logging
+-- this session's two bai attempts both differ somewhat from the original
+4 (one did no work because the task was already done; the other made a
+real but recoverable path mistake) -- so whether the *original* stall
+shape can still occur post-logging, and what its logs would show if so,
+remains open.
