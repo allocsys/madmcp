@@ -384,6 +384,16 @@ export function isSyncEndText(text) {
   return text === SYNC_END_TEXT;
 }
 
+// Lets a caller build a complete synced range (start marker + content +
+// end marker) as one plain-text blob up front -- e.g. seeding a brand-new
+// page's initial content directly, instead of creating the page empty and
+// then PATCHing the range in via a separate replaceSyncedRange call (which
+// also re-reads the page's blocks first, pointlessly, since a page that
+// was just created can't already have a range on it).
+export function buildSyncEndText() {
+  return SYNC_END_TEXT;
+}
+
 // Builds the full [start marker, ...content blocks, end marker] block list
 // for a brand-new synced range (page has none yet). contentLines is split
 // into one paragraph block per non-empty line, same convention as every
