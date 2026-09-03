@@ -302,8 +302,8 @@ All tokens are optional independently — a connector's tools fail at call time
 | `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
 | `OPENROUTER_API_KEYS` | Comma-separated OpenRouter API key(s) — required for `delegate_agent`'s `provider: "glm"` mode, unused otherwise |
-| `GLM_MODEL` | Primary GLM model (via OpenRouter) for `provider: "glm"` delegation (default `z-ai/glm-4.6`) |
-| `GLM_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s, cascaded per `OPENROUTER_API_KEYS` key (default `z-ai/glm-4.5-air:free`) |
+| `GLM_MODEL` | Primary GLM model (via OpenRouter) for `provider: "glm"` delegation (default `z-ai/glm-4.5-air:free`) |
+| `GLM_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s, cascaded per `OPENROUTER_API_KEYS` key (default: none configured) |
 | `GLM_REQUEST_TIMEOUT_MS` | Defensive ceiling on a single GLM/OpenRouter call (default `55000`) |
 | `GROQ_API_KEYS` | Comma-separated Groq API key(s) — required for `delegate_agent`'s `provider: "groq"` mode, unused otherwise; free-tier is request/token-rate-limited, not credit-balance-gated like OpenRouter/GLM |
 | `GROQ_MODEL` | Primary Groq model for `provider: "groq"` delegation (default `openai/gpt-oss-120b`, a production model) |
