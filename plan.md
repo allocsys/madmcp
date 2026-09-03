@@ -226,12 +226,51 @@ connectors/
      same precedent as step 3's own sweep. Confirmed `connectors/frontend/`
      now contains only `designer_tool_functions.js` and `validate.js`.
 
-4. **Extract provider-specific hooks out of the shared loop**
+4. **Extract provider-specific hooks out of the shared loop** ✅ DONE
    - `HISTORY_COMPACTION_PROVIDERS` gating and the bai `reasoningEffort`
      forced-final-step logic move out of the (now-neutral) loop file into a
      small per-provider hooks module (e.g. `connectors/bai/delegate_hooks.js`),
      called from the neutral loop via a lookup keyed on `provider`, so
      editing bai's behavior means editing bai's own files only.
+   - DONE NOTE: added two new files rather than one, matching the plan's
+     own target-layout note ("+ new delegate_hooks.js for bai, step 4" --
+     only bai, not glm/groq, since neither has any delegate-loop-specific
+     behavior to extract):
+     - `connectors/bai/delegate_hooks.js` -- `baiDelegateHooks` exports
+       `historyCompactionEnabled` (still resolved from config.js's
+       operator-configurable `HISTORY_COMPACTION_PROVIDERS` env var --
+       that env var itself stayed in config.js as ordinary shared config,
+       per config.js's own "central place for all environment variables"
+       header; only the *consumption* of it for bai specifically moved
+       into bai's own file) and `getReasoningEffort(isFinalStep)` (the
+       `"low"`-on-forced-final-step logic, unchanged in behavior).
+     - `connectors/delegate/provider_hooks.js` -- the neutral lookup
+       (`getDelegateHooks(provider)`), registry-mapping `"bai"` to
+       `baiDelegateHooks` and falling through to a `DEFAULT_HOOKS` (both
+       flags off/undefined) for every other provider. This is the one file
+       that imports `connectors/bai/delegate_hooks.js` by name -- kept
+       neutral-side (`connectors/delegate/`) rather than inside
+       `connectors/bai/`, since a lookup keyed across all providers
+       importing one specific provider's module the other direction would
+       invert the dependency the whole plan exists to fix.
+   - In `connectors/delegate/agent/agent_delegate.js`: replaced the
+     `HISTORY_COMPACTION_PROVIDERS` import from config.js with
+     `getDelegateHooks` from the new neutral lookup; `compactHistoryInPlace`'s
+     `isEnabled` check and the forced-final-step `reasoningEffort` line both
+     now call `getDelegateHooks(provider)...` instead of referencing
+     `HISTORY_COMPACTION_PROVIDERS` or the literal string `"bai"` directly.
+     Updated the two nearby comments that explained the old direct checks to
+     describe the new lookup instead. No behavior change intended or
+     observed -- confirmed via the existing (unmodified)
+     `test/agent-delegate-bai-reasoning-effort.test.js` and
+     `test/history-compaction.test.js`, both of which call the real
+     `agent_delegate.js`/`agent_checkpoint.js` (unmocked, config.js unmocked
+     in both) and already covered the bai-enabled/gemini-disabled behavior
+     this refactor needed to preserve exactly.
+   - Confirmed via repo-wide `search_code` sweep for `HISTORY_COMPACTION_PROVIDERS`
+     afterward: only config.js (the env var's own definition) and
+     connectors/bai/delegate_hooks.js (its one remaining consumer) reference
+     it -- agent_delegate.js no longer imports or checks it directly.
 
 5. **Add explicit per-provider enable flags**
    - `BAI_ENABLED`, `GLM_ENABLED`, `GROQ_ENABLED` in config.js, default
