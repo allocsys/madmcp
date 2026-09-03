@@ -312,7 +312,7 @@ connectors/
 - [x] Step 2a
 - [x] Step 3
 - [x] Step 3b
-- [ ] Step 4
+- [x] Step 4
 - [ ] Step 5
 - [ ] Step 6
 - [ ] Step 7
