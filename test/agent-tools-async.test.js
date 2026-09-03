@@ -4,7 +4,7 @@
 // Covers the agent_tools.js branching logic: test/agent-worker.test.js and
 // test/agent-delegate-async-checkpoint.test.js cover the worker endpoint and
 // the underlying runInvestigation resume mechanics respectively, but neither
-// exercises connectors/gemini/agent_tools.js's delegate_agent handler itself
+// exercises connectors/delegate/agent/agent_tools.js's delegate_agent handler itself
 // -- the branching (fresh start / poll-fresh / poll-stale-fallback / done /
 // failed), gated by DELEGATE_AGENT_ASYNC + isQStashConfigured().
 //
@@ -55,14 +55,14 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25, stepD
     AGENT_ASYNC_POLL_FRESH_SECONDS: pollFreshSeconds,
     AGENT_ASYNC_STEP_DEAD_SECONDS: stepDeadSeconds,
   }));
-  vi.doMock("../connectors/gemini/agent_delegate.js", () => ({
+  vi.doMock("../connectors/delegate/agent/agent_delegate.js", () => ({
     runInvestigation: mockRunInvestigation,
     seedRun: mockSeedRun,
   }));
-  vi.doMock("../connectors/gemini/agent_checkpoint.js", () => ({
+  vi.doMock("../connectors/delegate/agent/agent_checkpoint.js", () => ({
     loadCheckpoint: mockLoadCheckpoint,
   }));
-  vi.doMock("../connectors/gemini/qstash_client.js", () => ({
+  vi.doMock("../connectors/delegate/qstash_client.js", () => ({
     publishAgentStep: mockPublishAgentStep,
     isQStashConfigured: mockIsQStashConfigured,
   }));
@@ -70,7 +70,7 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25, stepD
     doCreatePage: mockDoCreatePage,
   }));
 
-  const { register } = await import("../connectors/gemini/agent_tools.js");
+  const { register } = await import("../connectors/delegate/agent/agent_tools.js");
   const server = makeFakeServer();
   register(server);
   return server.tools.delegate_agent;

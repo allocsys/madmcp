@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/agent_delegate.js — read-only investigation loop.
+// connectors/delegate/agent/agent_delegate.js — read-only investigation loop.
 //
 // Lets Gemini run its OWN multi-step tool-use loop server-side (via Gemini
 // function calling) to answer an open-ended question, instead of the
@@ -39,19 +39,20 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { providerChat } from "../llm/router.js";
-import { formatCascadeLogLine } from "../llm/cascade_log.js";
+import { providerChat } from "../../llm/router.js";
+import { formatCascadeLogLine } from "../../llm/cascade_log.js";
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint, savePreCompactionResult, getPreCompactionResults, saveResultCacheEntry, getResultCacheEntries } from "./agent_checkpoint.js";
-import { isRedisConfigured } from "../shared/cooldown.js";
-import { githubRequest } from "../github/client.js";
-import { readFileViaBlob } from "../github/helpers.js";
-import { extractRepoQualifier, fallbackCodeSearch } from "../github/search.js";
-import { queryTelemetry, toEpochMillis } from "../cloudflare/observability.js";
-import { cfAccountRequest } from "../cloudflare/client.js";
-import { context7Request } from "../context7/client.js";
-import { mem0Request } from "../mem/client.js";
-import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../notion/client.js";
-import { DEFAULT_OWNER, HISTORY_COMPACTION_PROVIDERS } from "../../config.js";
+import { isRedisConfigured } from "../../shared/cooldown.js";
+import { githubRequest } from "../../github/client.js";
+import { readFileViaBlob } from "../../github/helpers.js";
+import { extractRepoQualifier, fallbackCodeSearch } from "../../github/search.js";
+import { queryTelemetry, toEpochMillis } from "../../cloudflare/observability.js";
+import { cfAccountRequest } from "../../cloudflare/client.js";
+import { context7Request } from "../../context7/client.js";
+import { mem0Request } from "../../mem/client.js";
+import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../../notion/client.js";
+import { DEFAULT_OWNER } from "../../../config.js";
+import { getDelegateHooks } from "../provider_hooks.js";
 
 const HARD_MAX_STEPS = 30;
 export const HISTORY_FULL_DETAIL_STEPS = 3;
@@ -123,8 +124,11 @@ export const BULKY_TOOL_NAMES = new Set([
 // 2. Do NOT break functionCall/functionResponse id pairing or role alternation.
 // 3. Only edit the text inside an existing functionResponse part in place.
 //
-// Gated on HISTORY_COMPACTION_PROVIDERS.includes(provider) so non-opted-in
-// providers (like default gemini) remain completely unaffected byte-for-byte.
+// Gated on getDelegateHooks(provider).historyCompactionEnabled (see
+// connectors/delegate/provider_hooks.js) so non-opted-in providers (like
+// default gemini) remain completely unaffected byte-for-byte -- which
+// providers are opted in is bai's own concern (connectors/bai/
+// delegate_hooks.js), not something this file branches on directly.
 
 // `functionResponse.id` only needs to be unique WITHIN a single turn for Gemini's
 // own call/response pairing -- nothing in this codebase or in Gemini's contract
@@ -158,7 +162,7 @@ export async function compactHistoryInPlace(contents, currentStep, preCompaction
   provider,
   runId,
 } = {}) {
-  const isEnabled = provider ? HISTORY_COMPACTION_PROVIDERS.includes(provider) : false;
+  const isEnabled = provider ? getDelegateHooks(provider).historyCompactionEnabled : false;
   if (!isEnabled || !Array.isArray(contents)) return;
 
   // Side-store writes (addressing state-checkpoint bloat): every
@@ -223,14 +227,19 @@ export async function compactHistoryInPlace(contents, currentStep, preCompaction
   if (sideStoreWrites.length) await Promise.all(sideStoreWrites);
 }
 
-// 429 (rate limit) and 503 (overloaded/high demand) are the only cases
-// documented as transient -- see client.js's own model-fallback cascade,
+// 429 (rate limit) and 503 (overloaded/high demand) are the documented
+// transient HTTP statuses -- see client.js's own model-fallback cascade,
 // which deliberately only retries a different model on a 429 for the same
-// reason. Everything else (400 malformed request, 401/403 auth, 404 unknown
-// model, or no err.status at all -- e.g. "GEMINI_API_KEY is not set" thrown
-// locally in client.js, or "Gemini returned no candidates" from a
-// safety/recitation block) is a config or request problem that will
-// reproduce identically on a resume, not something retrying fixes.
+// reason. This also retries anything the adapter layer has explicitly
+// flagged via `err.transient === true`, independent of `err.status` --
+// that flag lets a provider adapter (e.g. bai's) mark its own errors as
+// safe to retry without this file needing to know that provider's
+// specific status-code conventions. Everything else (400 malformed
+// request, 401/403 auth, 404 unknown model, or no err.status/err.transient
+// at all -- e.g. "GEMINI_API_KEY is not set" thrown locally in client.js,
+// or "Gemini returned no candidates" from a safety/recitation block) is a
+// config or request problem that will reproduce identically on a resume,
+// not something retrying fixes.
 function isTransientGeminiError(err) {
   return err?.status === 429 || err?.status === 503 || err?.transient === true;
 }
@@ -1873,7 +1882,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // call site this investigation actually reproduced and root-caused;
     // see connectors/bai/client.js's baiChat for the actual retry logic
     // this pairs with (isReasoningBudgetExhausted).
-    const reasoningEffort = (effectiveProvider === "bai" && isFinalStep) ? "low" : undefined;
+    const reasoningEffort = getDelegateHooks(effectiveProvider).getReasoningEffort(isFinalStep);
     let candidate;
     try {
       candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens, reasoningEffort });

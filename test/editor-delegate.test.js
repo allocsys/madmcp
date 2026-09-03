@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/editor-delegate.test.js
 //
-// Coverage for connectors/github/editor_delegate.js's runEditorAgent loop,
+// Coverage for connectors/delegate/editor/editor_delegate.js's runEditorAgent loop,
 // focused on the guardrails that are specific to THIS loop rather than
 // already covered by test/editor-tool-functions.test.js (guardrails
 // #2/#3/#4, enforced at the tool layer) or test/editor-policy.test.js
@@ -45,7 +45,7 @@ vi.mock("../connectors/shared/cooldown.js", () => ({
 }));
 
 const fakeCheckpoints = vi.hoisted(() => new Map());
-vi.mock("../connectors/github/editor_checkpoint.js", () => ({
+vi.mock("../connectors/delegate/editor/editor_checkpoint.js", () => ({
   saveCheckpoint: vi.fn(async (runId, state) => { fakeCheckpoints.set(runId, state); }),
   loadCheckpoint: vi.fn(async (runId) => fakeCheckpoints.get(runId) ?? null),
   deleteCheckpoint: vi.fn(async (runId) => { fakeCheckpoints.delete(runId); }),
@@ -53,7 +53,7 @@ vi.mock("../connectors/github/editor_checkpoint.js", () => ({
 
 import { providerChat } from "../connectors/llm/router.js";
 import { writeFile, assertNotDefaultBranch } from "../connectors/github/editor_tool_functions.js";
-import { runEditorAgent } from "../connectors/github/editor_delegate.js";
+import { runEditorAgent } from "../connectors/delegate/editor/editor_delegate.js";
 
 const OWNER = "allocsys";
 const REPO = "madmcp";

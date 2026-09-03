@@ -18,7 +18,7 @@ import { register as registerDiff      } from "./diff.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
 import { register as registerCodespaces } from "./codespaces.js";
-import { register as registerEditor     } from "./editor_tools.js";
+import { register as registerEditor     } from "../delegate/editor/editor_tools.js";
 
 export function register(server) {
   registerFiles(server);

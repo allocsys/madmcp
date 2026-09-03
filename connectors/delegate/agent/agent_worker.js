@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/agent_worker.js — QStash-invoked HTTP endpoint that
+// connectors/delegate/agent/agent_worker.js — QStash-invoked HTTP endpoint that
 // advances a delegate_agent run one step at a time in the background
 // (Scenario B: self-chaining QStash worker).
 //
@@ -50,8 +50,8 @@
 import { randomUUID } from "node:crypto";
 import { runInvestigation } from "./agent_delegate.js";
 import { loadCheckpoint, saveCheckpoint } from "./agent_checkpoint.js";
-import { publishAgentStep, verifyQStashSignature } from "./qstash_client.js";
-import { AGENT_WORKER_MAX_CONSECUTIVE_FAILURES, DEBUG_AGENT_WORKER } from "../../config.js";
+import { publishAgentStep, verifyQStashSignature } from "../qstash_client.js";
+import { AGENT_WORKER_MAX_CONSECUTIVE_FAILURES, DEBUG_AGENT_WORKER } from "../../../config.js";
 
 // Gated wrapper for the agent-worker[<id>]: invocation-id debug logging added
 // 2026-09-01 (commit 2aad526) to diagnose a worker-chain stall. Default OFF

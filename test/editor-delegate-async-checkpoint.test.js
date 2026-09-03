@@ -69,8 +69,8 @@ describe("editor_delegate.js — single-step resume chaining (async delegate_edi
     vi.resetModules();
     vi.clearAllMocks();
     mockAssertNotDefaultBranch.mockResolvedValue({ default_branch: "main" });
-    ({ runEditorAgent, seedEditorRun } = await import("../connectors/github/editor_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/github/editor_checkpoint.js"));
+    ({ runEditorAgent, seedEditorRun } = await import("../connectors/delegate/editor/editor_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/editor/editor_checkpoint.js"));
   });
 
   it("seedEditorRun makes no provider calls and produces a loadable checkpoint with stepsDone: 0 and the run's real overallMaxSteps", async () => {

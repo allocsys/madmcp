@@ -57,8 +57,8 @@ describe("agent_worker.js singleStep resume — tools must not be withheld befor
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    ({ runInvestigation, seedRun } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ runInvestigation, seedRun } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("keeps tools available on every worker-driven singleStep resume except the run's genuine final step", async () => {

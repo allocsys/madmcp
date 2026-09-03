@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Regression coverage for plan.md Section 13: publishAgentStep/
-// publishEditorStep (connectors/gemini/qstash_client.js) must actually pass
+// publishEditorStep (connectors/delegate/qstash_client.js) must actually pass
 // `retries` and `failureCallback` through to the underlying
 // @upstash/qstash Client.publishJSON call -- previously neither was set,
 // which let a deterministically-timing-out step exhaust QStash's own
@@ -53,7 +53,7 @@ describe("qstash_client.js — publishJSON call shape (plan.md Section 13)", () 
   });
 
   it("publishAgentStep passes retries: 0 (default QSTASH_STEP_RETRIES) and a derived failureCallback", async () => {
-    const { publishAgentStep } = await import("../connectors/gemini/qstash_client.js");
+    const { publishAgentStep } = await import("../connectors/delegate/qstash_client.js");
     await publishAgentStep({ runId: "run-1", afterStep: 2, retryCount: 1 });
 
     expect(mockPublishJSON).toHaveBeenCalledTimes(1);
@@ -65,7 +65,7 @@ describe("qstash_client.js — publishJSON call shape (plan.md Section 13)", () 
   });
 
   it("publishEditorStep passes retries: 0 and a derived failureCallback targeting the editor-worker-failure route", async () => {
-    const { publishEditorStep } = await import("../connectors/gemini/qstash_client.js");
+    const { publishEditorStep } = await import("../connectors/delegate/qstash_client.js");
     await publishEditorStep({ runId: "run-2", afterStep: 0, retryCount: 0 });
 
     expect(mockPublishJSON).toHaveBeenCalledTimes(1);
@@ -82,7 +82,7 @@ describe("qstash_client.js — publishJSON call shape (plan.md Section 13)", () 
 
   it("respects a QSTASH_STEP_RETRIES env override instead of hardcoding 0", async () => {
     process.env.QSTASH_STEP_RETRIES = "2";
-    const { publishAgentStep } = await import("../connectors/gemini/qstash_client.js");
+    const { publishAgentStep } = await import("../connectors/delegate/qstash_client.js");
     await publishAgentStep({ runId: "run-3", afterStep: 0 });
 
     const call = mockPublishJSON.mock.calls[0][0];
@@ -94,7 +94,7 @@ describe("qstash_client.js — publishJSON call shape (plan.md Section 13)", () 
     // (config.js) has no safe substring to swap and returns undefined rather
     // than guessing at a made-up callback URL.
     process.env.AGENT_WORKER_URL = "https://example.com/some-other-path";
-    const { publishAgentStep } = await import("../connectors/gemini/qstash_client.js");
+    const { publishAgentStep } = await import("../connectors/delegate/qstash_client.js");
     await publishAgentStep({ runId: "run-4", afterStep: 0 });
 
     const call = mockPublishJSON.mock.calls[0][0];
@@ -104,7 +104,7 @@ describe("qstash_client.js — publishJSON call shape (plan.md Section 13)", () 
 
   it("respects an explicit AGENT_WORKER_FAILURE_URL override instead of the derived one", async () => {
     process.env.AGENT_WORKER_FAILURE_URL = "https://override.example.com/custom-failure-path";
-    const { publishAgentStep } = await import("../connectors/gemini/qstash_client.js");
+    const { publishAgentStep } = await import("../connectors/delegate/qstash_client.js");
     await publishAgentStep({ runId: "run-5", afterStep: 0 });
 
     const call = mockPublishJSON.mock.calls[0][0];

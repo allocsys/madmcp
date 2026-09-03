@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/designer_tools.js — delegate_designer
+// connectors/delegate/designer/designer_tools.js — delegate_designer
 //
 // Write-capable tool-calling agent for HTML/CSS/SCSS/JSX/TSX/Vue files
 // (issue #61 redesign). Thin wrapper around runDesignAgent (designer_delegate.js):
-// validation and response-shaping here deliberately mirror connectors/
-// gemini/agent_tools.js's delegate_agent (same resume_run_id / max_steps /
+// validation and response-shaping here deliberately mirror the agent loop's
+// agent_tools.js's delegate_agent (same resume_run_id / max_steps /
 // show_transcript conventions), since this is architecturally the same
 // kind of step-bounded, checkpointable tool-calling loop -- just
 // write-capable and scoped to frontend files instead of read-only/
@@ -46,7 +46,7 @@ import { z } from "zod";
 import { runDesignAgent } from "./designer_delegate.js";
 import {
   DEFAULT_OWNER, FRONTEND_ALLOWED_EXTENSIONS, FRONTEND_DEFAULT_STEPS,
-} from "../../config.js";
+} from "../../../config.js";
 
 export function register(server) {
   server.tool(
@@ -69,7 +69,7 @@ export function register(server) {
     async ({ owner = DEFAULT_OWNER, repo, branch, task, max_steps, resume_run_id, show_transcript = false }) => {
       // Same "task is only genuinely optional when resuming a live
       // checkpoint" reasoning as delegate_agent's handler in
-      // connectors/gemini/agent_tools.js.
+      // the agent loop's agent_tools.js.
       if (!task && !resume_run_id) {
         return {
           content: [{ type: "text", text: "Missing required argument: task must be provided unless resuming a live checkpoint via resume_run_id." }],

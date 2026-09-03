@@ -10,7 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC } from "./config.js";
-import { isQStashConfigured, isEditorQStashConfigured } from "./connectors/gemini/qstash_client.js";
+import { isQStashConfigured, isEditorQStashConfigured } from "./connectors/delegate/qstash_client.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
 import * as resource   from "./connectors/github/resource.js";
@@ -19,11 +19,11 @@ import * as mem0       from "./connectors/mem/tools.js";
 import * as fetch      from "./connectors/fetch/tools.js";
 import * as cloudflare from "./connectors/cloudflare/tools.js";
 import * as context7   from "./connectors/context7/tools.js";
-import * as agent      from "./connectors/gemini/agent_tools.js";
-import { handleAgentWorker, handleAgentWorkerFailure } from "./connectors/gemini/agent_worker.js";
-import { handleEditorWorker, handleEditorWorkerFailure } from "./connectors/github/editor_worker.js";
+import * as agent      from "./connectors/delegate/agent/agent_tools.js";
+import { handleAgentWorker, handleAgentWorkerFailure } from "./connectors/delegate/agent/agent_worker.js";
+import { handleEditorWorker, handleEditorWorkerFailure } from "./connectors/delegate/editor/editor_worker.js";
 import * as research   from "./connectors/exa/research_tools.js";
-import * as frontend   from "./connectors/frontend/designer_tools.js";
+import * as frontend   from "./connectors/delegate/designer/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
 
@@ -129,7 +129,7 @@ app.use(helmet());
 // Raise body size limit from the 100kb default to 10mb so that push_files
 // and create_or_update_file can handle large source files without truncation.
 // `verify` stashes the raw request body bytes on req.rawBody -- needed by
-// /api/agent-worker (connectors/gemini/agent_worker.js) to verify QStash's
+// /api/agent-worker (connectors/delegate/agent/agent_worker.js) to verify QStash's
 // request signature against the EXACT bytes QStash signed, since the
 // already-JSON.parsed req.body cannot be re-serialized back to a
 // byte-for-byte match (key order/whitespace aren't preserved). Cheap for

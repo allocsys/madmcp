@@ -38,7 +38,7 @@ vi.mock("../connectors/github/helpers.js", () => ({
 
 describe("resultCache survives a resume (regression -- 2026-08-31 bug: repeatCounts persisted but resultCache didn't)", () => {
   it("a call repeated across a resume is served from the side-store, not re-executed", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     const sameReadCall = {

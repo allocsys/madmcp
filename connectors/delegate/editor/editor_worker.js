@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_worker.js -- QStash-invoked HTTP endpoint that
+// connectors/delegate/editor/editor_worker.js -- QStash-invoked HTTP endpoint that
 // advances a delegate_editor run one step at a time in the background,
-// same self-chaining pattern as connectors/gemini/agent_worker.js (see that
+// same self-chaining pattern as connectors/delegate/agent/agent_worker.js (see that
 // file's own header for the full singleStep-vs-max_steps rationale --
 // unchanged here, just against runEditorAgent instead of runInvestigation).
 //
@@ -40,8 +40,8 @@
 
 import { runEditorAgent } from "./editor_delegate.js";
 import { loadCheckpoint, saveCheckpoint } from "./editor_checkpoint.js";
-import { publishEditorStep, verifyQStashSignature } from "../gemini/qstash_client.js";
-import { EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES } from "../../config.js";
+import { publishEditorStep, verifyQStashSignature } from "../qstash_client.js";
+import { EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES } from "../../../config.js";
 
 // Express handler for POST /api/editor-worker (registered in server.js,
 // plan.md Step 5). Always responds 200 for a request that was validly
@@ -183,8 +183,8 @@ export async function handleEditorWorker(req, res) {
 // ---------------------------------------------------------------------------
 // handleEditorWorkerFailure (plan.md Section 13) -- Express handler for
 // POST /api/editor-worker-failure, the QStash failureCallback target
-// configured in publishEditorStep (../gemini/qstash_client.js). Mirrors
-// connectors/gemini/agent_worker.js's handleAgentWorkerFailure -- see that
+// configured in publishEditorStep (../delegate/qstash_client.js). Mirrors
+// connectors/delegate/agent/agent_worker.js's handleAgentWorkerFailure -- see that
 // function's own header comment for the full reasoning (why this exists:
 // a step that hard-times-out on every QStash delivery attempt means no
 // further worker invocation ever arrives to run the in-process dead-letter

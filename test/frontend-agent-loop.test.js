@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/frontend-agent-loop.test.js
 //
-// Integration coverage for connectors/frontend/designer_delegate.js's runDesignAgent
+// Integration coverage for connectors/delegate/designer/designer_delegate.js's runDesignAgent
 // loop (delegate_designer v2, issue #61) -- specifically steps 3 ("checkpoint
 // migration") and 4 ("conflict-handling validation: reproduce the #59
 // scenario ... against the new write_file") from the Notion design doc.
@@ -43,7 +43,7 @@ vi.mock("../connectors/github/client.js", () => ({
 }));
 
 // In-memory fake standing in for Redis -- same {save,load,delete} contract
-// as connectors/frontend/designer_checkpoint.js, just backed by a Map instead
+// as connectors/delegate/designer/designer_checkpoint.js, just backed by a Map instead
 // of an actual Upstash client, so the test can drive an interrupt+resume
 // cycle deterministically without a real Redis.
 // vi.hoisted is required here (not a plain top-level const): vi.mock
@@ -52,7 +52,7 @@ vi.mock("../connectors/github/client.js", () => ({
 // fakeCheckpoints directly from the factory without vi.hoisted would hit
 // the temporal dead zone.
 const fakeCheckpoints = vi.hoisted(() => new Map());
-vi.mock("../connectors/frontend/designer_checkpoint.js", () => ({
+vi.mock("../connectors/delegate/designer/designer_checkpoint.js", () => ({
   saveCheckpoint: vi.fn(async (runId, state) => { fakeCheckpoints.set(runId, state); }),
   loadCheckpoint: vi.fn(async (runId) => fakeCheckpoints.get(runId) ?? null),
   deleteCheckpoint: vi.fn(async (runId) => { fakeCheckpoints.delete(runId); }),
@@ -60,7 +60,7 @@ vi.mock("../connectors/frontend/designer_checkpoint.js", () => ({
 
 import { geminiChat } from "../connectors/gemini/client.js";
 import { readFile, writeFile } from "../connectors/frontend/designer_tool_functions.js";
-import { runDesignAgent } from "../connectors/frontend/designer_delegate.js";
+import { runDesignAgent } from "../connectors/delegate/designer/designer_delegate.js";
 
 const OWNER = "allocsys";
 const REPO = "madmcp";

@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/qstash_client.js — Upstash QStash client + inbound
+// connectors/delegate/qstash_client.js — Upstash QStash client + inbound
 // signature verification, backing Scenario B self-chaining
-// delegate_agent worker (connectors/gemini/agent_worker.js).
+// delegate_agent worker (connectors/delegate/agent/agent_worker.js).
 //
 // SAME ACCOUNT, NEW PRODUCT: this is the same Upstash account already used
 // for Redis checkpointing (agent_checkpoint.js/cooldown.js) -- QStash is a
@@ -127,7 +127,7 @@ export function isEditorQStashConfigured() {
 // but publishes to EDITOR_WORKER_URL instead of AGENT_WORKER_URL. See that
 // function's own comments for the full reasoning (afterStep/retryCount
 // threading) -- unchanged here, just against the editor worker endpoint
-// (connectors/github/editor_worker.js).
+// (connectors/delegate/editor/editor_worker.js).
 export async function publishEditorStep({ runId, afterStep, retryCount = 0 }) {
   const client = getQStashClient();
   if (!client) throw new Error("QSTASH_TOKEN is not set -- cannot publish to QStash.");

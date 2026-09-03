@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Regression coverage for plan.md #3: connectors/gemini/agent_tools.js's
+// Regression coverage for plan.md #3: connectors/delegate/agent/agent_tools.js's
 // async fresh-start branch used to call
 //   seedRun({ task, provider, model, maxOutputTokens })
 // -- omitting max_steps entirely -- so seedRun's own default
@@ -50,8 +50,8 @@ describe("agent_delegate.js — seedRun pins overallMaxSteps to the caller's req
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    ({ seedRun } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ seedRun } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("an explicit max_steps below the default (20) is NOT overridden by seedRun's own default", async () => {

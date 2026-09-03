@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/agent_checkpoint.js — Redis-backed checkpointing for
+// connectors/delegate/agent/agent_checkpoint.js — Redis-backed checkpointing for
 // delegate_agent's multi-step loop, so a run that dies partway through
 // (Gemini 503/429, network blip, function timeout) doesn't lose every tool
 // call it already made.
@@ -21,7 +21,7 @@
 // failure can't be resumed, same as before this file existed.
 // ---------------------------------------------------------------------------
 
-import { getRedis } from "../shared/cooldown.js";
+import { getRedis } from "../../shared/cooldown.js";
 
 const CHECKPOINT_KEY_PREFIX = "gemini:checkpoint:";
 // A checkpoint only needs to survive long enough for the caller to retry

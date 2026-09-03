@@ -29,7 +29,7 @@ vi.mock("../connectors/shared/cooldown.js", () => ({
 
 describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort gating (plan.md Section 4/25 fix)", () => {
   it("passes reasoningEffort: 'low' on bai's forced-final step (max_steps: 1)", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     let capturedOpts = null;
@@ -52,7 +52,7 @@ describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort 
   });
 
   it("does NOT set reasoningEffort on an earlier bai step that still has tools available", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     const capturedOptsPerCall = [];
@@ -88,7 +88,7 @@ describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort 
   });
 
   it("does NOT set reasoningEffort for a non-bai provider's forced-final step (gemini)", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     let capturedOpts = null;
@@ -111,7 +111,7 @@ describe("agent_delegate.js -- bai-only, forced-final-step-only reasoningEffort 
   });
 
   it("does NOT set reasoningEffort on a stuck-loop-forced (non-final) withheld-tools turn -- gating is isFinalStep specifically, not the broader withholdTools", async () => {
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     const capturedOptsPerCall = [];

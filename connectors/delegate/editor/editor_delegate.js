@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_delegate.js -- core agent loop for delegate_editor ("Limited GitHub write access for agent").
+// connectors/delegate/editor/editor_delegate.js -- core agent loop for delegate_editor ("Limited GitHub write access for agent").
 //
-// Adapts connectors/frontend/designer_delegate.js's runDesignAgent shape --
+// Adapts connectors/delegate/designer/designer_delegate.js's runDesignAgent shape --
 // same multi-step Gemini function-calling loop, same checkpoint/resume
 // contract (guardrail #7: reuse designer_checkpoint.js's shape, here via
-// connectors/github/editor_checkpoint.js, a same-shape sibling with its own
+// connectors/delegate/editor/editor_checkpoint.js, a same-shape sibling with its own
 // Redis key prefix), same stuck-loop/repeat-detection and final-step tool
 // withholding fixes -- but:
 //
@@ -45,12 +45,12 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { providerChat } from "../llm/router.js";
-import { formatCascadeLogLine } from "../llm/cascade_log.js";
-import { readFile, writeFile, assertNotDefaultBranch } from "./editor_tool_functions.js";
-import { validateByExtension } from "./editor_validate.js";
+import { providerChat } from "../../llm/router.js";
+import { formatCascadeLogLine } from "../../llm/cascade_log.js";
+import { readFile, writeFile, assertNotDefaultBranch } from "../../github/editor_tool_functions.js";
+import { validateByExtension } from "../../github/editor_validate.js";
 import { saveCheckpoint, loadCheckpoint } from "./editor_checkpoint.js";
-import { isRedisConfigured } from "../shared/cooldown.js";
+import { isRedisConfigured } from "../../shared/cooldown.js";
 import {
   EDITOR_ALLOWED_EXTENSIONS,
   EDITOR_ALLOWED_PATH_PREFIXES,
@@ -59,9 +59,9 @@ import {
   EDITOR_MAX_FILES_PER_RUN,
   EDITOR_MAX_WRITES_PER_FILE,
   EDITOR_MAX_VALIDATE_CALLS,
-} from "../../config.js";
+} from "../../../config.js";
 
-// Same reasoning as connectors/gemini/agent_delegate.js's
+// Same reasoning as connectors/delegate/agent/agent_delegate.js's
 // isTransientGeminiError / designer_delegate.js's copy of it: only 429
 // (rate limit) and 503 (overloaded) are worth resuming past -- everything
 // else reproduces identically on a resume.
@@ -246,7 +246,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   // isFinalStep below. Restored from the checkpoint on a singleStep resume;
   // established fresh (or updated, on a manual resume with a new max_steps)
   // otherwise. Persisted in every checkpoint write below so it survives a
-  // resume -- same split as connectors/gemini/agent_delegate.js's
+  // resume -- same split as connectors/delegate/agent/agent_delegate.js's
   // runInvestigation.
   let effectiveOverallMaxSteps;
   let cappedSteps;
@@ -265,14 +265,14 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   // The provider actually in effect for this run -- the caller-supplied one
   // on a fresh run, or the one restored from a resumed checkpoint (see
   // `checkpoint.provider || provider` below). Same reasoning as
-  // connectors/gemini/agent_delegate.js's runInvestigation: resuming on a
+  // connectors/delegate/agent/agent_delegate.js's runInvestigation: resuming on a
   // DIFFERENT provider than the one that started the run risks corrupting
   // the conversation shape, not just a preference mismatch. Threaded
   // through every providerChat/saveCheckpoint call below exactly like
   // effectiveTask is.
   let effectiveProvider = provider;
   // Stuck-loop detection -- same shape as designer_delegate.js's copy of
-  // connectors/gemini/agent_delegate.js's fix #4. See that file's comments
+  // connectors/delegate/agent/agent_delegate.js's fix #4. See that file's comments
   // for the full reasoning; unchanged here.
   let repeatCounts = new Map();
   let resultCache = new Map();
@@ -291,7 +291,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
   // and reported a result. This is also what makes resume_run_id usable as
   // a cheap poll handle for a background/worker-driven run: polling a
   // finished run is now a Redis read, not a re-run. Mirrors
-  // connectors/gemini/agent_delegate.js's runInvestigation, which has the
+  // connectors/delegate/agent/agent_delegate.js's runInvestigation, which has the
   // same short-circuit for the same reason.
   if (checkpoint && checkpoint.status === "done") {
     return {
@@ -496,7 +496,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
       // window in which a "done" status could be observed. Still expires via
       // the normal checkpoint TTL like any other checkpoint -- this is a
       // bounded-lifetime record for polling, not a permanent store. Mirrors
-      // connectors/gemini/agent_delegate.js's finishRun, which made the same
+      // connectors/delegate/agent/agent_delegate.js's finishRun, which made the same
       // change and no longer calls deleteCheckpoint on its success path
       // either.
       await saveCheckpoint(runId, {
@@ -631,7 +631,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 
 // Seeds a fresh checkpoint (status "running", stepsDone 0, no steps taken
 // yet) WITHOUT running any part of the editor loop -- mirrors
-// connectors/gemini/agent_delegate.js's seedRun. Meant for the upcoming
+// connectors/delegate/agent/agent_delegate.js's seedRun. Meant for the upcoming
 // editor_tools.js async-start path (Step 7) to return a run_id immediately
 // and let the editor worker (Step 4) take step 1 in the background, rather
 // than this call itself blocking on step 1 synchronously before returning.

@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_tools.js -- MCP tool registration for delegate_editor
+// connectors/delegate/editor/editor_tools.js -- MCP tool registration for delegate_editor
 // ("Limited GitHub write access for delegate_agent (non-default-branch only)").
 //
 // Thin wrapper around runEditorAgent (editor_delegate.js), same shape as
-// connectors/frontend/designer_tools.js's delegate_designer wrapper: same
+// connectors/delegate/designer/designer_tools.js's delegate_designer wrapper: same
 // resume_run_id / max_steps / show_transcript conventions, same
 // writtenFiles/transcript response shaping (guardrail #9's audit trail --
 // the transcript/writtenFiles reporting IS the audit trail, per the
@@ -27,7 +27,7 @@
 import { z } from "zod";
 import { runEditorAgent, seedEditorRun } from "./editor_delegate.js";
 import { loadCheckpoint } from "./editor_checkpoint.js";
-import { publishEditorStep, isEditorQStashConfigured } from "../gemini/qstash_client.js";
+import { publishEditorStep, isEditorQStashConfigured } from "../qstash_client.js";
 import {
   DEFAULT_OWNER,
   EDITOR_ALLOWED_EXTENSIONS,
@@ -40,7 +40,7 @@ import {
   EDITOR_AGENT_ASYNC,
   EDITOR_ASYNC_POLL_FRESH_SECONDS,
   EDITOR_ASYNC_STEP_DEAD_SECONDS,
-} from "../../config.js";
+} from "../../../config.js";
 
 function scopeSummary() {
   const pathPart = EDITOR_ALLOWED_PATH_PREFIXES.length
@@ -77,8 +77,8 @@ export function register(server) {
       max_steps:       z.number().optional().describe(`Max agent steps before being forced to answer (default ${EDITOR_DEFAULT_STEPS}, hard cap ${EDITOR_HARD_MAX_STEPS} regardless of this value). On a resumed run this is the new ceiling, not additional steps on top of what's already done.`),
       resume_run_id:   z.string().optional().describe("A runId returned from a previous failed/partial delegate_editor call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). On a failed/partial run the transcript is always shown regardless of this flag."),
-      provider: z.enum(["gemini", "bai"]).optional()
-        .describe(`Which provider runs the editor loop (default: "gemini"). "bai" routes to B.AI's free GLM-5.3-Flash model (see connectors/bai/client.js) -- no model-fallback cascade on that path, only key rotation over BAI_API_KEYS. This tool is write-capable (it commits to a real branch), so a lighter/free model is a materially higher-risk choice here than for delegate_agent's read-only loop -- consider testing against real editor tasks before trusting it unattended. RESUME RULE: if resume_run_id resolves to a checkpoint that recorded a provider, that recorded provider is always used and this argument is ignored.`),
+      provider: z.enum(["gemini"]).optional()
+        .describe(`Which provider runs the editor loop (default and only supported value: "gemini"). RESUME RULE: if resume_run_id resolves to a checkpoint that recorded a provider, that recorded provider is always used and this argument is ignored.`),
     },
     async ({ owner = DEFAULT_OWNER, repo, branch, task, max_steps, resume_run_id, show_transcript = false, provider }) => {
       // Same "task is only genuinely optional when resuming a live
@@ -103,7 +103,7 @@ export function register(server) {
       // explicitly wants to push the run forward" apart from "caller is
       // just checking status and max_steps happens to be undefined", so it
       // reads this BEFORE any defaulting happens. Same distinction
-      // connectors/gemini/agent_tools.js draws for delegate_agent.
+      // connectors/delegate/agent/agent_tools.js draws for delegate_agent.
       const maxStepsProvided = max_steps !== undefined;
 
       // Async delegate_editor (plan.md Step 7): gated behind BOTH the

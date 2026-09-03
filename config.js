@@ -155,7 +155,7 @@ export const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEO
 // plan): Gemini tools may READ any page/database reachable via the existing
 // Notion connector (Memory Index, Entity Index, Job Leads, etc.), but may
 // only WRITE under this one page -- deliberately NOT a caller-supplied
-// parameter anywhere in connectors/gemini/, so there is no code path that
+// parameter anywhere in connectors/delegate/agent/, so there is no code path that
 // lets a Gemini tool call target a write anywhere else. A bad or
 // hallucinated Gemini write can only ever land inside this subtree, never
 // inside the Claude-side Memory Index / Entity Index / Job Leads structures
@@ -250,6 +250,14 @@ export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "")
   .filter(Boolean);
 export const GLM_REQUEST_TIMEOUT_MS = Number(process.env.GLM_REQUEST_TIMEOUT_MS) || 55000;
 export const GLM_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GLM_DEFAULT_MAX_OUTPUT_TOKENS) || 8192;
+// Explicit per-provider enable flag (decouple-gemini-delegation plan, step
+// 5): defaults to true, matching current behavior (glm is already
+// reachable via providerChat's `provider: "glm"` with no gate at all).
+// router.js checks this before ever calling glmChat -- set GLM_ENABLED=false
+// to turn glm off deployment-wide with a clear config error instead of
+// letting a bad/missing OPENROUTER_API_KEYS fail obscurely deep inside the
+// glm client on first real use.
+export const GLM_ENABLED = process.env.GLM_ENABLED !== "false";
 export const DEFAULT_LLM_PROVIDER = process.env.DEFAULT_LLM_PROVIDER || "gemini";
 
 export const GROQ_API_KEYS = (process.env.GROQ_API_KEYS || "")
@@ -264,6 +272,10 @@ export const GROQ_FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS || "qwen/q
   .filter(Boolean);
 export const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS) || 55000;
 export const GROQ_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_DEFAULT_MAX_OUTPUT_TOKENS) || 4096;
+// Same enable-flag pattern as GLM_ENABLED above -- see its comment for the
+// full reasoning (decouple-gemini-delegation plan, step 5). Defaults to
+// true, matching current behavior.
+export const GROQ_ENABLED = process.env.GROQ_ENABLED !== "false";
 
 // ---------------------------------------------------------------------------
 // B.AI (api.b.ai) -- third delegate_agent provider option, OpenAI-compatible
@@ -298,6 +310,15 @@ export const BAI_API = "https://api.b.ai/v1/chat/completions";
 export const BAI_MODEL = process.env.BAI_MODEL || "glm-5.3-flash";
 // Same defensive-ceiling reasoning as GEMINI_REQUEST_TIMEOUT_MS above.
 export const BAI_REQUEST_TIMEOUT_MS = Number(process.env.BAI_REQUEST_TIMEOUT_MS) || 55000;
+// Same enable-flag pattern as GLM_ENABLED/GROQ_ENABLED above -- see
+// GLM_ENABLED's comment for the full reasoning (decouple-gemini-delegation
+// plan, step 5). FLIPPED TO DEFAULT OFF (2026-09-03): unlike GLM_ENABLED/
+// GROQ_ENABLED, this now requires an explicit BAI_ENABLED=true to reach the
+// bai provider at all -- set it to opt back in. Note this is independent of
+// HISTORY_COMPACTION_PROVIDERS/connectors/bai/delegate_hooks.js above --
+// BAI_ENABLED gates whether bai is reachable as a provider at all, not its
+// delegate-loop-specific behavior once selected.
+export const BAI_ENABLED = process.env.BAI_ENABLED === "true";
 
 export const FRONTEND_ALLOWED_EXTENSIONS = (process.env.FRONTEND_ALLOWED_EXTENSIONS || ".html,.css,.scss,.jsx,.tsx,.vue")
   .split(",")

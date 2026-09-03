@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/editor-tools.test.js
 //
-// Coverage for connectors/github/editor_tools.js's register() rollout
+// Coverage for connectors/delegate/editor/editor_tools.js's register() rollout
 // gate. The one fact this test exists to pin down: register() must be a
 // genuine no-op -- server.tool() never called at all -- when
 // EDITOR_AGENT_ENABLED is false, and must register exactly one tool named
@@ -23,7 +23,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../connectors/github/editor_delegate.js", () => ({
+vi.mock("../connectors/delegate/editor/editor_delegate.js", () => ({
   runEditorAgent: vi.fn(),
 }));
 
@@ -43,7 +43,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
   it("registers the tool when the flag is unset (default on)", async () => {
     delete process.env.EDITOR_AGENT_ENABLED;
     vi.resetModules();
-    const { register } = await import("../connectors/github/editor_tools.js");
+    const { register } = await import("../connectors/delegate/editor/editor_tools.js");
 
     const server = fakeServer();
     register(server);
@@ -55,7 +55,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
   it("registers no tool at all when the flag is the literal string \"false\"", async () => {
     process.env.EDITOR_AGENT_ENABLED = "false";
     vi.resetModules();
-    const { register } = await import("../connectors/github/editor_tools.js");
+    const { register } = await import("../connectors/delegate/editor/editor_tools.js");
 
     const server = fakeServer();
     register(server);
@@ -66,7 +66,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
   it("registers the tool when the flag is any value other than the literal string \"false\" (e.g. a truthy-looking typo)", async () => {
     process.env.EDITOR_AGENT_ENABLED = "1";
     vi.resetModules();
-    const { register } = await import("../connectors/github/editor_tools.js");
+    const { register } = await import("../connectors/delegate/editor/editor_tools.js");
 
     const server = fakeServer();
     register(server);
@@ -77,7 +77,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
   it("registers exactly one tool, named delegate_editor, when the flag is \"true\"", async () => {
     process.env.EDITOR_AGENT_ENABLED = "true";
     vi.resetModules();
-    const { register } = await import("../connectors/github/editor_tools.js");
+    const { register } = await import("../connectors/delegate/editor/editor_tools.js");
 
     const server = fakeServer();
     register(server);
@@ -89,7 +89,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
   it("the registered tool's description explicitly states the non-default-branch and no-PR-merge scope limits", async () => {
     process.env.EDITOR_AGENT_ENABLED = "true";
     vi.resetModules();
-    const { register } = await import("../connectors/github/editor_tools.js");
+    const { register } = await import("../connectors/delegate/editor/editor_tools.js");
 
     const server = fakeServer();
     register(server);
@@ -104,7 +104,7 @@ describe("register() -- handler behavior when enabled", () => {
   async function registerAndGetHandler() {
     process.env.EDITOR_AGENT_ENABLED = "true";
     vi.resetModules();
-    const { register } = await import("../connectors/github/editor_tools.js");
+    const { register } = await import("../connectors/delegate/editor/editor_tools.js");
     const server = fakeServer();
     register(server);
     return server.tool.mock.calls[0][3];
@@ -118,7 +118,7 @@ describe("register() -- handler behavior when enabled", () => {
   });
 
   it("rejects a non-positive-integer max_steps before ever calling runEditorAgent", async () => {
-    const { runEditorAgent } = await import("../connectors/github/editor_delegate.js");
+    const { runEditorAgent } = await import("../connectors/delegate/editor/editor_delegate.js");
     const handler = await registerAndGetHandler();
     const result = await handler({ repo: "madmcp", branch: "feat/x", task: "do it", max_steps: 0 });
     expect(result.isError).toBe(true);

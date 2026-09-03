@@ -5,7 +5,7 @@
 // what the MCP-calling model (e.g. Claude) sees when deciding which tool to
 // use, and are the only place the "prefer delegate_agent" routing hints
 // live. They are read by a DIFFERENT model, for a DIFFERENT purpose, than
-// the FUNCTIONS declarations Gemini sees in connectors/gemini/agent_delegate.js
+// the FUNCTIONS declarations Gemini sees in connectors/delegate/agent/agent_delegate.js
 // during its own internal tool-calling loop -- editing one has no effect on
 // the other. Do not assume changes here propagate to agent_delegate.js, and never
 // port this "use delegate_agent instead" phrasing onto agent_delegate.js's own

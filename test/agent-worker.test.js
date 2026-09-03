@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Covers the QStash worker endpoint itself
-// (connectors/gemini/agent_worker.js): signature verification
+// (connectors/delegate/agent/agent_worker.js): signature verification
 // (fail-closed), idempotency (stepsDone/afterStep mismatch -> no-op),
 // re-chaining on a successful-but-unfinished step, and dead-lettering after
 // repeated same-step failures. Mirrors
@@ -34,7 +34,7 @@ vi.mock("../connectors/shared/cooldown.js", () => ({
 
 const mockVerify = vi.fn();
 const mockPublish = vi.fn();
-vi.mock("../connectors/gemini/qstash_client.js", () => ({
+vi.mock("../connectors/delegate/qstash_client.js", () => ({
   verifyQStashSignature: (...args) => mockVerify(...args),
   publishAgentStep: (...args) => mockPublish(...args),
 }));
@@ -103,9 +103,9 @@ describe("agent_worker.js — handleAgentWorker", () => {
     vi.clearAllMocks();
     mockVerify.mockResolvedValue(true);
     mockPublish.mockResolvedValue();
-    ({ handleAgentWorker, handleAgentWorkerFailure } = await import("../connectors/gemini/agent_worker.js"));
-    ({ seedRun } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ handleAgentWorker, handleAgentWorkerFailure } = await import("../connectors/delegate/agent/agent_worker.js"));
+    ({ seedRun } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {
@@ -138,7 +138,7 @@ describe("agent_worker.js — handleAgentWorker", () => {
       content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_1" } }] },
       finishReason: "STOP",
     });
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     await runInvestigation({ resume_run_id: runId, max_steps: 1, provider: "gemini" });
 
     const { req, res } = makeReqRes({ body: { runId, afterStep: 0 } }); // stale -- real stepsDone is now 1
@@ -158,7 +158,7 @@ describe("agent_worker.js — handleAgentWorker", () => {
       content: { role: "model", parts: [{ functionCall: { name: "github_get_repo_topics", args: { owner: "a", repo: "b" }, id: "call_1" } }] },
       finishReason: "STOP",
     });
-    const { runInvestigation } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js");
     await runInvestigation({ resume_run_id: runId, max_steps: 1, provider: "gemini" });
 
     const cpAdvanced = await loadCheckpoint(runId);
@@ -355,9 +355,9 @@ describe("agent_worker.js — handleAgentWorkerFailure", () => {
     vi.clearAllMocks();
     mockVerify.mockResolvedValue(true);
     mockPublish.mockResolvedValue();
-    ({ handleAgentWorkerFailure } = await import("../connectors/gemini/agent_worker.js"));
-    ({ seedRun, runInvestigation } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ handleAgentWorkerFailure } = await import("../connectors/delegate/agent/agent_worker.js"));
+    ({ seedRun, runInvestigation } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {

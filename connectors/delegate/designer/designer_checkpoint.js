@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// connectors/frontend/designer_checkpoint.js — Redis-backed checkpointing for
-// delegate_designer's agent loop (connectors/frontend/designer_delegate.js,
+// connectors/delegate/designer/designer_checkpoint.js — Redis-backed checkpointing for
+// delegate_designer's agent loop (connectors/delegate/designer/designer_delegate.js,
 // issue #61 step 2).
 //
-// SIMPLER THAN connectors/gemini/agent_checkpoint.js'S LIST+META SPLIT, ON
+// SIMPLER THAN connectors/delegate/agent/agent_checkpoint.js'S LIST+META SPLIT, ON
 // PURPOSE: that split exists because delegate_agent's open-ended
 // investigation surface (GitHub/Cloudflare/Notion/Context7/Mem0, many of
 // which return multi-KB text blobs per call) can grow a `contents` array
@@ -11,9 +11,9 @@
 // cost. This agent's tool set is three functions over frontend source files
 // on one branch, bounded by FRONTEND_HARD_MAX_STEPS (20) -- its `contents`
 // array is small enough that a whole-blob-per-save approach is still the
-// right call here too. Reuse that shape rather than importing gemini/
-// agent_checkpoint.js's list-vs-meta split, which would be unused complexity
-// for this loop's actual size.
+// right call here too. Reuse that shape rather than importing the agent
+// loop's agent_checkpoint.js's list-vs-meta split, which would be unused
+// complexity for this loop's actual size.
 //
 // SAME FAIL-OPEN CONTRACT AS EVERY OTHER CHECKPOINT MODULE IN THIS REPO: if
 // Redis isn't configured or a call fails, every function here no-ops /
@@ -22,7 +22,7 @@
 // calls.
 // ---------------------------------------------------------------------------
 
-import { getRedis } from "../shared/cooldown.js";
+import { getRedis } from "../../shared/cooldown.js";
 
 const CHECKPOINT_KEY_PREFIX = "designer:checkpoint:";
 // Same reasoning as every other checkpoint module in this repo -- only

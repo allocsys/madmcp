@@ -34,7 +34,7 @@ describe("agent_checkpoint.js — saveCheckpoint/loadCheckpoint round trip", () 
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ saveCheckpoint, loadCheckpoint, deleteCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ saveCheckpoint, loadCheckpoint, deleteCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("persists structuralRecheckUsed through a save/load round trip (regression -- was previously silently dropped)", async () => {

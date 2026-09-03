@@ -20,7 +20,7 @@ export function sleep(ms) {
 // how many callers invoke `schedule` concurrently -- a shared promise chain
 // serializes them. This is what actually protects against a burst of
 // parallel tool calls (e.g. several Notion calls landing in the same
-// delegate_agent step, see connectors/gemini/agent_delegate.js's 2026-07-26
+// delegate_agent step, see connectors/delegate/agent/agent_delegate.js's 2026-07-26
 // parallelization) hitting the upstream API all at once.
 export function createThrottle(minIntervalMs) {
   let chain = Promise.resolve();

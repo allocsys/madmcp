@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { runInvestigation, seedRun } from "./agent_delegate.js";
 import { loadCheckpoint } from "./agent_checkpoint.js";
-import { publishAgentStep, isQStashConfigured } from "./qstash_client.js";
-import { doCreatePage } from "../notion/tools.js";
-import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS, AGENT_ASYNC_STEP_DEAD_SECONDS } from "../../config.js";
+import { publishAgentStep, isQStashConfigured } from "../qstash_client.js";
+import { doCreatePage } from "../../notion/tools.js";
+import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS, AGENT_ASYNC_STEP_DEAD_SECONDS } from "../../../config.js";
 
 export function register(server) {
 
@@ -22,8 +22,8 @@ export function register(server) {
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page. ASYNC CAVEAT: not persisted across calls -- the initial fire-and-forget start call ignores this and returns before logging ever runs, so it must be passed again as true on the resume_run_id call(s) that actually retrieve the final answer, or nothing gets logged."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
       show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is only included if this flag is explicitly true."),
-      provider: z.enum(["gemini", "bai"]).optional()
-        .describe(`Which provider runs the investigation loop (default: "gemini"). "bai" routes to B.AI's free GLM-5.3-Flash model (see connectors/bai/client.js) -- no model-fallback cascade on that path, only key rotation over BAI_API_KEYS, and no maxOutputTokens default is forced (unlike glm/groq).`),
+      provider: z.enum(["gemini"]).optional()
+        .describe(`Which provider runs the investigation loop (default and only supported value: "gemini").`),
       model: z.string().optional()
         .describe(`Override the specific Gemini model to use (default: GEMINI_MODEL from config). ` +
           `WARNING -- CASCADE DISABLED: passing a model different from the default skips GEMINI_FALLBACK_MODELS entirely -- only the requested model is tried, so a 429/503 on it fails the call instead of cascading to another model. ` +

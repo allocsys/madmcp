@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/editor-tools-async.test.js
 //
-// Covers connectors/github/editor_tools.js's async branching logic (plan.md
+// Covers connectors/delegate/editor/editor_tools.js's async branching logic (plan.md
 // Step 7): test/editor-worker.test.js and
 // test/editor-delegate-async-checkpoint.test.js cover the worker endpoint
 // and the underlying runEditorAgent resume mechanics respectively, but
@@ -62,19 +62,19 @@ async function setup({ editorAgentAsync = "sync", pollFreshSeconds = 60, stepDea
     EDITOR_ASYNC_POLL_FRESH_SECONDS: pollFreshSeconds,
     EDITOR_ASYNC_STEP_DEAD_SECONDS: stepDeadSeconds,
   }));
-  vi.doMock("../connectors/github/editor_delegate.js", () => ({
+  vi.doMock("../connectors/delegate/editor/editor_delegate.js", () => ({
     runEditorAgent: mockRunEditorAgent,
     seedEditorRun: mockSeedEditorRun,
   }));
-  vi.doMock("../connectors/github/editor_checkpoint.js", () => ({
+  vi.doMock("../connectors/delegate/editor/editor_checkpoint.js", () => ({
     loadCheckpoint: mockLoadCheckpoint,
   }));
-  vi.doMock("../connectors/gemini/qstash_client.js", () => ({
+  vi.doMock("../connectors/delegate/qstash_client.js", () => ({
     publishEditorStep: mockPublishEditorStep,
     isEditorQStashConfigured: mockIsEditorQStashConfigured,
   }));
 
-  const { register } = await import("../connectors/github/editor_tools.js");
+  const { register } = await import("../connectors/delegate/editor/editor_tools.js");
   const server = makeFakeServer();
   register(server);
   return server.tools.delegate_editor;
