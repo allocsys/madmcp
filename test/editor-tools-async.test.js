@@ -69,7 +69,7 @@ async function setup({ editorAgentAsync = "sync", pollFreshSeconds = 60, stepDea
   vi.doMock("../connectors/github/editor_checkpoint.js", () => ({
     loadCheckpoint: mockLoadCheckpoint,
   }));
-  vi.doMock("../connectors/gemini/qstash_client.js", () => ({
+  vi.doMock("../connectors/delegate/qstash_client.js", () => ({
     publishEditorStep: mockPublishEditorStep,
     isEditorQStashConfigured: mockIsEditorQStashConfigured,
   }));
