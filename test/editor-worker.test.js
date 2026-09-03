@@ -120,9 +120,9 @@ describe("editor_worker.js — handleEditorWorker", () => {
     mockVerify.mockResolvedValue(true);
     mockPublish.mockResolvedValue();
     mockAssertNotDefaultBranch.mockResolvedValue({ default_branch: "main" });
-    ({ handleEditorWorker } = await import("../connectors/github/editor_worker.js"));
-    ({ seedEditorRun } = await import("../connectors/github/editor_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/github/editor_checkpoint.js"));
+    ({ handleEditorWorker } = await import("../connectors/delegate/editor/editor_worker.js"));
+    ({ seedEditorRun } = await import("../connectors/delegate/editor/editor_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/editor/editor_checkpoint.js"));
   });
 
   it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {
@@ -151,7 +151,7 @@ describe("editor_worker.js — handleEditorWorker", () => {
     mockProviderChat.mockResolvedValueOnce(functionCallCandidate("write_file", { path: "a.md", content: "x" }));
     mockWriteFile.mockResolvedValue({ path: "a.md", sha: "s", commitSha: "c1234567", noop: false });
 
-    const { runEditorAgent } = await import("../connectors/github/editor_delegate.js");
+    const { runEditorAgent } = await import("../connectors/delegate/editor/editor_delegate.js");
     await runEditorAgent({ resume_run_id: runId, singleStep: true });
 
     const { req, res } = makeReqRes({ body: { runId, afterStep: 0 } }); // stale -- real stepsDone is now 1
@@ -252,9 +252,9 @@ describe("editor_worker.js — handleEditorWorkerFailure", () => {
     mockVerify.mockResolvedValue(true);
     mockPublish.mockResolvedValue();
     mockAssertNotDefaultBranch.mockResolvedValue({ default_branch: "main" });
-    ({ handleEditorWorkerFailure } = await import("../connectors/github/editor_worker.js"));
-    ({ seedEditorRun, runEditorAgent } = await import("../connectors/github/editor_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/github/editor_checkpoint.js"));
+    ({ handleEditorWorkerFailure } = await import("../connectors/delegate/editor/editor_worker.js"));
+    ({ seedEditorRun, runEditorAgent } = await import("../connectors/delegate/editor/editor_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/editor/editor_checkpoint.js"));
   });
 
   it("rejects a request with an invalid/missing QStash signature before touching any checkpoint", async () => {
