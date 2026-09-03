@@ -1,10 +1,7 @@
 import { z } from "zod";
 import { runInvestigation, seedRun } from "./agent_delegate.js";
 import { loadCheckpoint } from "./agent_checkpoint.js";
-// TEMPORARY: qstash_client.js hasn't moved yet (plan.md step 2a) -- still
-// points back at its current home under connectors/gemini/. Update to
-// "../qstash_client.js" once step 2a lands.
-import { publishAgentStep, isQStashConfigured } from "../../gemini/qstash_client.js";
+import { publishAgentStep, isQStashConfigured } from "../qstash_client.js";
 import { doCreatePage } from "../../notion/tools.js";
 import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS, AGENT_ASYNC_STEP_DEAD_SECONDS } from "../../../config.js";
 
