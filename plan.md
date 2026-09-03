@@ -345,7 +345,7 @@ connectors/
 - [x] Step 3b
 - [x] Step 4
 - [x] Step 5
-- [ ] Step 6
+- [x] Step 6
 - [ ] Step 7
 - [ ] Step 8
 - [ ] Step 9
