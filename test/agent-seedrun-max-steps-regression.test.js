@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Regression coverage for plan.md #3: connectors/gemini/agent_tools.js's
+// Regression coverage for plan.md #3: connectors/delegate/agent/agent_tools.js's
 // async fresh-start branch used to call
 //   seedRun({ task, provider, model, maxOutputTokens })
 // -- omitting max_steps entirely -- so seedRun's own default
