@@ -155,7 +155,7 @@ export const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEO
 // plan): Gemini tools may READ any page/database reachable via the existing
 // Notion connector (Memory Index, Entity Index, Job Leads, etc.), but may
 // only WRITE under this one page -- deliberately NOT a caller-supplied
-// parameter anywhere in connectors/gemini/, so there is no code path that
+// parameter anywhere in connectors/delegate/agent/, so there is no code path that
 // lets a Gemini tool call target a write anywhere else. A bad or
 // hallucinated Gemini write can only ever land inside this subtree, never
 // inside the Claude-side Memory Index / Entity Index / Job Leads structures
