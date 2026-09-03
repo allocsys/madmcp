@@ -50,8 +50,8 @@ describe("agent_delegate.js — seedRun pins overallMaxSteps to the caller's req
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    ({ seedRun } = await import("../connectors/gemini/agent_delegate.js"));
-    ({ loadCheckpoint } = await import("../connectors/gemini/agent_checkpoint.js"));
+    ({ seedRun } = await import("../connectors/delegate/agent/agent_delegate.js"));
+    ({ loadCheckpoint } = await import("../connectors/delegate/agent/agent_checkpoint.js"));
   });
 
   it("an explicit max_steps below the default (20) is NOT overridden by seedRun's own default", async () => {
