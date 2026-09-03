@@ -491,6 +491,48 @@ connectors/
    - All three step-9 checks pass; no further code changes required by
      this refactor.
 
+## Post-refactor operational change (2026-09-03)
+Separate from the plan above (which is complete) -- an operational request
+to disable bai by default and stop advertising it on the two write/
+investigation-loop tools that exposed it:
+- `config.js`: `BAI_ENABLED` flipped from default-on (`!== "false"`) to
+  default-off (`=== "true"`) -- bai now requires an explicit
+  `BAI_ENABLED=true` to be reachable at all. `connectors/llm/router.js`'s
+  `assertProviderEnabled` guard (step 5) already throws a clear config
+  error on this path with no code change needed there.
+- `connectors/delegate/agent/agent_tools.js` and
+  `connectors/delegate/editor/editor_tools.js`: the `provider` param's
+  zod enum trimmed from `["gemini", "bai"]` down to `["gemini"]`, and the
+  bai-specific description text removed, so a calling model listing MCP
+  tools no longer sees bai advertised as an option on either
+  `delegate_agent` or `delegate_editor`. `delegate_designer` was already
+  gemini-only (never had a `provider` param exposing bai) -- confirmed via
+  a repo-wide `search_code` for "bai", no hit in that tool's schema.
+- Fallout, fixed: `test/llm-router.test.js`'s main `providerChat` describe
+  block has several tests exercising bai's DISPATCH behavior (adapter
+  shape, tool/maxOutputTokens/reasoningEffort passthrough, error
+  propagation) against the real, unmocked config default -- which used to
+  be BAI_ENABLED:true and is now false, so those 6 tests started failing
+  on the new disabled-provider error instead of testing what they meant
+  to. Fixed by scoping a `BAI_ENABLED: true` config.js mock to just that
+  describe block (same `vi.doMock`/`vi.importActual` pattern the
+  enable-flags describe block below it already used), leaving the
+  enable-flag tests themselves (which need the real default to test the
+  real default) untouched.
+- Verified via a fresh from-scratch clone + `npm install` + `npx vitest run`
+  after both the config.js flip and the test fix: **47/47 test files,
+  573/573 tests pass.**
+- Not touched: `connectors/bai/client.js`, `connectors/bai/delegate_hooks.js`,
+  `HISTORY_COMPACTION_PROVIDERS` (still defaults to including "bai", i.e.
+  compaction stays configured for bai's behavior *if* it's ever re-enabled
+  -- this flag is about delegate-loop history-compaction behavior once bai
+  is selected, not about whether bai is reachable at all, per BAI_ENABLED's
+  own comment), `docs/API_KEYS.md`'s B.AI section, or any test that calls
+  `runInvestigation`/`seedRun`/`runEditorAgent` directly with
+  `provider: "bai"` (those bypass the MCP-exposed zod schema entirely, so
+  trimming the schema's enum doesn't affect them) -- none of this was in
+  scope for "disable bai, trim the tool schema."
+
 ## Status
 - [x] Step 1
 - [x] Step 2
