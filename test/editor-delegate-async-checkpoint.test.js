@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Covers async delegate_editor groundwork (plan.md Steps 1-3): singleStep
+// Covers async delegate_editor groundwork: singleStep
 // correctness, and specifically the singleStep vs. max_steps: stepsDone + 1
-// distinction called out in Step 2 -- a single-hop test wouldn't catch a
+// distinction -- a single-hop test wouldn't catch a
 // bug where overallMaxSteps silently falls out of the checkpoint the
 // moment a second worker invocation reloads it, so this exercises TWO
 // chained singleStep resumes (simulating two worker hops) and confirms
