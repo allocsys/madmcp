@@ -1877,7 +1877,7 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
     // call site this investigation actually reproduced and root-caused;
     // see connectors/bai/client.js's baiChat for the actual retry logic
     // this pairs with (isReasoningBudgetExhausted).
-    const reasoningEffort = (effectiveProvider === "bai" && isFinalStep) ? "low" : undefined;
+    const reasoningEffort = getDelegateHooks(effectiveProvider).getReasoningEffort(isFinalStep);
     let candidate;
     try {
       candidate = await providerChat(contents, { provider: effectiveProvider, tools: withholdTools ? undefined : FUNCTION_DECLARATIONS, model: effectiveModel, maxOutputTokens: effectiveMaxOutputTokens, reasoningEffort });
