@@ -199,7 +199,7 @@ function logResponseUsage(choice, usage) {
   console.log(`bai: response finish_reason=${finishReason} reasoning_tokens=${reasoningTokens ?? "none"} completion_tokens=${completionTokens ?? "none"} total_tokens=${totalTokens ?? "none"}`);
 }
 
-// Detects the root-caused failure shape (plan.md Section 25): the
+// Detects the root-caused failure shape: the
 // completion hit its max_tokens ceiling (finish_reason "length") with the
 // token budget spent almost entirely on internal reasoning_tokens rather
 // than the visible answer -- i.e. this was NOT a case of a genuinely long,
