@@ -62,7 +62,7 @@ async function setup({ delegateAgentAsync = "sync", pollFreshSeconds = 25, stepD
   vi.doMock("../connectors/delegate/agent/agent_checkpoint.js", () => ({
     loadCheckpoint: mockLoadCheckpoint,
   }));
-  vi.doMock("../connectors/gemini/qstash_client.js", () => ({
+  vi.doMock("../connectors/delegate/qstash_client.js", () => ({
     publishAgentStep: mockPublishAgentStep,
     isQStashConfigured: mockIsQStashConfigured,
   }));
