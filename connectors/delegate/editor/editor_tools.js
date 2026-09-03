@@ -27,7 +27,7 @@
 import { z } from "zod";
 import { runEditorAgent, seedEditorRun } from "./editor_delegate.js";
 import { loadCheckpoint } from "./editor_checkpoint.js";
-import { publishEditorStep, isEditorQStashConfigured } from "../delegate/qstash_client.js";
+import { publishEditorStep, isEditorQStashConfigured } from "../qstash_client.js";
 import {
   DEFAULT_OWNER,
   EDITOR_ALLOWED_EXTENSIONS,
@@ -40,7 +40,7 @@ import {
   EDITOR_AGENT_ASYNC,
   EDITOR_ASYNC_POLL_FRESH_SECONDS,
   EDITOR_ASYNC_STEP_DEAD_SECONDS,
-} from "../../config.js";
+} from "../../../config.js";
 
 function scopeSummary() {
   const pathPart = EDITOR_ALLOWED_PATH_PREFIXES.length
