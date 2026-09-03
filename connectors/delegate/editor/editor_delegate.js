@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_delegate.js -- core agent loop for delegate_editor ("Limited GitHub write access for agent").
+// connectors/delegate/editor/editor_delegate.js -- core agent loop for delegate_editor ("Limited GitHub write access for agent").
 //
 // Adapts connectors/frontend/designer_delegate.js's runDesignAgent shape --
 // same multi-step Gemini function-calling loop, same checkpoint/resume
