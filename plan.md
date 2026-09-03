@@ -204,7 +204,7 @@ connectors/
 ## Status
 - [x] Step 1
 - [x] Step 2
-- [ ] Step 2a
+- [x] Step 2a
 - [ ] Step 3
 - [ ] Step 3b
 - [ ] Step 4
