@@ -45,12 +45,12 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { providerChat } from "../llm/router.js";
-import { formatCascadeLogLine } from "../llm/cascade_log.js";
-import { readFile, writeFile, assertNotDefaultBranch } from "./editor_tool_functions.js";
-import { validateByExtension } from "./editor_validate.js";
+import { providerChat } from "../../llm/router.js";
+import { formatCascadeLogLine } from "../../llm/cascade_log.js";
+import { readFile, writeFile, assertNotDefaultBranch } from "../../github/editor_tool_functions.js";
+import { validateByExtension } from "../../github/editor_validate.js";
 import { saveCheckpoint, loadCheckpoint } from "./editor_checkpoint.js";
-import { isRedisConfigured } from "../shared/cooldown.js";
+import { isRedisConfigured } from "../../shared/cooldown.js";
 import {
   EDITOR_ALLOWED_EXTENSIONS,
   EDITOR_ALLOWED_PATH_PREFIXES,
@@ -59,7 +59,7 @@ import {
   EDITOR_MAX_FILES_PER_RUN,
   EDITOR_MAX_WRITES_PER_FILE,
   EDITOR_MAX_VALIDATE_CALLS,
-} from "../../config.js";
+} from "../../../config.js";
 
 // Same reasoning as connectors/gemini/agent_delegate.js's
 // isTransientGeminiError / designer_delegate.js's copy of it: only 429
