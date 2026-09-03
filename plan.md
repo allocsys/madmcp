@@ -391,6 +391,24 @@ connectors/
      plus both checkpoint modules). Fixed the path and reworded the
      sentence to credit all four providers instead of just Gemini, so the
      doc now matches what step 2a already established about that file.
+   - FOLLOW-UP (comment audit, requested separately after step 8's doc
+     sweep): swept the whole repo for stale self-referencing headers and
+     cross-module comments left over from steps 2/3/3b's moves -- not just
+     docs/. Found and fixed ~25 stale path references across
+     connectors/delegate/agent/*, connectors/delegate/editor/*,
+     connectors/delegate/designer's siblings' comments, connectors/gemini/client.js,
+     connectors/github/files.js, connectors/github/editor_policy.js,
+     connectors/shared/cooldown.js, connectors/shared/rate-limit.js,
+     connectors/frontend/designer_tool_functions.js, connectors/delegate/qstash_client.js,
+     server.js, config.js, and five test/ files. editor_delegate.js alone
+     had 8 separate stale mentions of the pre-move connectors/gemini/agent_delegate.js
+     path. Left alone: bare mentions with no accompanying path (can't be
+     stale the same way), connectors/gemini/client.js references (that file
+     never moved), research_delegate.js's explicitly-historical framing
+     ("from when this file lived under connectors/gemini/"), plan.md's own
+     frozen step-1 tables, and one test-fixture string in
+     agent-tool-call-leakage.test.js. Verified clean via a final
+     repo-wide search_code sweep of every old path pattern.
 
 9. **Final review**
    - Confirm `connectors/gemini/` only contains Gemini API-wrapper code.
