@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { NOTION_INDEX_DATABASE_ID } from "../../config.js";
+import { NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 import {
   notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, entityMarkerBlock, notionBlockPlainText, parseMarkers,
@@ -483,7 +483,70 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// Checkpoint helper (Notion Session Checkpoint Tool - REVISION 2)
+// ---------------------------------------------------------------------------
+export async function doCheckpoint({ action, notes }) {
+  if (action === "save") {
+    let existing = await findPageByEntityId("checkpoint-latest");
+    let pageId;
+    let url;
+    if (!existing) {
+      const created = await doCreatePage({
+        parent_id: NOTION_SYNC_PARENT_PAGE_ID,
+        parent_type: "page",
+        title: "Session Checkpoint",
+        entity_id: "checkpoint-latest",
+        content: "",
+      });
+      pageId = created.id;
+      url = created.url;
+    } else {
+      pageId = existing.pageId;
+      url = existing.url;
+    }
+    const contentLines = (notes || "").split("\n");
+    const synced_at = new Date().toISOString();
+    await replaceSyncedRange({ page_id: pageId, contentLines, synced_at });
+    return `Checkpoint saved successfully.\nURL: ${url}`;
+  } else if (action === "load") {
+    const existing = await findPageByEntityId("checkpoint-latest");
+    if (!existing) {
+      return "No checkpoint found.";
+    }
+    const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
+    const blocks = blocksData.results || [];
+    const range = findSyncRange(blocks);
+    if (!range) {
+      return "No checkpoint found.";
+    }
+    const blockMap = new Map(blocks.map((b) => [b.id, b]));
+    const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
+    const notesContent = notionBlocksToText(innerBlocks);
+    return notesContent || "(empty checkpoint)";
+  } else {
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save" or "load").`);
+  }
+}
+
 export function register(server) {
+
+  server.tool(
+    "checkpoint",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Uses a fixed global checkpoint entity ('checkpoint-latest') stored via overwrite-in-place synced range.",
+    {
+      action: z.enum(["save", "load"]).describe("Action to perform: 'save' to store handoff notes, 'load' to retrieve them"),
+      notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only meaningful for action: 'save')"),
+    },
+    async ({ action, notes }) => {
+      try {
+        const text = await doCheckpoint({ action, notes });
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: err.message }], isError: true };
+      }
+    }
+  );
 
   server.tool(
     "notion_search",
