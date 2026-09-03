@@ -43,8 +43,8 @@ import { loadCheckpoint, saveCheckpoint } from "./editor_checkpoint.js";
 import { publishEditorStep, verifyQStashSignature } from "../qstash_client.js";
 import { EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES } from "../../../config.js";
 
-// Express handler for POST /api/editor-worker (registered in server.js,
-// plan.md Step 5). Always responds 200 for a request that was validly
+// Express handler for POST /api/editor-worker (registered in server.js).
+// Always responds 200 for a request that was validly
 // signed and reached a definite outcome (no-op, chained, dead-lettered,
 // rechain-failed) -- QStash treats any non-2xx as a delivery failure and
 // retries, which is only wanted for genuine transient failures INSIDE
