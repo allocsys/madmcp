@@ -15,6 +15,60 @@ do today, but their code no longer lives inside (or has to be touched inside)
 the gemini directory. Each non-gemini provider also gets its own enable flag
 so it can be turned off independently without touching gemini code.
 
+## Why both connectors/llm/ AND connectors/delegate/ (not redundant)
+These are two different layers, not two names for the same thing:
+- `connectors/llm/` (router.js, cascade_log.js) = the PROVIDER DISPATCH
+  layer -- "given a provider name, how do I actually call it and get back a
+  Gemini-shaped candidate". No looping, no checkpointing, no tool-call
+  bookkeeping. Already correctly neutral (step 1 confirmed all three loops
+  share it).
+- `connectors/delegate/` (new) = the AGENT LOOP layer -- "run N steps of
+  tool-calling, checkpoint between steps, chain a background worker" --
+  built ON TOP of `providerChat()` from `connectors/llm/`, not a
+  replacement for it.
+`connectors/delegate/*` will import from `connectors/llm/router.js`, same
+as today; the dependency direction doesn't change, only where the loop
+files themselves live. Confirmed during step 1 that all three delegate
+loops (agent/gemini, editor, designer) already share router.js -- this
+plan keeps that shared layer as-is and only consolidates the loops that
+sit above it.
+
+## Consolidation scope: all three delegate loops, not just agent+editor
+Step 1 also found that `connectors/frontend/designer_delegate.js` /
+`designer_checkpoint.js` / `designer_tools.js` (backing `delegate_designer`)
+are structurally the SAME kind of thing as the agent/editor loops --
+step-bounded, checkpointable, providerChat-driven tool-calling loop, just
+write-scoped to frontend files instead of read-only or general-repo-write.
+The file-header comments in designer_delegate.js/designer_tools.js already
+say explicitly that they were modeled on connectors/gemini's loop. So this
+refactor folds delegate_designer's LOOP files into `connectors/delegate/`
+too, for the same reason as editor: nobody debugging or changing the
+designer loop's checkpointing/step-cap/resume behavior should need to
+understand or touch connectors/gemini/, and vice versa.
+
+NOT moving: `designer_tool_functions.js` and `validate.js` stay in
+`connectors/frontend/` -- these are the DOMAIN-SPECIFIC tool
+implementations (frontend file-extension allowlist, HTML/CSS/SCSS
+validation), analogous to how editor's own read/write/policy logic stays
+in `connectors/github/` rather than moving into `connectors/delegate/`.
+Only the generic loop scaffolding moves; the concrete tools a given loop
+calls stay with their domain.
+
+## Target layout after this refactor
+```
+connectors/
+  llm/            <- provider dispatch only (router.js, cascade_log.js) -- unchanged
+  delegate/
+    qstash_client.js        <- shared by agent + editor async chains (designer is sync-only, confirmed step 1)
+    agent/                  <- was connectors/gemini/{agent_delegate,agent_checkpoint,agent_worker,agent_tools}.js
+    editor/                 <- was connectors/github/{editor_delegate,editor_checkpoint,editor_worker,editor_tools}.js
+    designer/                <- was connectors/frontend/{designer_delegate,designer_checkpoint,designer_tools}.js
+  gemini/         <- client.js only (Gemini API wrapper)
+  bai/ glm/ groq/  <- unchanged, each provider's own client.js (+ new delegate_hooks.js for bai, step 4)
+  github/          <- domain tools (files.js, files write policy, etc.) minus the editor loop
+  frontend/        <- designer_tool_functions.js, validate.js (domain tools) minus the designer loop
+```
+
 ## Sequential steps
 
 1. **Inventory & freeze current behavior** ✅ DONE
