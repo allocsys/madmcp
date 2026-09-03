@@ -530,7 +530,10 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
 // Checkpoint helper (Notion Session Checkpoint Tool - REVISION 3, 2026-09-04
 // -- switched off the mem0 sync markers, which wrote confusing/inaccurate
 // "SYNCED FROM MEM0" text on every checkpoint save even though this tool has
-// nothing to do with mem0. See client.js's checkpoint marker convention.)
+// nothing to do with mem0. See client.js's checkpoint marker convention.
+// REDEPLOY TRIGGER: madmcp.vercel.app's alias got stuck on 554a108 (the
+// client.js-only commit) instead of advancing to this commit -- this no-op
+// comment forces a new deployment so the alias promotion re-runs.)
 // ---------------------------------------------------------------------------
 export async function doCheckpoint({ action, notes }) {
   if (action === "save") {
