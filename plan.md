@@ -272,7 +272,7 @@ connectors/
      connectors/bai/delegate_hooks.js (its one remaining consumer) reference
      it -- agent_delegate.js no longer imports or checks it directly.
 
-5. **Add explicit per-provider enable flags**
+5. **Add explicit per-provider enable flags** ✅ DONE
    - `BAI_ENABLED`, `GLM_ENABLED`, `GROQ_ENABLED` in config.js, default
      matching current behavior (on, since they're already reachable).
    - `router.js` checks the flag before dispatching to that provider and
@@ -280,6 +280,22 @@ connectors/
      misbehaving.
    - `BAI_ENABLED=false` (etc.) must not require touching anything under
      `connectors/gemini/` or the neutral delegate loop.
+   - DONE NOTE: found already fully implemented on the branch when this
+     step was picked up -- no code changes needed, just verification.
+     `config.js` defines all three flags (`GLM_ENABLED`, `GROQ_ENABLED`,
+     `BAI_ENABLED`), each `process.env.X_ENABLED !== "false"` (default on).
+     `connectors/llm/router.js` has an `assertProviderEnabled(provider,
+     enabled)` helper called at the top of the glm/groq/bai branches of
+     `providerChat()`, before any client call or key lookup, throwing
+     `Provider "X" is disabled (X_ENABLED=false). Set X_ENABLED=true (or
+     unset it) to re-enable, or choose a different provider.` -- a clear
+     config error rather than a bad/missing API key failing obscurely deep
+     inside that provider's client. Gemini has no flag of its own (stays
+     the always-on default/fallback branch), and neither `router.js`'s
+     changes nor the flags themselves touch `connectors/gemini/` or any
+     file under `connectors/delegate/` -- confirmed via `search_code` for
+     `ENABLED` across the repo, only hits are the three config.js
+     definitions and their three router.js call sites.
 
 6. **Update delegate_agent / delegate_editor tool schemas**
    - No change to the `provider` enum (`["gemini", "bai"]`) unless we decide
