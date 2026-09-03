@@ -272,6 +272,10 @@ export const GROQ_FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS || "qwen/q
   .filter(Boolean);
 export const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS) || 55000;
 export const GROQ_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_DEFAULT_MAX_OUTPUT_TOKENS) || 4096;
+// Same enable-flag pattern as GLM_ENABLED above -- see its comment for the
+// full reasoning (decouple-gemini-delegation plan, step 5). Defaults to
+// true, matching current behavior.
+export const GROQ_ENABLED = process.env.GROQ_ENABLED !== "false";
 
 // ---------------------------------------------------------------------------
 // B.AI (api.b.ai) -- third delegate_agent provider option, OpenAI-compatible
