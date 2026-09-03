@@ -129,7 +129,7 @@ app.use(helmet());
 // Raise body size limit from the 100kb default to 10mb so that push_files
 // and create_or_update_file can handle large source files without truncation.
 // `verify` stashes the raw request body bytes on req.rawBody -- needed by
-// /api/agent-worker (connectors/gemini/agent_worker.js) to verify QStash's
+// /api/agent-worker (connectors/delegate/agent/agent_worker.js) to verify QStash's
 // request signature against the EXACT bytes QStash signed, since the
 // already-JSON.parsed req.body cannot be re-serialized back to a
 // byte-for-byte match (key order/whitespace aren't preserved). Cheap for
