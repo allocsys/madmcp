@@ -250,6 +250,14 @@ export const GLM_FALLBACK_MODELS = (process.env.GLM_FALLBACK_MODELS || "")
   .filter(Boolean);
 export const GLM_REQUEST_TIMEOUT_MS = Number(process.env.GLM_REQUEST_TIMEOUT_MS) || 55000;
 export const GLM_DEFAULT_MAX_OUTPUT_TOKENS = Number(process.env.GLM_DEFAULT_MAX_OUTPUT_TOKENS) || 8192;
+// Explicit per-provider enable flag (decouple-gemini-delegation plan, step
+// 5): defaults to true, matching current behavior (glm is already
+// reachable via providerChat's `provider: "glm"` with no gate at all).
+// router.js checks this before ever calling glmChat -- set GLM_ENABLED=false
+// to turn glm off deployment-wide with a clear config error instead of
+// letting a bad/missing OPENROUTER_API_KEYS fail obscurely deep inside the
+// glm client on first real use.
+export const GLM_ENABLED = process.env.GLM_ENABLED !== "false";
 export const DEFAULT_LLM_PROVIDER = process.env.DEFAULT_LLM_PROVIDER || "gemini";
 
 export const GROQ_API_KEYS = (process.env.GROQ_API_KEYS || "")
