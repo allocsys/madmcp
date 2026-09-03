@@ -440,6 +440,74 @@ export function findSyncRange(blocks = []) {
   return null; // start with no matching end -- treat as not-found, see above
 }
 
+// ---------------------------------------------------------------------------
+// Checkpoint marker convention (2026-09-04 bug fix -- the checkpoint tool
+// was reusing the mem0 sync markers above, which hardcode "SYNCED FROM
+// MEM0" text that's simply wrong for a tool that has nothing to do with
+// mem0. Same block-range-protection mechanism as the sync markers (start
+// marker / content / end marker, only content strictly between the two is
+// ever deleted/replaced on a re-save) -- that part of the design is sound
+// and worth keeping -- just with wording that describes what actually wrote
+// the content instead of a copy-pasted mem0 label.
+const CHECKPOINT_START_PREFIX = "\u2705 Checkpoint saved with MCP tool call, don't edit manually (updated: ";
+const CHECKPOINT_START_SUFFIX = ")";
+const CHECKPOINT_END_TEXT     = "\u2705 End synced checkpoint";
+
+export function buildCheckpointStartText(updated_at) {
+  return `${CHECKPOINT_START_PREFIX}${updated_at}${CHECKPOINT_START_SUFFIX}`;
+}
+
+function parseCheckpointStartText(text) {
+  if (!text || !text.startsWith(CHECKPOINT_START_PREFIX) || !text.endsWith(CHECKPOINT_START_SUFFIX)) return null;
+  return text.slice(CHECKPOINT_START_PREFIX.length, text.length - CHECKPOINT_START_SUFFIX.length);
+}
+
+export function buildCheckpointEndText() {
+  return CHECKPOINT_END_TEXT;
+}
+
+export function isCheckpointEndText(text) {
+  return text === CHECKPOINT_END_TEXT;
+}
+
+// Mirrors buildSyncRangeBlocks above -- builds a complete checkpoint range
+// (start marker + content + end marker) as one block list, for seeding a
+// brand-new page's initial content in one shot.
+export function buildCheckpointRangeBlocks({ updated_at, contentLines }) {
+  const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
+  return [textBlock(buildCheckpointStartText(updated_at)), ...contentBlocks, textBlock(CHECKPOINT_END_TEXT)];
+}
+
+// Mirrors findSyncRange above, scanning for the checkpoint markers instead
+// of the mem0 sync markers. Same not-found-on-unterminated-range safety
+// reasoning applies.
+export function findCheckpointRange(blocks = []) {
+  let startIdx = -1;
+  let updated_at = null;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== "paragraph") continue;
+    const text = notionRichTextToString(b.paragraph?.rich_text || []);
+    const parsed = parseCheckpointStartText(text);
+    if (parsed !== null) { startIdx = i; updated_at = parsed; break; }
+  }
+  if (startIdx === -1) return null;
+  for (let i = startIdx + 1; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== "paragraph") continue;
+    const text = notionRichTextToString(b.paragraph?.rich_text || []);
+    if (isCheckpointEndText(text)) {
+      return {
+        updated_at,
+        startBlockId: blocks[startIdx].id,
+        endBlockId: blocks[i].id,
+        innerBlockIds: blocks.slice(startIdx + 1, i).map((bb) => bb.id),
+      };
+    }
+  }
+  return null;
+}
+
 export function notionBlocksToText(blocks = []) {
   return blocks
     .map((b) => {
