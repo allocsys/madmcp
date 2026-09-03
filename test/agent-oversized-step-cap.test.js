@@ -57,7 +57,7 @@ vi.mock("../connectors/github/helpers.js", () => ({
 
 describe("oversized-step guardrails (plan.md Section 9 root-cause fix)", () => {
   it("caps the number of tool calls executed in a single step and defers the rest", async () => {
-    const { runInvestigation, MAX_TOOL_CALLS_PER_STEP } = await import("../connectors/gemini/agent_delegate.js");
+    const { runInvestigation, MAX_TOOL_CALLS_PER_STEP } = await import("../connectors/delegate/agent/agent_delegate.js");
     const routerModule = await import("../connectors/llm/router.js");
 
     // Model batches MAX_TOOL_CALLS_PER_STEP + 3 calls into a single step --
