@@ -169,7 +169,7 @@ export async function handleEditorWorker(req, res) {
     // perfectly valid "running" state with a fresh lastStepAt (saved by
     // runEditorAgent's own per-step checkpoint write, not by this file), so
     // a stale-lastStepAt fallback in editor_tools.js's polling branch
-    // (plan.md Step 7) can detect this as a broken chain and resume
+    // can detect this as a broken chain and resume
     // synchronously on the next poll -- a failed publish here is not a
     // silent stranding, just a slower recovery path than the chain
     // continuing on its own.
