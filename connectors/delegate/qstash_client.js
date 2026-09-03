@@ -76,7 +76,7 @@ export async function publishAgentStep({ runId, afterStep, retryCount = 0 }) {
   const client = getQStashClient();
   if (!client) throw new Error("QSTASH_TOKEN is not set -- cannot publish to QStash.");
   if (!AGENT_WORKER_URL) throw new Error("AGENT_WORKER_URL is not set -- cannot publish to QStash without a target URL for the worker endpoint.");
-  // retries/failureCallback (plan.md Section 13): see config.js's
+  // retries/failureCallback configuration: see config.js's
   // AGENT_WORKER_FAILURE_URL comment for the full reasoning -- previously
   // neither was set, so a step that hard-timed-out on every delivery
   // attempt could exhaust QStash's own (default 3-retry, ~40min) budget
