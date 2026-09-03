@@ -86,8 +86,7 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     // connectors/bai/client.js's baiChat for what this actually does
     // (sent as body.reasoning_effort) and connectors/bai/delegate_hooks.js
     // for the one call site that currently sets it (the bai forced-final
-    // step, to mitigate the reasoning-token-budget-exhaustion failure mode
-    // documented in plan.md Section 25).
+    // step, to mitigate the reasoning-token-budget-exhaustion failure mode).
     const choice = await baiChat(messages, { tools: openAITools, maxOutputTokens, reasoningEffort });
     return fromOpenAIChoice(choice);
   }
