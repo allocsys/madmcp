@@ -408,5 +408,5 @@ connectors/
 - [x] Step 5
 - [x] Step 6
 - [x] Step 7
-- [ ] Step 8
+- [x] Step 8
 - [ ] Step 9
