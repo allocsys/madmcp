@@ -52,7 +52,7 @@ Works unauthenticated at low rate limits — only provision this if you're hitti
 
 ### Upstash Redis / Vercel KV — `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`) (optional)
 [![Create Upstash Redis](https://img.shields.io/badge/Create-Upstash_Redis-00E9A3?style=for-the-badge)](https://console.upstash.com/redis)
-> Optional — persists Gemini's per-model rate-limit cooldowns and `delegate_agent` resume checkpoints across calls. Fails open (no cross-call memory, but nothing breaks) if unset. On Vercel, easier to add via **Storage → Create Database → Upstash for Redis** (Marketplace integration) instead of the link above — either path works, just note which var names your integration hands you (the two naming pairs above are interchangeable, `connectors/gemini/cooldown.js` accepts either).
+> Optional — persists per-model rate-limit cooldowns (shared across Gemini, GLM, Groq, and B.AI) and `delegate_agent` resume checkpoints across calls. Fails open (no cross-call memory, but nothing breaks) if unset. On Vercel, easier to add via **Storage → Create Database → Upstash for Redis** (Marketplace integration) instead of the link above — either path works, just note which var names your integration hands you (the two naming pairs above are interchangeable, `connectors/shared/cooldown.js` accepts either).
 
 ### MCP_SHARED_KEY — your own secret (not a provider credential)
 [![Generate Secret](https://img.shields.io/badge/Generate-Random_Secret-333333?style=for-the-badge)](https://generate-secret.vercel.app/32)
