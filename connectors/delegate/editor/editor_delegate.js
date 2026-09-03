@@ -280,7 +280,7 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
 
   const checkpoint = resume_run_id ? await loadCheckpoint(resume_run_id) : null;
 
-  // Async delegate_editor (plan.md Step 7 needs this): a checkpoint whose
+  // Async delegate_editor: a checkpoint whose
   // last save recorded status "done" already has a final answer sitting in
   // Redis (see the completion path near the end of this function). Return
   // it directly rather than re-entering the loop, which would otherwise
