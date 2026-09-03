@@ -23,10 +23,30 @@ import { glmChat } from "../glm/client.js";
 import { groqChat } from "../groq/client.js";
 import { baiChat } from "../bai/client.js";
 import { toOpenAIMessages, toOpenAITools, fromOpenAIChoice } from "../openai_shape/adapter.js";
-import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS } from "../../config.js";
+import { GLM_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_DEFAULT_MAX_OUTPUT_TOKENS, GLM_ENABLED, GROQ_ENABLED, BAI_ENABLED } from "../../config.js";
+
+// Explicit per-provider enable flags (decouple-gemini-delegation plan, step
+// 5): each of glm/groq/bai can be turned off deployment-wide independently
+// via its own <PROVIDER>_ENABLED env var (config.js, default true --
+// matching current behavior, since all three were already reachable with
+// no gate at all). Checked here, once, before that branch does anything
+// else -- a disabled provider fails immediately with a clear config error
+// instead of silently misbehaving further down (e.g. a bad/missing API key
+// failing obscurely inside that provider's own client). gemini has no flag
+// of its own: it's the default/fallback provider and always reachable, same
+// as before this change.
+function assertProviderEnabled(provider, enabled) {
+  if (!enabled) {
+    throw new Error(
+      `Provider "${provider}" is disabled (${provider.toUpperCase()}_ENABLED=false). ` +
+      `Set ${provider.toUpperCase()}_ENABLED=true (or unset it) to re-enable, or choose a different provider.`
+    );
+  }
+}
 
 export async function providerChat(contents, { provider = "gemini", tools, model, maxOutputTokens, reasoningEffort } = {}) {
   if (provider === "glm") {
+    assertProviderEnabled("glm", GLM_ENABLED);
     const messages = toOpenAIMessages(contents);
     const openAITools = tools ? toOpenAITools(tools) : undefined;
     // A caller-supplied maxOutputTokens is honored exactly (same "explicit
@@ -40,6 +60,7 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     return fromOpenAIChoice(choice);
   }
   if (provider === "groq") {
+    assertProviderEnabled("groq", GROQ_ENABLED);
     // Same adapter reuse and "explicit value wins, otherwise apply the
     // provider's own default" contract as the glm branch above -- see
     // connectors/groq/client.js's header and config.js's
@@ -51,6 +72,7 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     return fromOpenAIChoice(choice);
   }
   if (provider === "bai") {
+    assertProviderEnabled("bai", BAI_ENABLED);
     // No forced maxOutputTokens default, unlike the glm/groq branches above
     // -- see config.js's comment on BAI_API_KEYS for why (B.AI's
     // GLM-5.3-Flash is free, so there's no equivalent cost-runaway risk to
@@ -62,7 +84,7 @@ export async function providerChat(contents, { provider = "gemini", tools, model
     // reasoningEffort is opt-in and passed through exactly as given (no
     // default forced here, same as maxOutputTokens above) -- see
     // connectors/bai/client.js's baiChat for what this actually does
-    // (sent as body.reasoning_effort) and connectors/gemini/agent_delegate.js
+    // (sent as body.reasoning_effort) and connectors/bai/delegate_hooks.js
     // for the one call site that currently sets it (the bai forced-final
     // step, to mitigate the reasoning-token-budget-exhaustion failure mode
     // documented in plan.md Section 25).
