@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // dead-lettering after repeated same-step failures. Same fake-Redis approach
 // as test/agent-worker.test.js so checkpoint state is exercised for real
 // rather than mocked away -- EXCEPT editor_checkpoint.js is a whole-blob
-// overwrite (see its own header, plan.md Step 1), not agent_checkpoint.js's
+// overwrite (see its own header), not agent_checkpoint.js's
 // list+meta split, so the fake here only needs get/set/del, not
 // rpush/lrange/expire.
 //
