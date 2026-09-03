@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/agent_delegate.js — read-only investigation loop.
+// connectors/delegate/agent/agent_delegate.js — read-only investigation loop.
 //
 // Lets Gemini run its OWN multi-step tool-use loop server-side (via Gemini
 // function calling) to answer an open-ended question, instead of the
