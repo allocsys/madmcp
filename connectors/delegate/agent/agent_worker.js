@@ -111,7 +111,7 @@ export async function handleAgentWorker(req, res) {
   const invocationId = randomUUID();
   debugLog(`agent-worker[${invocationId}]: entry runId=${runId} afterStep=${afterStep} retryCount=${retryCount}`);
 
-  // Dead-letter blind spot fix (plan.md Section 9, priority #3): `retryCount`
+  // Dead-letter blind spot fix and checkpoint status: `retryCount`
   // above only reflects failures THIS handler lived long enough to observe
   // and persist (via the publishAgentStep re-chain call below, threading
   // newRetryCount into the next message's body). A Vercel platform timeout
@@ -322,7 +322,7 @@ export async function handleAgentWorker(req, res) {
 }
 
 // ---------------------------------------------------------------------------
-// handleAgentWorkerFailure (plan.md Section 13) -- Express handler for
+// handleAgentWorkerFailure -- Express handler for
 // POST /api/agent-worker-failure, the QStash failureCallback target
 // configured in publishAgentStep (qstash_client.js). QStash calls THIS
 // endpoint -- as its own separately-signed message, not a redelivery of the
