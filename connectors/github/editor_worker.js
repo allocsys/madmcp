@@ -40,7 +40,7 @@
 
 import { runEditorAgent } from "./editor_delegate.js";
 import { loadCheckpoint, saveCheckpoint } from "./editor_checkpoint.js";
-import { publishEditorStep, verifyQStashSignature } from "../gemini/qstash_client.js";
+import { publishEditorStep, verifyQStashSignature } from "../delegate/qstash_client.js";
 import { EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES } from "../../config.js";
 
 // Express handler for POST /api/editor-worker (registered in server.js,
