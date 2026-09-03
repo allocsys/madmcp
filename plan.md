@@ -318,7 +318,7 @@ connectors/
      full message text intact. No gap found -- both tools already surface a
      clear, actionable error for a disabled provider.
 
-7. **Update tests**
+7. **Update tests** ✅ DONE
    - Move/rename test files to match new module locations
      (`test/agent-delegate*.test.js`, `test/editor-delegate*.test.js`,
      designer's equivalents if any exist under test/, etc.) and fix every
@@ -326,6 +326,54 @@ connectors/
      designer table added in step 1).
    - Add coverage for the new enable-flag behavior (disabled provider ->
      clear error, gemini unaffected).
+   - DONE NOTE: renaming turned out to be a non-issue -- every test file
+     under `test/` was already named by feature (`agent-*.test.js`,
+     `editor-*.test.js`, `frontend-agent-*.test.js`), never by the old
+     `gemini`/`github` module path, so nothing needed renaming. The real
+     work was (1) actually running the suite, which earlier steps' static
+     `search_code` sweeps hadn't caught, and (2) new coverage:
+     - Found and fixed 7 genuinely stale (non-cosmetic) dynamic-import/mock
+       lines left over from steps 2/2a's `connectors/gemini/agent_*` ->
+       `connectors/delegate/agent/agent_*` move, in two files:
+       `test/agent-worker.test.js` (6 lines -- 2 inline `runInvestigation`
+       imports mid-test, plus a 3-line `beforeEach` block in the
+       `handleAgentWorkerFailure` describe importing `agent_worker.js`/
+       `agent_delegate.js`/`agent_checkpoint.js` from the old path, plus one
+       stale header comment) and `test/agent-oversized-step-cap.test.js`
+       (1 line, its second test's `runInvestigation`/`MAX_TOOL_CALLS_PER_STEP`/
+       `MAX_STEP_RESULT_CHARS` import). Confirmed these were real breakage,
+       not just staleness: `npx vitest run` on a clean local checkout of
+       this branch failed both files with `Cannot find module
+       '/connectors/gemini/agent_delegate.js'` (and the same for
+       `agent_worker.js`/`agent_checkpoint.js`) before the fix, plus two
+       confusing swapped-looking `chained`/`done` assertion failures in
+       `agent-worker.test.js` that turned out to be pure cascade noise from
+       the earlier broken import in the same file, not a real bug.
+     - Added a new `describe("connectors/llm/router.js — per-provider
+       enable flags (step 5)")` block to `test/llm-router.test.js` (6 new
+       tests): GLM_ENABLED/GROQ_ENABLED/BAI_ENABLED each false ->
+       `providerChat` rejects with the exact `Provider "X" is disabled
+       (X_ENABLED=false)...` message and the corresponding client
+       (`glmChat`/`groqChat`/`baiChat`) is never called; gemini stays
+       reachable (explicit `provider: "gemini"` and the no-`provider`
+       default) even with all three others disabled at once; and a final
+       regression check that GLM_ENABLED reverts to its real default once
+       the per-test `vi.doMock("../config.js", ...)` override is torn down
+       in `afterEach`, confirming the mock isn't sticky across tests. Each
+       test mocks only the one flag under test via `vi.importActual` +
+       override, so the file's existing dispatch tests (which rely on the
+       real, all-enabled default) are untouched.
+     - Verified via a fresh, from-scratch clone of this exact branch (not
+       just the working copy these edits were made in) plus `npm install`
+       and `npx vitest run`: **47/47 test files, 573/573 tests pass.**
+     - Final repo-wide sweep (`grep` across `test/`, `connectors/`,
+       `server.js`) for every old path pattern from step 1's tables found
+       zero remaining functional references -- only cosmetic prose/header
+       comments (files explaining their own lineage, e.g. "Adapts
+       connectors/frontend/designer_delegate.js's shape") and the
+       `agent-tool-call-leakage.test.js` example path strings, matching the
+       same precedent steps 2/3/3b's own sweeps already established for
+       leaving those alone.
 
 8. **Docs**
    - Update README.md / docs/ if they reference `connectors/gemini/` paths
