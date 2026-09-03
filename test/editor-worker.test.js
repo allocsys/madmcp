@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Covers the QStash worker endpoint itself (connectors/github/editor_worker.js):
+// Covers the QStash worker endpoint itself (connectors/delegate/editor/editor_worker.js):
 // signature verification (fail-closed), idempotency (stepsDone/afterStep
 // mismatch -> no-op), re-chaining on a successful-but-unfinished step, and
 // dead-lettering after repeated same-step failures. Same fake-Redis approach
