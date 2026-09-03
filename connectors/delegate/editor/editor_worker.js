@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/editor_worker.js -- QStash-invoked HTTP endpoint that
+// connectors/delegate/editor/editor_worker.js -- QStash-invoked HTTP endpoint that
 // advances a delegate_editor run one step at a time in the background,
 // same self-chaining pattern as connectors/gemini/agent_worker.js (see that
 // file's own header for the full singleStep-vs-max_steps rationale --
