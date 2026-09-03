@@ -191,10 +191,10 @@ app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
 // of the /mcp middleware stack above.
 app.post("/api/agent-worker", handleAgentWorker);
 
-// QStash failureCallback target for publishAgentStep (plan.md Section 13) --
-// called by QStash itself, as its own separately-signed message, the moment
-// it gives up delivering the original /api/agent-worker message (now
-// immediately, since publishAgentStep sets retries: QSTASH_STEP_RETRIES = 0).
+// QStash failureCallback target for publishAgentStep -- called by QStash
+// itself, as its own separately-signed message, the moment it gives up
+// delivering the original /api/agent-worker message (now immediately,
+// since publishAgentStep sets retries: QSTASH_STEP_RETRIES = 0).
 // Same auth/middleware reasoning as /api/agent-worker above: not behind
 // requireMcpKey/requireAllowedIp/mcpLimiter, since this is QStash-originated
 // traffic authenticated entirely by handleAgentWorkerFailure's own
