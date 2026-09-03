@@ -93,7 +93,17 @@ connectors/
    Confirmed NOT moving / already correctly neutral (no change needed):
    - `connectors/llm/router.js` — already shared by designer_delegate.js, agent_delegate.js, AND editor_delegate.js. Good home already.
    - `connectors/shared/cooldown.js` (Redis) — already shared by every provider client.js plus both checkpoint modules.
-   - `connectors/frontend/designer_delegate.js` / `designer_tool_functions.js` — only reference agent_delegate.js in comments as a design pattern they parallel; NOT an actual import. No coupling to undo there.
+   - `connectors/frontend/designer_delegate.js` / `designer_tool_functions.js` — only reference agent_delegate.js in comments as a design pattern they parallel; NOT an actual import, so there's no broken-import coupling to fix for designer. (It's still in scope for the move in step 3b below, for structural consistency -- see "Consolidation scope" section above -- just not because anything is currently cross-importing gemini/ code.)
+
+   Designer loop files and their consumers (for step 3b):
+
+   | File | Imported by |
+   |---|---|
+   | designer_delegate.js (`runDesignAgent`) | designer_tools.js |
+   | designer_checkpoint.js | designer_delegate.js, designer_tools.js |
+   | designer_tools.js | server.js (`import * as frontend`) |
+
+   designer_tool_functions.js and validate.js are NOT moving (domain-specific tools, see "Consolidation scope" above) -- confirmed designer_delegate.js imports `readFile, writeFile, validate` from designer_tool_functions.js, which stays in connectors/frontend/.
 
    Cross-directory import confirmed as the concrete coupling to fix: `connectors/github/editor_tools.js` currently imports `qstash_client.js` via a `../gemini/` relative path — this is the literal case of "can't touch bai/editor async plumbing without reaching into connectors/gemini/" the whole plan exists to fix.
 
