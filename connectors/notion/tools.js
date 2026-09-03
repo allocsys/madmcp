@@ -10,6 +10,7 @@ import {
   buildChangelogEntryText, isChangelogEntryText,
   buildRelationBlocks, parseRelationBlocks,
   buildSyncStartText, buildSyncEndText, buildSyncRangeBlocks, findSyncRange, textBlock,
+  buildCheckpointRangeBlocks, findCheckpointRange, buildCheckpointStartText,
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
 
@@ -484,24 +485,65 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
 }
 
 // ---------------------------------------------------------------------------
-// Checkpoint helper (Notion Session Checkpoint Tool - REVISION 2)
+// Checkpoint range replace -- mirrors replaceSyncedRange below, but reads/
+// writes the checkpoint markers (client.js's findCheckpointRange /
+// buildCheckpointStartText) instead of the mem0 sync markers. Kept as its
+// own function rather than parameterizing replaceSyncedRange, since the two
+// callers (mem0 sync vs. checkpoint save) have historically diverged in
+// small ways and mem0-specific skip/logging behavior in replaceSyncedRange
+// shouldn't silently start applying to checkpoint saves or vice versa.
+export async function replaceCheckpointRange({ page_id, contentLines, updated_at }) {
+  const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
+  const blocks = blocksData.results || [];
+  const range = findCheckpointRange(blocks);
+
+  if (!range) {
+    const children = buildCheckpointRangeBlocks({ updated_at, contentLines });
+    await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
+    return { action: "created", blockCount: children.length };
+  }
+
+  // Unlike replaceSyncedRange, always overwrite -- a checkpoint save is
+  // meant to reflect "now", so there's no meaningful "already up to date"
+  // skip case the way there is for a mem0 memory that hasn't changed.
+  for (const blockId of range.innerBlockIds) {
+    await notionRequest(`/blocks/${blockId}`, { method: "DELETE" });
+  }
+
+  const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
+  if (contentBlocks.length) {
+    await notionRequest(`/blocks/${page_id}/children`, {
+      method: "PATCH",
+      body: { children: contentBlocks, after: range.startBlockId },
+    });
+  }
+
+  await notionRequest(`/blocks/${range.startBlockId}`, {
+    method: "PATCH",
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildCheckpointStartText(updated_at) } }] } },
+  });
+
+  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousUpdatedAt: range.updated_at };
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint helper (Notion Session Checkpoint Tool - REVISION 3, 2026-09-04
+// -- switched off the mem0 sync markers, which wrote confusing/inaccurate
+// "SYNCED FROM MEM0" text on every checkpoint save even though this tool has
+// nothing to do with mem0. See client.js's checkpoint marker convention.)
 // ---------------------------------------------------------------------------
 export async function doCheckpoint({ action, notes }) {
   if (action === "save") {
     const existing = await findPageByEntityId("checkpoint-latest");
     const notesLines = (notes || "").split("\n");
-    const synced_at = new Date().toISOString();
+    const updated_at = new Date().toISOString();
 
     if (!existing) {
-      // Seed the synced range directly in the page's initial content
-      // instead of creating an empty page and immediately patching the
-      // range into it via replaceSyncedRange -- that would leave the page
-      // briefly rangeless, and replaceSyncedRange always re-reads the
-      // page's blocks first to check for an existing range, which a
-      // brand-new page can never have. doCreatePage's content splitting
-      // (one paragraph block per non-empty line) matches the shape
-      // buildSyncRangeBlocks produces, so the markers survive intact.
-      const contentText = [buildSyncStartText(synced_at), ...notesLines, buildSyncEndText()].join("\n");
+      // Seed the checkpoint range directly in the page's initial content,
+      // same reasoning as before: avoids a briefly rangeless page, and
+      // replaceCheckpointRange always re-reads blocks first to check for an
+      // existing range, which a brand-new page can never have.
+      const contentText = [buildCheckpointStartText(updated_at), ...notesLines, "\u2705 End synced checkpoint"].join("\n");
       const created = await doCreatePage({
         parent_id: NOTION_SYNC_PARENT_PAGE_ID,
         parent_type: "page",
@@ -512,7 +554,7 @@ export async function doCheckpoint({ action, notes }) {
       return `Checkpoint saved successfully.\nURL: ${created.url}`;
     }
 
-    await replaceSyncedRange({ page_id: existing.pageId, contentLines: notesLines, synced_at });
+    await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
     return `Checkpoint saved successfully.\nURL: ${existing.url}`;
   } else if (action === "load") {
     const existing = await findPageByEntityId("checkpoint-latest");
@@ -521,7 +563,7 @@ export async function doCheckpoint({ action, notes }) {
     }
     const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
     const blocks = blocksData.results || [];
-    const range = findSyncRange(blocks);
+    const range = findCheckpointRange(blocks);
     if (!range) {
       return "No checkpoint found.";
     }
