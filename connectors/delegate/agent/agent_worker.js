@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/gemini/agent_worker.js — QStash-invoked HTTP endpoint that
+// connectors/delegate/agent/agent_worker.js — QStash-invoked HTTP endpoint that
 // advances a delegate_agent run one step at a time in the background
 // (Scenario B: self-chaining QStash worker).
 //
