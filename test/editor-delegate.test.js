@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // test/editor-delegate.test.js
 //
-// Coverage for connectors/github/editor_delegate.js's runEditorAgent loop,
+// Coverage for connectors/delegate/editor/editor_delegate.js's runEditorAgent loop,
 // focused on the guardrails that are specific to THIS loop rather than
 // already covered by test/editor-tool-functions.test.js (guardrails
 // #2/#3/#4, enforced at the tool layer) or test/editor-policy.test.js
