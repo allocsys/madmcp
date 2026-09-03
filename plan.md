@@ -122,7 +122,7 @@ so it can be turned off independently without touching gemini code.
    - Run full test suite.
 
 ## Status
-- [ ] Step 1
+- [x] Step 1
 - [ ] Step 2
 - [ ] Step 2a
 - [ ] Step 3
