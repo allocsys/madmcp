@@ -4,7 +4,7 @@
 // Covers the agent_tools.js branching logic: test/agent-worker.test.js and
 // test/agent-delegate-async-checkpoint.test.js cover the worker endpoint and
 // the underlying runInvestigation resume mechanics respectively, but neither
-// exercises connectors/gemini/agent_tools.js's delegate_agent handler itself
+// exercises connectors/delegate/agent/agent_tools.js's delegate_agent handler itself
 // -- the branching (fresh start / poll-fresh / poll-stale-fallback / done /
 // failed), gated by DELEGATE_AGENT_ASYNC + isQStashConfigured().
 //
