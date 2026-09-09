@@ -55,7 +55,7 @@ import { DEFAULT_OWNER } from "../../../config.js";
 import { getDelegateHooks } from "../provider_hooks.js";
 import { appendTask, buildAgentPreamble } from "../shared/preamble.js";
 
-const HARD_MAX_STEPS = 30;
+const HARD_MAX_STEPS = 40;
 export const HISTORY_FULL_DETAIL_STEPS = 3;
 export const COMPACTION_CHAR_THRESHOLD = 500;
 
