@@ -574,83 +574,8 @@ export async function doCheckpoint({ action, notes, replacements, append_notes }
     const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
     const notesContent = notionBlocksToText(innerBlocks);
     return notesContent || "(empty checkpoint)";
-  } else if (action === "update") {
-    // Targeted edit path -- avoids replaceCheckpointRange's delete-every-
-    // inner-block-then-recreate behavior, which is wasteful (and racks up
-    // real Notion API calls) when a session just wants to tweak or extend
-    // an existing checkpoint rather than replace it wholesale.
-    const existing = await findPageByEntityId("checkpoint-latest");
-    if (!existing) {
-      throw new Error("No checkpoint found to update -- use action: \"save\" first to create one.");
-    }
-    if (!replacements?.length && !append_notes) {
-      throw new Error("action: \"update\" requires at least one of 'replacements' or 'append_notes' -- otherwise there's nothing to update. Use action: \"save\" for a full rewrite, or action: \"load\" to just read the current content.");
-    }
-    const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
-    const blocks = blocksData.results || [];
-    const range = findCheckpointRange(blocks);
-    if (!range) {
-      throw new Error("Checkpoint page exists but no checkpoint range was found on it (may exceed the 100-block read window) -- use action: \"save\" to recreate it cleanly.");
-    }
-    const blockMap = new Map(blocks.map((b) => [b.id, b]));
-    const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
-    const results = [];
-    const trunc = (s) => s.slice(0, 60) + (s.length > 60 ? "\u2026" : "");
-
-    if (replacements?.length) {
-      // Validate ALL replacements against the pre-write snapshot before
-      // writing ANY of them (bug fix 2026-09-07 -- previously this loop
-      // validated and PATCHed each replacement in the same iteration, so a
-      // bad find later in the list threw AFTER earlier ones had already
-      // been written to Notion, even though the error claimed "nothing
-      // further written". That left checkpoints silently half-updated.
-      // Block IDs don't change across these edits, so it's safe to resolve
-      // every find against the same original innerBlocks snapshot up front.
-      const resolved = replacements.map(({ find, replace }) => {
-        const matches = innerBlocks.filter((b) => notionBlockPlainText(b) === find);
-        if (matches.length === 0) {
-          throw new Error(`Update aborted, nothing written \u2014 "${trunc(find)}" was not found among the checkpoint's current lines. Use checkpoint (action: "load") to see current content, or action: "save" for a full rewrite.`);
-        }
-        if (matches.length > 1) {
-          throw new Error(`Update aborted, nothing written \u2014 "${trunc(find)}" matches ${matches.length} lines, but must be unique. Include more surrounding context in "find" to disambiguate.`);
-        }
-        return { block: matches[0], find, replace };
-      });
-      for (const { block, find, replace } of resolved) {
-        await notionRequest(`/blocks/${block.id}`, {
-          method: "PATCH",
-          body: { paragraph: { rich_text: [{ type: "text", text: { content: replace } }] } },
-        });
-        results.push(`Replaced line ("${trunc(find)}" \u2192 "${trunc(replace)}").`);
-      }
-    }
-
-    if (append_notes) {
-      const newLines = append_notes.split("\n").filter(Boolean);
-      const children = newLines.map(textBlock);
-      if (children.length) {
-        const afterId = range.innerBlockIds.length ? range.innerBlockIds[range.innerBlockIds.length - 1] : range.startBlockId;
-        await notionRequest(`/blocks/${existing.pageId}/children`, {
-          method: "PATCH",
-          body: { children, after: afterId },
-        });
-        results.push(`Appended ${children.length} new line(s).`);
-      }
-    }
-
-    // Bump the start marker's timestamp either way, so action: "load" and
-    // the visible marker both reflect that the checkpoint has moved since
-    // its last full save, even though this path never touched the marker
-    // block for any other reason.
-    const updated_at = new Date().toISOString();
-    await notionRequest(`/blocks/${range.startBlockId}`, {
-      method: "PATCH",
-      body: { paragraph: { rich_text: [{ type: "text", text: { content: buildCheckpointStartText(updated_at) } }] } },
-    });
-
-    return `Checkpoint updated successfully (targeted edit, no full rewrite).\n${results.join("\n")}\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", or "update").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save" or "load").`);
   }
 }
 
