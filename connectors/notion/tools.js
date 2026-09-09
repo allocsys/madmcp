@@ -583,19 +583,14 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save, load, or update a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Uses a fixed global checkpoint entity ('checkpoint-latest'). 'save' fully rewrites the stored note (use for the first save in a session, or a genuine full replacement). 'update' makes a targeted edit instead of a full rewrite — use this for later checkpoints within the same session so each call doesn't delete and recreate every line.",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Uses a fixed global checkpoint entity ('checkpoint-latest'). 'save' fully rewrites the stored note; 'load' retrieves it. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
-      action:       z.enum(["save", "load", "update"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'update' to make a targeted edit (replacements and/or append_notes) without rewriting the whole checkpoint"),
-      notes:        z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
-      replacements: z.array(z.object({
-        find:    z.string().describe("Exact plain text of an existing checkpoint line — must match exactly one line"),
-        replace: z.string().describe("New plain text for that line"),
-      })).optional().describe("Only used for action: 'update'. Targeted find/replace edits applied to specific existing lines in the checkpoint, instead of rewriting the whole note. Each 'find' must match exactly one current line — fails with nothing written on zero or multiple matches."),
-      append_notes: z.string().optional().describe("Only used for action: 'update'. Plain-text lines to append after the checkpoint's existing content, without touching anything already there. Combine with 'replacements' in the same call if needed."),
+      action: z.enum(["save", "load"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them"),
+      notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
     },
-    async ({ action, notes, replacements, append_notes }) => {
+    async ({ action, notes }) => {
       try {
-        const text = await doCheckpoint({ action, notes, replacements, append_notes });
+        const text = await doCheckpoint({ action, notes });
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
