@@ -75,11 +75,11 @@ describe("agent_delegate.js — seedRun pins overallMaxSteps to the caller's req
     expect(checkpoint.overallMaxSteps).toBe(25);
   });
 
-  it("max_steps above HARD_MAX_STEPS (30) is clamped down to 30, not passed through raw", async () => {
+  it("max_steps above HARD_MAX_STEPS (40) is clamped down to 40, not passed through raw", async () => {
     const runId = await seedRun({ task: "huge task", provider: "gemini", max_steps: 999 });
     const checkpoint = await loadCheckpoint(runId);
 
-    expect(checkpoint.overallMaxSteps).toBe(30);
+    expect(checkpoint.overallMaxSteps).toBe(40);
   });
 
   it("omitting max_steps entirely still falls back to seedRun's own documented default of 20 (this is the ONE place 20 should ever come from)", async () => {
