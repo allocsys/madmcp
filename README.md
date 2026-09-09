@@ -179,8 +179,8 @@ any in the first place.
 (e.g. "why is CI failing on PR #42", "summarize what changed in this repo over
 the last week") to Gemini (default), GLM, or Groq instead of making 5-10
 separate manual tool calls. The model runs its own loop server-side across
-GitHub, Cloudflare, and Notion (bounded by `max_steps`, default 6, hard cap
-20) and returns one synthesized answer. Falls through an ordered model
+GitHub, Cloudflare, and Notion (bounded by `max_steps`, default 20, hard cap
+40) and returns one synthesized answer. Falls through an ordered model
 cascade (`GEMINI_MODEL` → `GEMINI_FALLBACK_MODELS`, `GLM_MODEL` →
 `GLM_FALLBACK_MODELS` across every key in `OPENROUTER_API_KEYS`, or
 `GROQ_MODEL` → `GROQ_FALLBACK_MODELS` across every key in `GROQ_API_KEYS`)
