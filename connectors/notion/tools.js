@@ -535,7 +535,7 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
 // client.js-only commit) instead of advancing to this commit -- this no-op
 // comment forces a new deployment so the alias promotion re-runs.)
 // ---------------------------------------------------------------------------
-export async function doCheckpoint({ action, notes, replacements, append_notes }) {
+export async function doCheckpoint({ action, notes }) {
   if (action === "save") {
     const existing = await findPageByEntityId("checkpoint-latest");
     const notesLines = (notes || "").split("\n");
