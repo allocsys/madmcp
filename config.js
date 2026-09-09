@@ -343,7 +343,7 @@ export const EDITOR_MAX_FILES_PER_RUN    = Number(process.env.EDITOR_MAX_FILES_P
 export const EDITOR_MAX_WRITES_PER_FILE  = Number(process.env.EDITOR_MAX_WRITES_PER_FILE) || 5;
 export const EDITOR_MAX_VALIDATE_CALLS   = Number(process.env.EDITOR_MAX_VALIDATE_CALLS) || 5;
 export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) || 20;
-export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 30;
+export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 40;
 export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
 
 // Async delegate_editor -- mirrors the AGENT_WORKER_URL/
