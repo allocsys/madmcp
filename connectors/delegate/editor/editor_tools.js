@@ -140,7 +140,7 @@ export function register(server) {
           // run that was deliberately given up on.
           const writtenNote = checkpoint.writtenFiles?.length ? `\n\nFiles written before the failure: ${checkpoint.writtenFiles.join(", ")}` : "";
           return {
-            content: [{ type: "text", text: `Run failed permanently (run_id: ${resume_run_id}) after repeated errors on the same step: ${checkpoint.finalAnswer || "(no error detail saved)"}${writtenNote}` }],
+            content: [{ type: "text", text: `Run failed permanently and is NOT resumable (run_id: ${resume_run_id} is dead) -- start a new run instead: ${checkpoint.finalAnswer || "(no error detail saved)"}${writtenNote}` }],
             isError: true,
           };
         }
