@@ -289,7 +289,7 @@ export async function handleAgentWorker(req, res) {
       pendingVerification: latest.pendingVerification,
       structuralRecheckUsed: latest.structuralRecheckUsed,
       status: "failed",
-      finalAnswer: `Investigation stopped after ${AGENT_WORKER_MAX_CONSECUTIVE_FAILURES} consecutive failures on step ${latest.stepsDone + 1}: ${result.answer}`,
+      finalAnswer: `Investigation stopped after ${AGENT_WORKER_MAX_CONSECUTIVE_FAILURES} consecutive failures on step ${latest.stepsDone + 1}: ${result.answer.replace(/ Call again with resume_run_id:.*$/s, "")}`,
       stepStartedAt: null,
     });
     console.error(`agent-worker: runId ${runId} dead-lettered after ${newRetryCount} consecutive failures on step ${latest.stepsDone + 1}`);
