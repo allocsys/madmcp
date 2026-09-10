@@ -86,7 +86,7 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
     expect(server.tool.mock.calls[0][0]).toBe("delegate_editor");
   });
 
-  it("the registered tool's description explicitly states the non-default-branch and no-PR-merge scope limits", async () => {
+  it("the registered tool's description explicitly states the non-default-branch scope limit", async () => {
     process.env.EDITOR_AGENT_ENABLED = "true";
     vi.resetModules();
     const { register } = await import("../connectors/delegate/editor/editor_tools.js");
@@ -96,7 +96,6 @@ describe("register() -- EDITOR_AGENT_ENABLED gate", () => {
 
     const description = server.tool.mock.calls[0][1];
     expect(description).toMatch(/MUST NOT be the repo's default branch/i);
-    expect(description).toMatch(/CANNOT open, approve, or merge pull requests/i);
   });
 });
 

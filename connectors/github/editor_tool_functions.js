@@ -114,8 +114,8 @@ export async function readFile(owner, repo, path, ref) {
   } catch (err) {
     if (is404(err)) {
       throw new Error(
-        `${path} does not exist on branch ${ref} -- double-check the path (it's case-sensitive and relative to the repo root). ` +
-        `This is not a transient error; retrying the exact same path will not help. If you're creating a new file, skip read_file and call write_file with \`content\` directly.`
+        `${path} does not exist on branch ${ref}. Path might be mistyped or genuinely never created -- do not guess at a corrected path or assume this means a new file should be created. Stop and report this exact path back as unresolved.`,
+        { cause: err }
       );
     }
     throw err;
@@ -250,7 +250,7 @@ export async function writeFile(owner, repo, path, options = {}) {
     afterContent = content;
   } else {
     if (existingContent === undefined) {
-      throw new Error(`${path} does not exist on branch ${branch} -- replacements mode requires an existing file. Use content mode to create it.`);
+      throw new Error(`${path} does not exist on branch ${branch}, so replacements mode (which requires an existing file) cannot be used. Do not switch to content mode to create it unless the task explicitly called for creating this file. Otherwise, stop and report this exact path back as unresolved.`);
     }
     afterContent = applyReplacements(existingContent, replacements);
     diff = buildUnifiedDiff(path, existingContent, afterContent);
