@@ -149,7 +149,7 @@ export async function handleEditorWorker(req, res) {
     await saveCheckpoint(runId, {
       ...latest,
       status: "failed",
-      finalAnswer: `Run stopped after ${EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES} consecutive failures on step ${latest.stepsDone + 1}: ${result.answer}`,
+      finalAnswer: `Run stopped after ${EDITOR_WORKER_MAX_CONSECUTIVE_FAILURES} consecutive failures on step ${latest.stepsDone + 1}: ${result.answer.replace(/ Call again with resume_run_id:.*$/s, "")}`,
       stepStartedAt: null,
     });
     console.error(`editor-worker: runId ${runId} dead-lettered after ${newRetryCount} consecutive failures on step ${latest.stepsDone + 1}`);
