@@ -108,7 +108,18 @@ async function tryReadExistingRaw(owner, repo, path, branch) {
 
 export async function readFile(owner, repo, path, ref) {
   assertPolicyAllowed(path);
-  const data = await rawGetContents(owner, repo, path, ref);
+  let data;
+  try {
+    data = await rawGetContents(owner, repo, path, ref);
+  } catch (err) {
+    if (is404(err)) {
+      throw new Error(
+        `${path} does not exist on branch ${ref} -- double-check the path (it's case-sensitive and relative to the repo root). ` +
+        `This is not a transient error; retrying the exact same path will not help. If you're creating a new file, skip read_file and call write_file with \`content\` directly.`
+      );
+    }
+    throw err;
+  }
   const { content, sha } = decodeContentsResponse(path, data);
   return { path, content, sha };
 }
