@@ -115,7 +115,8 @@ export async function readFile(owner, repo, path, ref) {
     if (is404(err)) {
       throw new Error(
         `${path} does not exist on branch ${ref} -- double-check the path (it's case-sensitive and relative to the repo root). ` +
-        `This is not a transient error; retrying the exact same path will not help. If you're creating a new file, skip read_file and call write_file with \`content\` directly.`
+        `This is not a transient error; retrying the exact same path will not help. If you're creating a new file, skip read_file and call write_file with \`content\` directly.`,
+        { cause: err }
       );
     }
     throw err;
