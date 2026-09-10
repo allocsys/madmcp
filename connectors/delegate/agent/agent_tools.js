@@ -123,7 +123,7 @@ export function register(server) {
           // Return it directly rather than letting runInvestigation try to
           // resume a run that was deliberately given up on.
           return {
-            content: [{ type: "text", text: `Investigation failed permanently (run_id: ${resume_run_id}) after repeated errors on the same step: ${checkpoint.finalAnswer || "(no error detail saved)"}` }],
+            content: [{ type: "text", text: `Investigation failed permanently and is NOT resumable (run_id: ${resume_run_id} is dead) -- start a new run instead: ${checkpoint.finalAnswer || "(no error detail saved)"}` }],
             isError: true,
           };
         }
