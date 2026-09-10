@@ -88,7 +88,8 @@ export function register(server) {
   server.tool(
     "get_check_runs",
     "DOES: Individual check/status entries (pass/fail dots) for a commit/branch/tag -- the data behind GitHub's green check / red X.\n" +
-    "NOT: a list of Actions runs -> use list_workflow_runs for that.",
+    "NOT: a list of Actions runs -> use list_workflow_runs for that.\n" +
+    "If checks are still pending, sleep 30 seconds before checking again if you have nothing else to do, then call this again.",
     {
       owner:    z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:     z.string().describe("Repository name"),
@@ -108,7 +109,8 @@ export function register(server) {
 
   server.tool(
     "get_combined_status",
-    "DOES: Combined commit status for a ref -- overall pass/fail/pending rollup + each individual status context (the legacy Status API some CI systems/integrations use instead of, or alongside, Actions check-runs).",
+    "DOES: Combined commit status for a ref -- overall pass/fail/pending rollup + each individual status context (the legacy Status API some CI systems/integrations use instead of, or alongside, Actions check-runs).\n" +
+    "If the overall state is still pending, sleep 30 seconds before checking again if you have nothing else to do, then call this again.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
