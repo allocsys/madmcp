@@ -12,7 +12,7 @@
 //
 // Two independent layers, per guardrail #4 ("independent of and layered on
 // top of any allowlist"):
-//   1. isPathAllowed()   -- the allowlist (extension AND/OR path prefix).
+//   1. isPathAllowed()   -- the allowlist.
 //   2. isPathDenied()    -- the deny list. Checked SEPARATELY, and wins
 //      even if isPathAllowed() would have said yes. A caller should always
 //      check both, in either order, and refuse the write if either check
