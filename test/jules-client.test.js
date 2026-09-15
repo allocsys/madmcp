@@ -130,6 +130,18 @@ describe("Jules Connector - tools", () => {
     expect(result.content[0].text).toContain("https://github.com/owner/repo/pull/9");
   });
 
+  it("jules_send_message posts to the :sendMessage endpoint with a bare session id", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => "{}" });
+
+    const result = await server.tools.jules_send_message({ session: "42", message: "What exactly went wrong?" });
+
+    const [url, opts] = fetch.mock.calls[0];
+    expect(url.toString()).toBe("https://jules.googleapis.com/v1alpha/sessions/42:sendMessage");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({ prompt: "What exactly went wrong?" });
+    expect(result.content[0].text).toContain("sessions/42");
+  });
+
   it("jules_list_sources reports an empty account clearly", async () => {
     fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ sources: [] }) });
 

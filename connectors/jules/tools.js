@@ -10,11 +10,11 @@
 // sandboxed VM, independent of this server's request lifecycle — you create
 // it, then check back with jules_get_session / jules_get_activities.
 //
-// Deliberately NOT including plan-approval tooling (approvePlan/sendMessage)
-// for this first pass — fire-and-forget implies automationMode:
-// AUTO_CREATE_PR with plans auto-approved (the API's default), not a
-// supervised back-and-forth. Add jules_approve_plan / jules_send_message
-// later if a gated workflow is ever needed.
+// jules_send_message adds a supervised escape hatch: nudge a still-running
+// session with extra instructions or a question. It only works on a LIVE
+// session (RUNNING / AWAITING_PLAN_APPROVAL / AWAITING_USER_FEEDBACK) --
+// there's no API for messaging a session that has already COMPLETED or
+// FAILED, since the underlying sandboxed VM is gone by then.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -130,6 +130,22 @@ export function register(server) {
         prs.length ? `Pull request(s): ${prs.join(", ")}` : null,
       ].filter(Boolean);
       return { content: [{ type: "text", text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "jules_send_message",
+    "DOES: Send a message from the user into an active Jules session (extra instructions, an answer to a question Jules asked, or a course correction), via POST /sessions/{id}:sendMessage.\n" +
+    "RULE: only works while the session is still live (state RUNNING, AWAITING_PLAN_APPROVAL, or AWAITING_USER_FEEDBACK) -- once a session is COMPLETED or FAILED its sandbox is gone and there is no way to message it further; check jules_get_session first if you're unsure of the current state.\n" +
+    "RULE: this only sends the message -- it does not wait for a reply. Poll jules_get_activities afterward (look for a new agentMessaged entry) to see Jules's response.",
+    {
+      session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567'"),
+      message: z.string().describe("The message to send to the session -- instructions, an answer, or feedback"),
+    },
+    async ({ session, message }) => {
+      const name = session.startsWith("sessions/") ? session : `sessions/${session}`;
+      await julesRequest(`/${name}:sendMessage`, { method: "POST", body: { prompt: message } });
+      return { content: [{ type: "text", text: `Message sent to ${name}. Check jules_get_activities shortly for Jules's response.` }] };
     }
   );
 
