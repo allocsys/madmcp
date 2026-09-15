@@ -135,8 +135,8 @@ export function register(server) {
 
   server.tool(
     "jules_get_activities",
-    "DOES: List the activity timeline for a Jules session — plan generation, progress updates, messages, and completion/failure events — in chronological order.\n" +
-    "RULE: want to see WHAT Jules actually did (not just its current state) -> this, in addition to jules_get_session.",
+    "DOES: List the activity timeline for a Jules session — plan generation, progress updates, messages, completion, and (with full detail) failures — in chronological order. Failed activities include the failure reason; activities with artifacts include code diffs (git patch) and bash command output Jules produced.\n" +
+    "RULE: want to see WHAT Jules actually did, why a session failed, or its resulting diff/output -> this, in addition to jules_get_session.",
     {
       session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567'"),
       page_size: z.number().optional().describe("Max activities to return per page (default: server default)"),
@@ -149,9 +149,65 @@ export function register(server) {
       if (!activities.length) {
         return { content: [{ type: "text", text: "No activities recorded yet for this session." }] };
       }
-      const lines = activities.map((a) => `[${a.createTime}] ${a.originator}: ${a.description || Object.keys(a).find((k) => k.endsWith("Generated") || k.endsWith("Update") || k.endsWith("Message")) || "(event)"}`);
+      const lines = activities.map((a) => `[${a.createTime}] ${a.originator}: ${describeActivity(a)}`);
       const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
       return { content: [{ type: "text", text: lines.join("\n") + more }] };
     }
   );
+}
+
+// Render the one populated event field on an Activity (per the API's
+// oneof-style shape), plus any artifacts (diffs / bash output / media)
+// attached to it. Falls back to `description` or a bare "(event)" only
+// if none of the known event fields are present, e.g. for a future event
+// type this hasn't been taught about yet.
+function describeActivity(a) {
+  const parts = [];
+
+  if (a.planGenerated) {
+    const steps = (a.planGenerated.plan?.steps || [])
+      .map((s, i) => `    ${i + 1}. ${s.title}${s.description ? ` — ${s.description}` : ""}`)
+      .join("\n");
+    parts.push(`Plan generated${steps ? ":\n" + steps : ""}`);
+  } else if (a.planApproved) {
+    parts.push(`Plan approved (planId: ${a.planApproved.planId})`);
+  } else if (a.userMessaged) {
+    parts.push(`User message: ${a.userMessaged.userMessage}`);
+  } else if (a.agentMessaged) {
+    parts.push(`Agent message: ${a.agentMessaged.agentMessage}`);
+  } else if (a.progressUpdated) {
+    parts.push(`Progress: ${a.progressUpdated.title}${a.progressUpdated.description ? ` — ${a.progressUpdated.description}` : ""}`);
+  } else if (a.sessionCompleted) {
+    parts.push("Session completed");
+  } else if (a.sessionFailed) {
+    parts.push(`SESSION FAILED — ${a.sessionFailed.reason || "(no reason given by Jules)"}`);
+  } else {
+    parts.push(a.description || "(event)");
+  }
+
+  for (const artifact of a.artifacts || []) {
+    if (artifact.changeSet?.gitPatch) {
+      const gp = artifact.changeSet.gitPatch;
+      const label = gp.suggestedCommitMessage ? ` (${gp.suggestedCommitMessage})` : "";
+      parts.push(`  Diff${label}:\n${indent(truncate(gp.unidiffPatch, 3000))}`);
+    }
+    if (artifact.bashOutput) {
+      const bo = artifact.bashOutput;
+      parts.push(`  $ ${bo.command}  (exit ${bo.exitCode})\n${indent(truncate(bo.output, 2000))}`);
+    }
+    if (artifact.media) {
+      parts.push(`  [media artifact: ${artifact.media.mimeType}]`);
+    }
+  }
+
+  return parts.join("\n");
+}
+
+function indent(text) {
+  return text.split("\n").map((l) => `    ${l}`).join("\n");
+}
+
+function truncate(text, max) {
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, max)}\n... (truncated, ${text.length - max} more chars)`;
 }
