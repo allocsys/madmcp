@@ -136,4 +136,65 @@ describe("Jules Connector - tools", () => {
     const result = await server.tools.jules_list_sources({});
     expect(result.content[0].text).toContain("No sources connected");
   });
+
+  it("jules_get_activities surfaces the plan steps of a planGenerated event", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [{
+          createTime: "2026-09-15T07:31:57Z",
+          originator: "agent",
+          planGenerated: { plan: { id: "p1", steps: [{ title: "Write tests", description: "Cover the client" }] } },
+        }],
+      }),
+    });
+
+    const result = await server.tools.jules_get_activities({ session: "42" });
+    expect(result.content[0].text).toContain("Plan generated");
+    expect(result.content[0].text).toContain("Write tests");
+    expect(result.content[0].text).toContain("Cover the client");
+  });
+
+  it("jules_get_activities surfaces the failure reason of a sessionFailed event", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [{
+          createTime: "2026-09-15T08:00:00Z",
+          originator: "system",
+          sessionFailed: { reason: "Repository checkout failed: permission denied" },
+        }],
+      }),
+    });
+
+    const result = await server.tools.jules_get_activities({ session: "42" });
+    expect(result.content[0].text).toContain("SESSION FAILED");
+    expect(result.content[0].text).toContain("permission denied");
+  });
+
+  it("jules_get_activities surfaces a git patch artifact", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [{
+          createTime: "2026-09-15T08:05:00Z",
+          originator: "agent",
+          progressUpdated: { title: "Applying changes" },
+          artifacts: [{
+            changeSet: {
+              source: "sources/github-owner-repo",
+              gitPatch: { baseCommitId: "abc123", unidiffPatch: "diff --git a/x b/x\n+hello", suggestedCommitMessage: "Add hello" },
+            },
+          }],
+        }],
+      }),
+    });
+
+    const result = await server.tools.jules_get_activities({ session: "42" });
+    expect(result.content[0].text).toContain("Diff (Add hello)");
+    expect(result.content[0].text).toContain("diff --git a/x b/x");
+  });
 });
