@@ -333,4 +333,25 @@ describe("Fetch Connector - web_fetch tool", () => {
     expect(result.content[0].text).toContain("⚠️ Non-2xx response");
     expect(result.content[0].text).toContain("Not Found");
   });
+
+  it("catches a plain Error thrown by fetchUrl (e.g. the SSRF guard) instead of propagating it uncaught", async () => {
+    // No dns/undici mocks needed -- localhost is rejected by assertSafeUrl
+    // before either is touched, so fetchUrl throws synchronously-awaited.
+    const result = await server.tools.web_fetch({ url: "http://localhost/secret" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Failed to fetch http://localhost/secret");
+    expect(result.content[0].text).toContain("Blocked: requests to localhost are not allowed.");
+  });
+
+  it("walks err.cause when fetchUrl's underlying error is a wrapped chain (the real undici 'fetch failed' shape)", async () => {
+    dns.lookup.mockResolvedValueOnce([{ address: "93.184.216.34" }]);
+    const socketErr = new Error("unexpected eof while reading");
+    const fetchFailedErr = new Error("fetch failed", { cause: socketErr });
+    undiciFetch.mockRejectedValueOnce(fetchFailedErr);
+
+    const result = await server.tools.web_fetch({ url: "http://example.com" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("fetch failed");
+    expect(result.content[0].text).toContain("unexpected eof while reading");
+  });
 });
