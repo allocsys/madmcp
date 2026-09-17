@@ -32,7 +32,23 @@ export function register(server) {
     },
     async ({ url, method = "GET", body, max_chars = 500000, raw_html = false, headers = {} }) => {
       const mergedHeaders = body ? { "Content-Type": "application/json", ...headers } : headers;
-      const { status, ok, contentType, text } = await fetchUrl(url, { method, body, headers: mergedHeaders });
+      let status, ok, contentType, text;
+      try {
+        ({ status, ok, contentType, text } = await fetchUrl(url, { method, body, headers: mergedHeaders }));
+      } catch (err) {
+        // fetchUrl throws on: SSRF-guard rejection, DNS lookup failure, too
+        // many redirects, or a raw connect/TLS failure from undici's fetch()
+        // itself (which surfaces as a generic TypeError("fetch failed") with
+        // the real cause nested in err.cause, not the message). Walk the
+        // cause chain so the calling model gets the actual underlying reason
+        // instead of an opaque "fetch failed" with no way to diagnose it.
+        const chain = [];
+        for (let e = err; e; e = e.cause) chain.push(e.message);
+        return {
+          content: [{ type: "text", text: `Failed to fetch ${url}: ${chain.join(" -- caused by: ")}` }],
+          isError: true,
+        };
+      }
 
       let output = text;
 
