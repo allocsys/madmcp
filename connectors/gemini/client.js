@@ -121,10 +121,19 @@ async function callGenerateContent(body, requestedModel) {
         const isRateLimited = err.status === 429;
         const isOverloaded  = err.status === 503;
         const isNetworkTransient = err.transient === true; // timeout/dropped connection, see callGenerateContentOnce
+        // 404 = model ID retired/unknown (Google shuts down Gemini IDs on a
+        // schedule, and 3.6+ Flash are short-term-availability models). The
+        // same ID is missing under every key, so skip the remaining keys and
+        // advance to the next fallback model rather than failing the call.
+        const isModelGone = err.status === 404;
         // A bad/exhausted key (401/403) on the current model shouldn't stop
         // us from trying remaining keys on this model (or moving to the next
         // model if this was the last key). Continue to the next key.
         if (isBadKey) continue;
+        if (isModelGone) {
+          if (isLastModel) throw err;
+          break;
+        }
         if (!isRateLimited && !isOverloaded && !isNetworkTransient) throw err;
         if (isRateLimited) {
           // Rate-limited on this (model, key) pair -- record a cooldown
