@@ -298,8 +298,8 @@ All tokens are optional independently — a connector's tools fail at call time
 | `CONTEXT7_API_KEY` | Context7 tools (optional — works unauthenticated at low rate limits) |
 | `JULES_API_KEY` | Jules tools (`jules_*`) — required, no unauthenticated tier |
 | `GEMINI_API_KEYS` | Gemini tools (`delegate_agent`, `delegate_research`) — comma-separated, multi-key cascade; required (or legacy singular `GEMINI_API_KEY`), throws if unset |
-| `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-flash-latest`) |
-| `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
+| `GEMINI_MODEL` | Primary Gemini model for delegation (default `gemini-3.8-flash`) |
+| `GEMINI_FALLBACK_MODELS` | Comma-separated fallback model list used on 429s/503s/network errors, and on 404s when a model ID has been retired (default `gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite`) |
 | `GEMINI_NOTION_ROOT_PAGE_ID` | Notion page under which Gemini tool outputs are logged (has a working default) |
 | `OPENROUTER_API_KEYS` | Comma-separated OpenRouter API key(s) — required for `delegate_agent`'s `provider: "glm"` mode, unused otherwise |
 | `GLM_MODEL` | Primary GLM model (via OpenRouter) for `provider: "glm"` delegation (default `z-ai/glm-4.5-air:free`) |
