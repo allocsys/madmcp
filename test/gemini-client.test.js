@@ -295,9 +295,57 @@ describe("Gemini Connector - Client and Cascading Cascade (client.js)", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("cascades to the next model on 404 (retired/unknown model ID)", async () => {
+    global.fetch = vi.fn()
+      // primary model ID retired -> 404
+      .mockResolvedValueOnce({ ok: false, status: 404, statusText: "Not Found", text: async () => JSON.stringify({ error: { message: "Model not found" } }) })
+      // fallback-lite-1 succeeds
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "fallback after 404" }] } }] }),
+      });
+
+    const res = await clientModule.geminiGenerate("retired primary");
+    expect(res).toBe("fallback after 404");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch.mock.calls[1][0]).toContain("fallback-lite-1:generateContent");
+  });
+
+  it("throws the 404 if the last model in the cascade is also gone", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+      text: async () => JSON.stringify({ error: { message: "Model not found" } }),
+    });
+
+    await expect(clientModule.geminiGenerate("everything retired")).rejects.toThrow("Gemini API error (404): Model not found");
+    // primary + 2 fallbacks, one key each
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
   describe("multi-key cascade (GEMINI_API_KEYS)", () => {
     beforeEach(() => {
       mockConfig.GEMINI_API_KEYS = ["key-0", "key-1"];
+    });
+
+    it("skips remaining keys and advances to the next model on 404", async () => {
+      global.fetch = vi.fn()
+        // key-0, gemini-flash-latest -> 404 (ID is gone under every key, so key-1 must not be tried)
+        .mockResolvedValueOnce({ ok: false, status: 404, statusText: "Not Found", text: async () => JSON.stringify({ error: { message: "Model not found" } }) })
+        // key-0, fallback-lite-1 -> succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "next model after 404" }] } }] }),
+        });
+
+      const res = await clientModule.geminiGenerate("404 on multi-key");
+      expect(res).toBe("next model after 404");
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      const [url, init] = global.fetch.mock.calls[1];
+      expect(url).toContain("fallback-lite-1:generateContent");
+      expect(init.headers["x-goog-api-key"]).toBe("key-0");
     });
 
     it("exhausts every key on the primary model before falling back to fallback-lite-1", async () => {

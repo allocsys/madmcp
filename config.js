@@ -120,7 +120,11 @@ export const GEMINI_API     = "https://generativelanguage.googleapis.com/v1beta"
 // Default model -- override via env var if this drifts out of date; Google
 // renames/retires Gemini model IDs periodically, so don't assume this stays
 // current without checking https://ai.google.dev/gemini-api/docs/models.
-export const GEMINI_MODEL   = process.env.GEMINI_MODEL || "gemini-flash-latest";
+// Pinned to a specific stable ID (2026-09-21) instead of the moving
+// gemini-flash-latest alias, which Google hot-swaps between releases. 3.6/3.7/3.8
+// Flash are flagged "short-term availability" (shutdown TBD) -- the 404 handling
+// in connectors/gemini/client.js lets the cascade skip past a retired ID.
+export const GEMINI_MODEL   = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 export const HISTORY_COMPACTION_PROVIDERS = (process.env.HISTORY_COMPACTION_PROVIDERS ?? "bai")
   .split(",")
   .map((s) => s.trim())
@@ -138,7 +142,7 @@ export const HISTORY_COMPACTION_PROVIDERS = (process.env.HISTORY_COMPACTION_PROV
 // repeated in this list. See https://ai.google.dev/gemini-api/docs/models for
 // current model IDs/limits -- these drift as Google ships new Flash/Flash-Lite
 // generations.
-export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite")
+export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
