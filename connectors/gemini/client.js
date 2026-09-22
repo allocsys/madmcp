@@ -112,8 +112,15 @@ async function callGenerateContent(body, requestedModel) {
       }
       try {
         const data = await callGenerateContentOnce(body, model, apiKey);
-        if (keyIndex > 0 || i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
-        if (keyIndex > 0) data._fallbackKeyIndex = keyIndex; // ditto -- which key (0-indexed) actually served this call
+        // Only mark _fallbackModelUsed when the MODEL actually changed from the
+        // primary/requested one (i > 0) -- a pure key rotation on the same model
+        // (keyIndex > 0, i === 0) must not be flagged as a model fallback, since
+        // `model` here is just GEMINI_MODEL itself in that case, not an actual
+        // fallback entry. _fallbackKeyIndex tracks key rotation independently of
+        // whether the model also changed, so a caller/logger can tell the two
+        // cascade dimensions apart instead of conflating them.
+        if (i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
+        if (keyIndex > 0) data._fallbackKeyIndex = keyIndex; // ditto -- which key (0-indexed) actually served this call, independent of model
         return data;
       } catch (err) {
         lastErr = err;
