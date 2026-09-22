@@ -1,34 +1,27 @@
 // ---------------------------------------------------------------------------
-// connectors/typesafe/client.js — TypeSafe AI (api.typesafe.ai) client for
-// Jev classification and decision models (OpenAI-compatible chat completions).
+// connectors/typesafe/client.js — TypeSafe AI (api.typesafe.ai) client for "Jev"
+// classification and decision model.
 // ---------------------------------------------------------------------------
 
 import { TYPESAFE_API_KEY, JEV_MODEL } from "../../config.js";
+import { toOpenAIMessages } from "../openai_shape/adapter.js";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
-function parseJsonContent(text) {
-  if (!text || typeof text !== "string") return null;
-  let cleaned = text.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/, "").trim();
-  }
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
-}
-
-export async function jevChat(messages, { maxOutputTokens, responseFormat, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function jevChat(messages, { tools, maxOutputTokens, responseFormat, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (!TYPESAFE_API_KEY) {
-    throw new Error("No TypeSafe API key available. Set TYPESAFE_API_KEY as an environment variable on the madmcp server.");
+    throw new Error("No TypeSafe API key available. Set TYPESAFE_API_KEY as an environment variable.");
   }
+
+  const formattedMessages = Array.isArray(messages) && messages[0]?.parts
+    ? toOpenAIMessages(messages)
+    : messages;
 
   const body = {
     model: JEV_MODEL,
-    messages,
+    messages: formattedMessages,
   };
+  if (tools) body.tools = tools;
   if (maxOutputTokens) body.max_tokens = maxOutputTokens;
   if (responseFormat) body.response_format = responseFormat;
 
@@ -48,7 +41,8 @@ export async function jevChat(messages, { maxOutputTokens, responseFormat, timeo
     });
   } catch (err) {
     const isAbort = err.name === "AbortError";
-    const wrapped = new Error(isAbort ? `TypeSafe/Jev request timed out after ${timeoutMs}ms` : `TypeSafe/Jev request failed (network error): ${err.message}`);
+    const wrapped = new Error(isAbort ? `TypeSafe request timed out after ${timeoutMs}ms` : `TypeSafe request failed (network error): ${err.message}`);
+    wrapped.transient = true;
     throw wrapped;
   } finally {
     clearTimeout(timeout);
@@ -60,22 +54,34 @@ export async function jevChat(messages, { maxOutputTokens, responseFormat, timeo
 
   if (!res.ok) {
     const message = (data && (data.error?.message || JSON.stringify(data))) || res.statusText;
-    throw new Error(`TypeSafe/Jev API error (${res.status}): ${message}`);
+    const err = new Error(`TypeSafe API error (${res.status}): ${message}`);
+    err.status = res.status;
+    throw err;
   }
 
   const choice = data?.choices?.[0];
   if (!choice) {
-    throw new Error("TypeSafe/Jev returned no choices.");
+    throw new Error("TypeSafe returned no choices.");
   }
-  return choice.message?.content || "";
+
+  return choice;
+}
+
+function parseJsonFromContent(text) {
+  if (!text || typeof text !== "string") return null;
+  let cleaned = text.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/, "").trim();
+  }
+  return JSON.parse(cleaned);
 }
 
 export async function scoreTaskComplexity(task) {
   try {
-    const content = await jevChat([
+    const choice = await jevChat([
       {
         role: "system",
-        content: "You are a task complexity classifier. Classify the given task into one of: 'trivial', 'simple', 'moderate', 'complex'. Respond ONLY with a valid JSON object containing keys: 'complexity' (one of the strings above) and 'confidence' (number between 0 and 1)."
+        content: "You are a fast task complexity classifier. Classify the given task into one of: 'trivial', 'simple', 'moderate', 'complex' and provide a confidence score from 0.0 to 1.0. Output valid JSON only with keys 'complexity' and 'confidence'."
       },
       {
         role: "user",
@@ -83,34 +89,38 @@ export async function scoreTaskComplexity(task) {
       }
     ], { responseFormat: { type: "json_object" } });
 
-    const parsed = parseJsonContent(content);
-    const complexity = ["trivial", "simple", "moderate", "complex"].includes(parsed?.complexity) ? parsed.complexity : null;
+    const content = choice?.message?.content;
+    const parsed = parseJsonFromContent(content);
+    const validComplexities = ["trivial", "simple", "moderate", "complex"];
+    const complexity = validComplexities.includes(parsed?.complexity) ? parsed.complexity : null;
     const confidence = typeof parsed?.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
     return { complexity, confidence };
-  } catch (err) {
+  } catch {
     return { complexity: null, confidence: 0 };
   }
 }
 
 export async function scoreEditRisk(task, diff) {
   try {
-    const content = await jevChat([
+    const choice = await jevChat([
       {
         role: "system",
-        content: "You are an AI code reviewer. Judge whether the given code diff matches the user task and rate the risk. Respond ONLY with a valid JSON object containing keys: 'matchesTask' ('yes' | 'partially' | 'no'), 'risk' (number 0 to 1), and 'confidence' (number 0 to 1)."
+        content: "You are an edit risk analyzer. Judge whether the given diff matches the user task ('yes' | 'partially' | 'no'), compute a risk score from 0.0 to 1.0, and provide a confidence score from 0.0 to 1.0. Output valid JSON only with keys 'matchesTask', 'risk', and 'confidence'."
       },
       {
         role: "user",
-        content: `Task:\n${task}\n\nDiff/Content:\n${diff}`
+        content: `Task:\n${task}\n\nDiff:\n${diff}`
       }
     ], { responseFormat: { type: "json_object" } });
 
-    const parsed = parseJsonContent(content);
-    const matchesTask = ["yes", "partially", "no"].includes(parsed?.matchesTask) ? parsed.matchesTask : null;
+    const content = choice?.message?.content;
+    const parsed = parseJsonFromContent(content);
+    const validMatches = ["yes", "partially", "no"];
+    const matchesTask = validMatches.includes(parsed?.matchesTask) ? parsed.matchesTask : null;
     const risk = typeof parsed?.risk === "number" ? Math.max(0, Math.min(1, parsed.risk)) : null;
     const confidence = typeof parsed?.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
     return { matchesTask, risk, confidence };
-  } catch (err) {
+  } catch {
     return { matchesTask: null, risk: null, confidence: 0 };
   }
 }
