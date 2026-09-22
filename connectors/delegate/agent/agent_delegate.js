@@ -1751,7 +1751,9 @@ export async function runInvestigation(opts = {}) {
       if (budgeted !== null && confidence >= 0.6) {
         max_steps = budgeted;
       }
-    } catch {}
+    } catch {
+      // Jev unreachable, errored, or timed out -- fall back to the default step budget.
+    }
   }
 
   if (singleStep) {
