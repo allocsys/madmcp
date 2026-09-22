@@ -402,6 +402,10 @@ export const GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS = Number(process.env.GITHUB_A
 export const JULES_API_KEY = process.env.JULES_API_KEY;
 export const JULES_API     = "https://jules.googleapis.com/v1alpha";
 
+export const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY;
+export const TYPESAFE_ENABLED = process.env.TYPESAFE_ENABLED === "true";
+export const JEV_MODEL        = process.env.JEV_MODEL || "jev-1";
+
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
 export const IP_ALLOWLIST_ENABLED = process.env.IP_ALLOWLIST_ENABLED !== "false";
