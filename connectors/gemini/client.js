@@ -144,13 +144,20 @@ async function callGenerateContent(body, requestedModel) {
         const data = await callGenerateContentOnce(body, model, apiKey);
         // Only mark _fallbackModelUsed when the MODEL actually changed from the
         // primary/requested one (i > 0) -- a pure key rotation on the same model
-        // (keyIndex > 0, i === 0) must not be flagged as a model fallback, since
-        // `model` here is just GEMINI_MODEL itself in that case, not an actual
-        // fallback entry. _fallbackKeyIndex tracks key rotation independently of
-        // whether the model also changed, so a caller/logger can tell the two
-        // cascade dimensions apart instead of conflating them.
+        // (i === 0) must not be flagged as a model fallback, since `model` here
+        // is just GEMINI_MODEL itself in that case, not an actual fallback entry.
         if (i > 0) data._fallbackModelUsed = model; // surfaced for logging/debugging, not required by callers
-        if (keyIndex > 0) data._fallbackKeyIndex = keyIndex; // ditto -- which key (0-indexed) actually served this call, independent of model
+        // Gated on `k` (rotation position within THIS call's own attempts), not
+        // `keyIndex` (the real array index): keyStartOffset means a call's very
+        // first attempt can legitimately land on a non-zero keyIndex without
+        // anything having failed, so keyIndex > 0 would falsely flag a
+        // perfectly healthy, single-attempt call as a fallback. k > 0 means at
+        // least one key was actually skipped (cooldown) or failed before this
+        // one succeeded, which is the real signal cascade_log.js's "primary
+        // model/key was unavailable" message needs. keyIndex is still the
+        // value recorded (which key actually served the call), just no longer
+        // the trigger condition.
+        if (k > 0) data._fallbackKeyIndex = keyIndex;
         return data;
       } catch (err) {
         lastErr = err;
