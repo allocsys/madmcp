@@ -513,7 +513,9 @@ export async function runEditorAgent(opts = {}) {
       if (budgeted !== null && confidence >= 0.6) {
         max_steps = budgeted;
       }
-    } catch {}
+    } catch {
+      // Jev unreachable, errored, or timed out -- fall back to the default step budget.
+    }
   }
 
   const { FUNCTIONS, declarations } = buildFunctions({
