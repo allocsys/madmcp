@@ -265,7 +265,9 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
                   };
                 }
               }
-            } catch {}
+            } catch {
+              // Jev unreachable, errored, or timed out -- skip the informational risk flag, do not block the write.
+            }
           }
 
           return `Wrote ${result.path} (commit ${result.commitSha.slice(0, 7)}, new sha ${result.sha}).`;
