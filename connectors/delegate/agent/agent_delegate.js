@@ -51,7 +51,8 @@ import { cfAccountRequest } from "../../cloudflare/client.js";
 import { context7Request } from "../../context7/client.js";
 import { mem0Request } from "../../mem/client.js";
 import { notionRequest, notionRichTextToString, notionPageTitle, notionDatabaseTitle, notionBlocksToText } from "../../notion/client.js";
-import { DEFAULT_OWNER } from "../../../config.js";
+import { DEFAULT_OWNER, TYPESAFE_ENABLED } from "../../../config.js";
+import { scoreTaskComplexity, stepBudgetForComplexity } from "../../typesafe/client.js";
 import { getDelegateHooks } from "../provider_hooks.js";
 import { appendTask, buildAgentPreamble } from "../shared/preamble.js";
 
@@ -1499,7 +1500,10 @@ const VERIFICATION_PROMPT =
 // (see checkpoint.js) -- if it's unavailable, resumption just isn't
 // possible, same as before this existed; a failure still returns whatever
 // transcript was gathered in-memory this call.
-export async function runInvestigation({ task, max_steps = 20, resume_run_id, provider, model, maxOutputTokens, singleStep = false, preambleVariant = "trimmed" }) {
+export async function runInvestigation(opts = {}) {
+  const { task, resume_run_id, provider, model, maxOutputTokens, singleStep = false, preambleVariant = "trimmed" } = opts;
+  const hasExplicitMaxSteps = opts.max_steps !== undefined;
+  let max_steps = hasExplicitMaxSteps ? opts.max_steps : 20;
   // The provider actually in effect for this run -- the caller-supplied one
   // on a fresh run, or the one restored from a resumed checkpoint (see
   // `checkpoint.provider || provider` below). A checkpointed `contents`
@@ -1740,6 +1744,16 @@ export async function runInvestigation({ task, max_steps = 20, resume_run_id, pr
   // and bounds only THIS call's loop to a single iteration. Every other
   // caller (a fresh run, or a manual synchronous resume) keeps the existing,
   // documented behavior: max_steps sets/updates the real ceiling directly.
+  if (!checkpoint && TYPESAFE_ENABLED && !hasExplicitMaxSteps && task) {
+    try {
+      const { complexity, confidence } = await scoreTaskComplexity(task);
+      const budgeted = stepBudgetForComplexity(complexity);
+      if (budgeted !== null && confidence >= 0.6) {
+        max_steps = budgeted;
+      }
+    } catch {}
+  }
+
   if (singleStep) {
     if (!checkpoint) {
       // Should not happen in practice -- the `resume_run_id && !task` branch
