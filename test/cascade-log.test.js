@@ -21,12 +21,29 @@ describe("formatCascadeLogLine", () => {
     );
   });
 
-  it("falls back to fallbackModel parameter when _fallbackModelUsed is absent", () => {
+  it("names the model via fallbackModel on a key-only fallback (model unchanged)", () => {
     const candidate = { _fallbackKeyIndex: 1 };
     const line = formatCascadeLogLine(candidate, { step: 3, fallbackModel: "gemini-2.5-flash" });
+    // No model actually changed here -- only the key rotated -- so this must
+    // NOT be worded as a "fallback model", unlike the model-changed cases below.
     expect(line).toBe(
-      '[step 3] [CASCADE] served by fallback model "gemini-2.5-flash", key #1 -- primary model/key was unavailable (rate-limited, overloaded, or rejected).'
+      '[step 3] [CASCADE] served by fallback key #1 on model "gemini-2.5-flash" -- primary key was unavailable (rate-limited, overloaded, or rejected).'
     );
+  });
+
+  it("omits the model clause entirely on a key-only fallback when fallbackModel isn't supplied", () => {
+    // Regression test: editor_delegate.js never passes fallbackModel, and
+    // agent_delegate.js's effectiveModel is frequently undefined on a fresh
+    // run with no explicit model requested. Previously this interpolated the
+    // literal string "undefined" into the log line -- confirmed live via a
+    // test run of the key-rotation fix (PR #176): "served by fallback model
+    // 'undefined', key #2".
+    const candidate = { _fallbackKeyIndex: 2 };
+    const line = formatCascadeLogLine(candidate, { step: 5 });
+    expect(line).toBe(
+      '[step 5] [CASCADE] served by fallback key #2 -- primary key was unavailable (rate-limited, overloaded, or rejected).'
+    );
+    expect(line).not.toContain("undefined");
   });
 
   it("returns message with key index when both _fallbackModelUsed and _fallbackKeyIndex are set", () => {
