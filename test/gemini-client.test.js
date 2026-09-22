@@ -387,6 +387,83 @@ describe("Gemini Connector - Client and Cascading Cascade (client.js)", () => {
       // Only 2 calls -- fallback-lite-1/fallback-lite-2 on key-0 were never tried.
       expect(global.fetch).toHaveBeenCalledTimes(2);
     });
+
+    it("rotates the starting key across separate calls instead of always starting at key-0", async () => {
+      // 1st call: succeeds immediately on whichever key it starts on (key-0,
+      // since keyRotationCounter starts at 0 for a freshly imported module).
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "first call" }] } }] }),
+      });
+      await clientModule.geminiGenerate("first call");
+      expect(global.fetch.mock.calls[0][1].headers["x-goog-api-key"]).toBe("key-0");
+
+      // 2nd call on the SAME imported module: keyRotationCounter has advanced,
+      // so this call's cascade must start at key-1 instead of looping back to
+      // key-0 -- that's the whole point of the rotation.
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "second call" }] } }] }),
+      });
+      await clientModule.geminiGenerate("second call");
+      expect(global.fetch.mock.calls[0][1].headers["x-goog-api-key"]).toBe("key-1");
+    });
+
+    it("wraps the rotation back to key-0 once it cycles past the last key", async () => {
+      // 2 keys configured (key-0, key-1) via the outer beforeEach. Drive the
+      // rotation counter through 3 full calls: key-0 -> key-1 -> key-0 again.
+      for (const expectedKey of ["key-0", "key-1", "key-0"]) {
+        global.fetch = vi.fn().mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+        });
+        await clientModule.geminiGenerate("rotation cycle");
+        expect(global.fetch.mock.calls[0][1].headers["x-goog-api-key"]).toBe(expectedKey);
+      }
+    });
+  });
+
+  describe("transient-error cooldown recording (503 / network timeout)", () => {
+    beforeEach(() => {
+      process.env.UPSTASH_REDIS_REST_URL = "https://upstash.io";
+      process.env.UPSTASH_REDIS_REST_TOKEN = "token123";
+      mockGet.mockResolvedValue(null); // nothing cooling down initially
+    });
+
+    it("records a fixed 20s cooldown on a 503 (overloaded) response", async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: 503, statusText: "Service Unavailable", text: async () => "Overloaded" })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "recovered" }] } }] }),
+        });
+
+      const res = await clientModule.geminiGenerate("trigger 503");
+      expect(res).toBe("recovered");
+      expect(mockSet).toHaveBeenCalledWith("gemini:cooldown:gemini-flash-latest", "1", { ex: 20 });
+    });
+
+    it("records a fixed 20s cooldown on a network timeout (transient) error", async () => {
+      global.fetch = vi.fn()
+        .mockRejectedValueOnce({ name: "AbortError", message: "The operation was aborted." })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: "recovered from timeout" }] } }] }),
+        });
+
+      const res = await clientModule.geminiGenerate("trigger timeout");
+      expect(res).toBe("recovered from timeout");
+      expect(mockSet).toHaveBeenCalledWith("gemini:cooldown:gemini-flash-latest", "1", { ex: 20 });
+    });
+
+    it("does NOT record a cooldown on a non-retryable error (400)", async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: false, status: 400, statusText: "Bad Request", text: async () => JSON.stringify({ error: { message: "Invalid argument" } }),
+      });
+
+      await expect(clientModule.geminiGenerate("bad payload")).rejects.toThrow("Gemini API error (400)");
+      expect(mockSet).not.toHaveBeenCalled();
+    });
   });
 
   describe("geminiChat (multi-turn function-calling support)", () => {
