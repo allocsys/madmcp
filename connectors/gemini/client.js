@@ -7,6 +7,21 @@
 import { GEMINI_API_KEYS, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, GEMINI_REQUEST_TIMEOUT_MS } from "../../config.js";
 import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
 
+// 503s and network-transient errors (timeout/dropped connection) carry no
+// Retry-After header to parse, unlike a 429 (see parseRetryDelaySeconds), so
+// we use a short fixed cooldown instead. Local to this file rather than
+// config.js since it's an internal cascade-tuning constant, not something a
+// deployer needs to override per-environment.
+const TRANSIENT_COOLDOWN_SECONDS = 20;
+
+// Rotates which API key each call starts its inner cascade loop on. Every
+// call used to start at keyIndex 0 unconditionally, which meant key 0
+// absorbed disproportionate load across the WHOLE app -- every single call,
+// healthy or not, began there -- making it statistically the most likely
+// already-exhausted key even for an otherwise-fresh call. Incrementing this
+// per call spreads that starting-point load across all configured keys.
+let keyRotationCounter = 0;
+
 async function callGenerateContentOnce(body, model, apiKey) {
   if (!apiKey) throw new Error("No Gemini API key available. Set GEMINI_API_KEYS (or the legacy GEMINI_API_KEY) as an environment variable on the madmcp server.");
 
@@ -91,14 +106,29 @@ async function callGenerateContent(body, requestedModel) {
     : [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
 
   let lastErr;
+  // Chosen once per callGenerateContent invocation (not per model) so a
+  // single call's cascade consistently rotates through keys in the same
+  // order across every fallback model it tries.
+  const keyStartOffset = GEMINI_API_KEYS.length ? (keyRotationCounter++ % GEMINI_API_KEYS.length) : 0;
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
     const isLastModel = i === models.length - 1;
 
-    for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
+    for (let k = 0; k < GEMINI_API_KEYS.length; k++) {
+      // k is the rotation POSITION (always 0..length-1 in order); keyIndex is
+      // the REAL index into GEMINI_API_KEYS/cooldown namespacing, offset by
+      // keyStartOffset so different calls start at different keys. Cooldown
+      // recording/lookup below stays keyed off keyIndex (unchanged), so
+      // rotation only affects iteration ORDER, never which namespace a given
+      // key maps to.
+      const keyIndex = (keyStartOffset + k) % GEMINI_API_KEYS.length;
       const apiKey = GEMINI_API_KEYS[keyIndex];
       const namespace = keyIndex === 0 ? undefined : `gemini:${keyIndex}`;
-      const isLastKeyForModel = keyIndex === GEMINI_API_KEYS.length - 1;
+      // Computed from k (rotation position), NOT keyIndex -- keyIndex no
+      // longer runs 0..length-1 in order once rotated, so checking keyIndex
+      // here would make isLastCombination fire early or never, corrupting
+      // the throw-vs-fall-through logic below.
+      const isLastKeyForModel = k === GEMINI_API_KEYS.length - 1;
       const isLastCombination = isLastModel && isLastKeyForModel;
 
       // Best-effort cross-call memory (see cooldown.js): if this (model, key)
@@ -150,10 +180,17 @@ async function callGenerateContent(body, requestedModel) {
           // there still means it's exhausted for the window, and skipping
           // the call in that case would mean a resume walks straight back
           // into this same exhausted (model, key) pair and fails identically.
-          // No equivalent recording for 503: there's no per-model quota hint
-          // to parse, and an overload isn't reliably tied to this model
-          // specifically the way a 429 is.
           await setModelCooldown(model, parseRetryDelaySeconds(err.message), namespace);
+        }
+        if (isOverloaded || isNetworkTransient) {
+          // A 503 or timeout/dropped-connection leaves the (model, key) pair
+          // just as unusable for a moment as a 429 does, but previously
+          // recorded nothing -- so a same-run retry (or a resumed step) could
+          // walk straight back into the identical hung/overloaded pair and
+          // burn another full GEMINI_REQUEST_TIMEOUT_MS before failing again.
+          // Fixed short cooldown since there's no Retry-After to parse and no
+          // reliable per-model quota signal the way a 429 carries.
+          await setModelCooldown(model, TRANSIENT_COOLDOWN_SECONDS, namespace);
         }
         if (isLastCombination) throw err;
         // Otherwise fall through -- either to the next key on this model,
