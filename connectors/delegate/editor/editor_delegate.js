@@ -72,7 +72,9 @@ import {
   EDITOR_MAX_FILES_PER_RUN,
   EDITOR_MAX_WRITES_PER_FILE,
   EDITOR_MAX_VALIDATE_CALLS,
+  TYPESAFE_ENABLED,
 } from "../../../config.js";
+import { scoreTaskComplexity, scoreEditRisk, stepBudgetForComplexity } from "../../typesafe/client.js";
 import { appendTask, buildEditorPreamble } from "../shared/preamble.js";
 
 // Same reasoning as connectors/delegate/agent/agent_delegate.js's
@@ -186,7 +188,7 @@ function looksLikeCompletionClaim(answer) {
 // run. owner/repo/branch are captured here, NOT exposed as parameters the
 // model can set -- same fencing rationale as designer_delegate.js's
 // buildFunctions (guardrail #1).
-function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, validateCounts }) {
+function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, validateCounts, effectiveTask }) {
   const FUNCTIONS = [
     {
       name: "read_file",
@@ -249,6 +251,23 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
           if (result.noop) {
             return `No-op: "${path}" content already matches what you submitted -- nothing was committed.`;
           }
+
+          if (TYPESAFE_ENABLED) {
+            try {
+              const valRes = await validateByExtension(path, result.content);
+              if (valRes && valRes.valid) {
+                const riskResult = await scoreEditRisk(effectiveTask, result.diff || result.content);
+                if (riskResult && (riskResult.matchesTask !== null || riskResult.risk !== null)) {
+                  result.typesafeCheck = {
+                    matchesTask: riskResult.matchesTask,
+                    risk: riskResult.risk,
+                    confidence: riskResult.confidence,
+                  };
+                }
+              }
+            } catch {}
+          }
+
           return `Wrote ${result.path} (commit ${result.commitSha.slice(0, 7)}, new sha ${result.sha}).`;
         } catch (err) {
           // Conflict/policy errors are a normal, expected outcome the
@@ -306,7 +325,10 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
 // values are ignored -- same resume contract as designer_delegate.js (see
 // its comments for why `task` specifically must never be trusted over the
 // checkpoint's own record of it on a live resume).
-export async function runEditorAgent({ owner, repo, branch, task, max_steps = EDITOR_DEFAULT_STEPS, resume_run_id, singleStep = false, provider }) {
+export async function runEditorAgent(opts = {}) {
+  const { owner, repo, branch, task, resume_run_id, singleStep = false, provider } = opts;
+  const hasExplicitMaxSteps = opts.max_steps !== undefined;
+  let max_steps = hasExplicitMaxSteps ? opts.max_steps : EDITOR_DEFAULT_STEPS;
   // The run's TRUE overall step ceiling -- distinct from cappedSteps (this
   // particular invocation's own loop bound). For a fresh run or a manual
   // synchronous resume the two are the same value. They diverge for a
@@ -482,8 +504,18 @@ export async function runEditorAgent({ owner, repo, branch, task, max_steps = ED
     effectiveOverallMaxSteps = cappedSteps;
   }
 
+  if (!checkpoint && TYPESAFE_ENABLED && !hasExplicitMaxSteps && task) {
+    try {
+      const { complexity, confidence } = await scoreTaskComplexity(task);
+      const budgeted = stepBudgetForComplexity(complexity);
+      if (budgeted !== null && confidence >= 0.6) {
+        max_steps = budgeted;
+      }
+    } catch {}
+  }
+
   const { FUNCTIONS, declarations } = buildFunctions({
-    owner: effectiveOwner, repo: effectiveRepo, branch: effectiveBranch, writtenFiles, writesPerFile, validateCounts,
+    owner: effectiveOwner, repo: effectiveRepo, branch: effectiveBranch, writtenFiles, writesPerFile, validateCounts, effectiveTask,
   });
 
   if (checkpoint && startStep > cappedSteps) {
