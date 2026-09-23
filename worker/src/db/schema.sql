@@ -38,9 +38,25 @@ CREATE TABLE IF NOT EXISTS files (
   language      TEXT,
   content_hash  TEXT NOT NULL,
   last_scanned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Set only once this file's edges+chunks (pass 2, queue.js) have actually
+  -- been committed for its CURRENT content_hash -- NULL means "symbols were
+  -- parsed and this row exists, but the file is not fully indexed yet"
+  -- (either mid-scan, or pass 2 failed for it last time). Reset to NULL on
+  -- every upsertFile call so a content change always clears it until pass 2
+  -- re-completes. getKnownFileHashes only returns rows where this is set,
+  -- so a partially-indexed file's hash is never trusted for the "unchanged,
+  -- skip it" diff -- it keeps getting retried every scan until pass 2
+  -- actually succeeds for it. Without this, one file's embedding failure
+  -- (e.g. an oversized chunk, see chunk.js) would commit its content_hash
+  -- in pass 1 regardless, and every future scan would then see "unchanged"
+  -- and permanently skip re-indexing it -- symbols exist, edges/chunks never
+  -- do, and nothing would ever try again.
+  fully_indexed_at TIMESTAMPTZ,
   UNIQUE (repo_id, path)
 );
 CREATE INDEX IF NOT EXISTS idx_files_repo ON files (repo_id);
+-- Idempotent for existing deployed DBs where the table predates this column.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS fully_indexed_at TIMESTAMPTZ;
 
 -- one row per symbol (function/class/method/const-fn, language-agnostic)
 CREATE TABLE IF NOT EXISTS symbols (

@@ -54,21 +54,46 @@ export async function finishScanJob(jobId, { status, error, filesScanned, filesC
 
 // Returns existing content_hash per path, so the scan pipeline can diff and
 // only re-parse/re-embed files that actually changed.
+// Only returns files where fully_indexed_at IS SET -- a file whose pass 2
+// (edges+chunks) never completed for its current hash must NOT be reported
+// as "known", or diffFiles would classify it as unchanged and skip it
+// forever even though it's only half-indexed. See schema.sql's comment on
+// fully_indexed_at for the full failure mode this prevents.
 export async function getKnownFileHashes(repoId) {
-  const { rows } = await query(`SELECT path, content_hash FROM files WHERE repo_id = $1`, [repoId]);
+  const { rows } = await query(
+    `SELECT path, content_hash FROM files WHERE repo_id = $1 AND fully_indexed_at IS NOT NULL`,
+    [repoId]
+  );
   return new Map(rows.map((r) => [r.path, r.content_hash]));
 }
 
+// fully_indexed_at is deliberately reset to NULL on every upsert (including
+// when nothing else changed) -- it's only set back by markFileIndexed once
+// pass 2 actually commits this file's edges+chunks for the hash being
+// written here. This closes the window where content_hash reflects NEW
+// content but the OLD fully_indexed_at timestamp (from a prior successful
+// scan of different content) would otherwise still read as "trustworthy".
 export async function upsertFile({ repoId, path, language, contentHash }) {
   const { rows } = await query(
     `INSERT INTO files (repo_id, path, language, content_hash)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (repo_id, path) DO UPDATE
-       SET language = EXCLUDED.language, content_hash = EXCLUDED.content_hash, last_scanned_at = now()
+       SET language = EXCLUDED.language, content_hash = EXCLUDED.content_hash,
+           fully_indexed_at = NULL, last_scanned_at = now()
      RETURNING *`,
     [repoId, path, language, contentHash]
   );
   return rows[0];
+}
+
+// Marks a file as fully indexed for its current content_hash -- called by
+// queue.js's pass 2 ONLY after that file's edges+chunks have both been
+// successfully inserted. Never called if that file's pass 2 work threw (see
+// queue.js's per-file try/catch), so a failed file's hash stays untrusted
+// and getKnownFileHashes will keep surfacing it as "changed" on every
+// subsequent scan until it actually succeeds.
+export async function markFileIndexed(fileId) {
+  await query(`UPDATE files SET fully_indexed_at = now() WHERE id = $1`, [fileId]);
 }
 
 export async function getRepoById(repoId) {
