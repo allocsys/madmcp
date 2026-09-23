@@ -412,7 +412,7 @@ export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 // madmcp talks to it as a client over HTTP, authenticated with a shared
 // secret (worker/src/auth.js expects "Authorization: Bearer <secret>").
 // Not set until the Railway service is actually deployed (see checkpoint TODO);
-// repo_map/repo_map_scan tools fail with a clear config error until both
+// map.query/map.index tools fail with a clear config error until both
 // of these are set, same pattern as every other optional connector above.
 export const REPO_MAP_WORKER_URL = process.env.REPO_MAP_WORKER_URL;
 export const REPO_MAP_SHARED_SECRET = process.env.REPO_MAP_SHARED_SECRET;
