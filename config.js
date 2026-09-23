@@ -417,6 +417,13 @@ export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 export const REPO_MAP_WORKER_URL = process.env.REPO_MAP_WORKER_URL;
 export const REPO_MAP_SHARED_SECRET = process.env.REPO_MAP_SHARED_SECRET;
 
+// madmcp's OWN read-side connection to the same Neon database the worker
+// writes to -- used by connectors/repomap/db.js for repo_map's search/graph
+// (no worker hop needed for reads, only for repo_map_scan). Point this at a
+// separate READ-ONLY Postgres role in Neon, not the worker's read-write
+// DATABASE_URL -- see db.js's file header for why.
+export const REPO_MAP_DATABASE_URL = process.env.REPO_MAP_DATABASE_URL;
+
 export const IP_ALLOWLIST_ENABLED = process.env.IP_ALLOWLIST_ENABLED !== "false";
 export const ALLOWED_IP_RANGES = (process.env.ALLOWED_IP_RANGES || "160.79.104.0/21,208.77.244.90/32")
   .split(",")
