@@ -61,11 +61,15 @@ async function getParserFor(language) {
 // unsupported files still get walked and hashed, just not graph-indexed.
 export async function parseFile(filePath, content) {
   const language = detectLanguage(filePath);
-  if (!language) return { language: null, symbols: [] };
+  if (!language) return { language: null, tree: null, symbols: [], symbolLocalIdByNodeId: new Map() };
 
   const parser = await getParserFor(language);
   const tree = parser.parse(content);
   const symbols = [];
+  // Maps a tree-sitter AST node id (function/class/method node) to the small
+  // integer localId assigned to its symbol, so graph.js can track "which
+  // symbol am I currently inside" while walking the tree for call edges.
+  const symbolLocalIdByNodeId = new Map();
   let localId = 0;
 
   function visit(node, enclosingClass) {
@@ -73,8 +77,10 @@ export async function parseFile(filePath, content) {
       const nameNode = node.childForFieldName?.('name');
       const name = nameNode ? content.slice(nameNode.startIndex, nameNode.endIndex) : null;
       if (name) {
+        const id = localId++;
+        symbolLocalIdByNodeId.set(node.id, id);
         symbols.push({
-          localId: localId++,
+          localId: id,
           kind: node.type.includes('class') ? 'class' : node.type.includes('method') ? 'method' : 'function',
           name,
           qualifiedName: enclosingClass ? `${enclosingClass}.${name}` : name,
@@ -93,5 +99,5 @@ export async function parseFile(filePath, content) {
   }
 
   visit(tree.rootNode, null);
-  return { language, symbols };
+  return { language, tree, symbols, symbolLocalIdByNodeId };
 }
