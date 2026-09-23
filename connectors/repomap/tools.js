@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/repomap/tools.js — repo_map_scan (index a repo) + repo_map
 // (semantic search / graph traversal over an already-scanned repo).
-// Backed by the repo_map worker (worker/, deployed separately on Fly.io) --
+// Backed by the repo_map worker (worker/, deployed separately on Railway) --
 // see client.js for the HTTP layer.
 // ---------------------------------------------------------------------------
 
