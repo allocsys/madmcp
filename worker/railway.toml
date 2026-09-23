@@ -1,0 +1,43 @@
+# Railway deploy config for the repo_map worker (replaces the earlier
+# fly.toml -- Fly.io is not being used for this project). Railway builds
+# from worker/Dockerfile (the grammar-vendoring build step works unchanged
+# -- nothing here is Fly-specific).
+#
+# MANUAL DASHBOARD STEPS (not expressible in this file):
+#   - Create a Railway service pointed at this repo, with Root Directory
+#     set to "worker" (this is a monorepo -- madmcp's own server.js/
+#     package.json live at repo root, so Railway needs to be told to build
+#     from the worker/ subfolder specifically, same reason fly.toml also
+#     lived inside worker/ rather than at repo root).
+#   - Chose Railway specifically (over Render, which is what madmcp itself
+#     runs on) because Railway services don't spin down after inactivity
+#     the way Render's free tier does -- this worker relies on a background
+#     poll loop (scan/queue.js's runLoop, 5s interval + module-load
+#     recovery) staying alive between scans, which a sleeping service would
+#     break.
+#
+# Secrets (set as Railway service variables, NOT committed):
+#   DATABASE_URL           - Neon Postgres connection string (pgvector enabled)
+#   GEMINI_API_KEY          - for embeddings (gemini-embedding-001, see
+#                             src/embed/gemini.js)
+#   REPO_MAP_SHARED_SECRET  - shared-secret header value madmcp must send
+#                             (worker/src/auth.js expects
+#                             "Authorization: Bearer <this value>")
+#   GITHUB_APP_*            - only if clone tokens end up minted worker-side
+#                             instead of passed in via /scan's cloneToken
+#                             (current design: madmcp mints and passes it,
+#                             see connectors/repomap/client.js)
+#
+# PORT is injected automatically by Railway at runtime -- src/server.js
+# already reads process.env.PORT with an 8080 fallback, no change needed.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+numReplicas = 1

@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC, REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, REPO_MAP_DATABASE_URL } from "./config.js";
 import { isQStashConfigured, isEditorQStashConfigured } from "./connectors/delegate/qstash_client.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
@@ -26,6 +26,7 @@ import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/delegate/designer/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
+import * as repomap    from "./connectors/repomap/tools.js";
 
 // Factory function to build a fresh McpServer instance with all connectors registered.
 // On Vercel, serverless functions reuse warm containers across separate requests/invocations.
@@ -51,6 +52,7 @@ function createMcpServer() {
   frontend.register(server);
   sync.register(server);
   jules.register(server);
+  repomap.register(server);
 
   return server;
 }
@@ -155,6 +157,8 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       gemini: Boolean(GEMINI_API_KEY),
       frontend: Boolean(GEMINI_API_KEY), // delegate_designer's agent loop runs on the Gemini connector -- no separate frontend provider config anymore
       jules:  Boolean(JULES_API_KEY),
+      repomap_scan: Boolean(REPO_MAP_WORKER_URL && REPO_MAP_SHARED_SECRET), // repo_map_scan (write path, via Railway worker)
+      repomap_query: Boolean(REPO_MAP_DATABASE_URL && GEMINI_API_KEY), // repo_map search/graph (read path, direct to Neon)
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });
