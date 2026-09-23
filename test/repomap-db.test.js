@@ -29,7 +29,7 @@ describe("connectors/repomap/db.js", () => {
   });
 
   it("throws an error when REPO_MAP_DATABASE_URL is not set", async () => {
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: undefined,
     }));
 
@@ -43,7 +43,7 @@ describe("connectors/repomap/db.js", () => {
       query: mockQuery,
     }));
 
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: "postgres://user:pass@localhost:5432/db",
     }));
 
@@ -60,7 +60,7 @@ describe("connectors/repomap/db.js", () => {
       query: mockQuery,
     }));
 
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: "postgres://user:pass@localhost:5432/db",
     }));
 
@@ -74,7 +74,7 @@ describe("connectors/repomap/db.js", () => {
       query: mockQuery,
     }));
 
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: "postgres://user:pass@localhost:5432/db",
     }));
 
