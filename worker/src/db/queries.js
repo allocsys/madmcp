@@ -70,7 +70,95 @@ export async function upsertFile({ repoId, path, language, contentHash }) {
   return rows[0];
 }
 
+export async function getRepoById(repoId) {
+  const { rows } = await query(`SELECT * FROM repos WHERE id = $1`, [repoId]);
+  return rows[0] || null;
+}
+
+export async function updateRepoCommit(repoId, commit) {
+  await query(`UPDATE repos SET last_scanned_commit = $1 WHERE id = $2`, [commit, repoId]);
+}
+
+// A file that no longer exists on disk (per diffFiles' `deleted` list).
+// symbols/edges/chunks cascade-delete via FK ON DELETE CASCADE (schema.sql).
+export async function deleteFile(repoId, path) {
+  await query(`DELETE FROM files WHERE repo_id = $1 AND path = $2`, [repoId, path]);
+}
+
+// --- Granular per-file helpers, used instead of replaceFileArtifacts below.
+// Cross-file call/import edges can only be resolved once every changed
+// file's symbols already have real DB ids, so the scan pipeline needs to
+// insert symbols for ALL changed files first, then resolve + insert edges
+// and chunks in a second pass -- one combined per-file transaction can't do
+// that on its own.
+
+export async function deleteFileArtifacts(fileId) {
+  await query(`DELETE FROM chunks WHERE file_id = $1`, [fileId]);
+  await query(`DELETE FROM edges WHERE src_file_id = $1`, [fileId]);
+  await query(`DELETE FROM symbols WHERE file_id = $1`, [fileId]);
+}
+
+export async function insertSymbols({ repoId, fileId, symbols }) {
+  const symbolIdByLocal = new Map();
+  for (const s of symbols) {
+    const { rows } = await query(
+      `INSERT INTO symbols (repo_id, file_id, kind, name, qualified_name, start_line, end_line, signature)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [repoId, fileId, s.kind, s.name, s.qualifiedName, s.startLine, s.endLine, s.signature]
+    );
+    symbolIdByLocal.set(s.localId, rows[0].id);
+  }
+  return symbolIdByLocal;
+}
+
+export async function insertEdges({ repoId, fileId, edges }) {
+  for (const e of edges) {
+    await query(
+      `INSERT INTO edges (repo_id, src_symbol_id, dst_symbol_id, src_file_id, dst_file_id, edge_type)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [repoId, e.srcSymbolId || null, e.dstSymbolId || null, fileId, e.dstFileId || null, e.edgeType]
+    );
+  }
+}
+
+export async function insertChunks({ repoId, fileId, chunks }) {
+  for (const c of chunks) {
+    await query(
+      `INSERT INTO chunks (repo_id, symbol_id, file_id, content, embedding, content_hash)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [repoId, c.symbolId || null, fileId, c.content, c.embedding, c.contentHash]
+    );
+  }
+}
+
+// name -> [{symbolId, fileId, qualifiedName}], across the WHOLE repo (both
+// files touched by this scan and untouched ones already in the db). Used to
+// resolve `calls` edges (graph.js only knows the raw callee name).
+export async function getSymbolIndex(repoId) {
+  const { rows } = await query(
+    `SELECT id, file_id, name, qualified_name FROM symbols WHERE repo_id = $1`,
+    [repoId]
+  );
+  const byName = new Map();
+  for (const r of rows) {
+    if (!byName.has(r.name)) byName.set(r.name, []);
+    byName.get(r.name).push({ symbolId: r.id, fileId: r.file_id, qualifiedName: r.qualified_name });
+  }
+  return byName;
+}
+
+// path -> file id, across the whole repo. Used to resolve relative `imports`
+// edges (graph.js only knows the raw specifier string, e.g. './foo').
+export async function getFileIndex(repoId) {
+  const { rows } = await query(`SELECT id, path FROM files WHERE repo_id = $1`, [repoId]);
+  return new Map(rows.map((r) => [r.path, r.id]));
+}
+
 // Replace all symbols/edges/chunks for a changed file in one transaction.
+// Superseded by the granular helpers above for the main scan pipeline
+// (queue.js), which needs symbol-insertion and edge-insertion to happen in
+// separate passes; kept here as a simpler all-in-one option for callers that
+// don't need cross-file edge resolution (e.g. a single-file re-index).
 export async function replaceFileArtifacts({ fileId, repoId, symbols, edges, chunks }) {
   return withTransaction(async (client) => {
     await client.query(`DELETE FROM chunks WHERE file_id = $1`, [fileId]);
