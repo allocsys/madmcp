@@ -9,11 +9,11 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-vi.mock("./db.js", () => ({
+vi.mock("../connectors/repomap/db.js", () => ({
   query: vi.fn(),
 }));
 
-vi.mock("./embed.js", () => ({
+vi.mock("../connectors/repomap/embed.js", () => ({
   embedQuery: vi.fn(),
 }));
 
@@ -35,7 +35,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("returns empty array if repo does not exist in DB", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockResolvedValueOnce({ rows: [] }); // getRepoRow returns empty rows
 
       const { queryChunksDb } = await import("../connectors/repomap/queries.js");
@@ -46,8 +46,8 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("successfully embeds text and runs pgvector semantic search query", async () => {
-      const { query } = await import("./db.js");
-      const { embedQuery } = await import("./embed.js");
+      const { query } = await import("../connectors/repomap/db.js");
+      const { embedQuery } = await import("../connectors/repomap/embed.js");
 
       query.mockResolvedValueOnce({ rows: [{ id: 42 }] }); // getRepoRow
       embedQuery.mockResolvedValueOnce([0.1, 0.2]); // embedQuery
@@ -100,7 +100,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("returns empty array if repo does not exist", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockResolvedValueOnce({ rows: [] }); // getRepoRow
 
       const { queryGraphDb } = await import("../connectors/repomap/queries.js");
@@ -110,7 +110,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("returns empty array if startIds are empty", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockResolvedValueOnce({ rows: [{ id: 42 }] }); // getRepoRow
       query.mockResolvedValueOnce({ rows: [] }); // startIds (symbol not found)
 
@@ -121,7 +121,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("handles graph traversal with file mode (direction: imports)", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
         if (sql.includes("SELECT id FROM repos")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
@@ -153,7 +153,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("handles graph traversal with symbol mode (direction: callers)", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
         if (sql.includes("SELECT id FROM repos")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
@@ -203,7 +203,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("returns empty if graph traversal returns no nodeIds", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
         if (sql.includes("SELECT id FROM repos")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
@@ -229,7 +229,7 @@ describe("connectors/repomap/queries.js", () => {
     });
 
     it("defaults to reading symbols in file when only file is given with callers direction", async () => {
-      const { query } = await import("./db.js");
+      const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
         if (sql.includes("SELECT id FROM repos")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
