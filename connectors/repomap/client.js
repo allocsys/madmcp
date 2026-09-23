@@ -49,10 +49,24 @@ async function workerRequest(path, { method = "GET", body } = {}) {
 // exposed to the model/user. Returns { jobId, status } immediately; the scan
 // runs in the background on the worker.
 export async function startScan({ owner = DEFAULT_OWNER, repo, ref }) {
-  const { token } = await getCloneToken(owner, repo);
+  let cloneToken;
+  try {
+    ({ token: cloneToken } = await getCloneToken(owner, repo));
+  } catch (err) {
+    // The GitHub App is only installed on a narrow set of repos. Minting
+    // fails with "not accessible to the parent installation" for any repo
+    // outside that set -- expected for public repos the App was never
+    // installed on, not a real error. Fall back to a tokenless clone; the
+    // worker already supports that for public repos (worker/src/scan/
+    // clone.js). Anything else (missing config, genuine auth failure) still
+    // throws.
+    if (!/not accessible to the parent installation/i.test(err.message)) {
+      throw err;
+    }
+  }
   return workerRequest("/scan", {
     method: "POST",
-    body: { owner, repo, ref, cloneToken: token },
+    body: { owner, repo, ref, cloneToken },
   });
 }
 
