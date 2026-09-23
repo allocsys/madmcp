@@ -412,14 +412,14 @@ export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 // madmcp talks to it as a client over HTTP, authenticated with a shared
 // secret (worker/src/auth.js expects "Authorization: Bearer <secret>").
 // Not set until the Railway service is actually deployed (see checkpoint TODO);
-// repo_map/repo_map_scan tools fail with a clear config error until both
+// map.query/map.index tools fail with a clear config error until both
 // of these are set, same pattern as every other optional connector above.
 export const REPO_MAP_WORKER_URL = process.env.REPO_MAP_WORKER_URL;
 export const REPO_MAP_SHARED_SECRET = process.env.REPO_MAP_SHARED_SECRET;
 
 // madmcp's OWN read-side connection to the same Neon database the worker
-// writes to -- used by connectors/repomap/db.js for repo_map's search/graph
-// (no worker hop needed for reads, only for repo_map_scan). Point this at a
+// writes to -- used by connectors/repomap/db.js for map.query's search/graph
+// (no worker hop needed for reads, only for map.index). Point this at a
 // separate READ-ONLY Postgres role in Neon, not the worker's read-write
 // DATABASE_URL -- see db.js's file header for why.
 export const REPO_MAP_DATABASE_URL = process.env.REPO_MAP_DATABASE_URL;

@@ -249,7 +249,7 @@ export function register(server) {
     "RULE: query scoped via repo:owner/name AND index returns nothing -> auto-falls back to a direct content search of that repo (handles GitHub's known private-repo search-index gap; fetches the repo as a tarball and greps it locally -- see fallbackCodeSearch).\n" +
     "RULE: need to search a NON-default branch -> pass `ref` (branch, tag, or commit SHA) alongside a repo:owner/name qualifier in the query. GitHub's real /search/code index only ever covers the default branch, so any `ref` always uses the local content-search fallback directly (skips the real API call entirely) -- requires repo:owner/name in the query since there's no other way to know which repo to fetch.\n" +
     "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually.\n" +
-    "RULE: query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> repo_map (mode: search) instead.",
+    "RULE: query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map.query (mode: search) instead.",
     {
       query:    z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
       per_page: z.number().optional().describe("Number of results to return, max 100 (default: 20)"),

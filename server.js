@@ -157,8 +157,8 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       gemini: Boolean(GEMINI_API_KEY),
       frontend: Boolean(GEMINI_API_KEY), // delegate_designer's agent loop runs on the Gemini connector -- no separate frontend provider config anymore
       jules:  Boolean(JULES_API_KEY),
-      repomap_scan: Boolean(REPO_MAP_WORKER_URL && REPO_MAP_SHARED_SECRET), // repo_map_scan (write path, via Railway worker)
-      repomap_query: Boolean(REPO_MAP_DATABASE_URL && GEMINI_API_KEY), // repo_map search/graph (read path, direct to Neon)
+      map_index: Boolean(REPO_MAP_WORKER_URL && REPO_MAP_SHARED_SECRET), // map.index (write path, via Railway worker)
+      map_query: Boolean(REPO_MAP_DATABASE_URL && GEMINI_API_KEY), // map.query search/graph (read path, direct to Neon)
       auth:   Boolean(MCP_SHARED_KEY),
     },
   });

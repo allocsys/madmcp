@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/repomap/queries.js — read-side of repo_map, run directly
+// connectors/repomap/queries.js — read-side of map.query, run directly
 // against Neon from madmcp (no Railway worker hop). Ported from
 // worker/src/query/index.js -- keep the two in sync if the schema or query
 // logic changes; worker/src/query/index.js remains the copy the worker

@@ -333,7 +333,7 @@ describe("connectors/repomap/client.js", () => {
         expect(sentBody).toMatchObject({ owner: "allocsys", repo: "widgets", ref: "main" });
       });
 
-      it("always checks HEAD against the repo's default_ref -- searchChunks/queryGraph accept no ref param (only repo_map_scan does)", async () => {
+      it("always checks HEAD against the repo's default_ref -- searchChunks/queryGraph accept no ref param (only map.index does)", async () => {
         const { getRepoRow, queryGraphDb } = await import("../connectors/repomap/queries.js");
         const { githubRequest } = await import("../connectors/github/client.js");
         getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "abc", default_ref: "main" });
