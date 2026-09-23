@@ -124,8 +124,8 @@ describe("connectors/repomap/queries.js", () => {
         expect(params[2]).toBe(10);
       });
 
-      it("clamps 0 up to the floor of 1, instead of silently returning nothing", async () => {
-        expect(await runWithTopK(0)).toBe(1);
+      it("treats an explicit 0 as omitted and falls back to the default of 10 (Number(0) || 10, same pattern depth's clamp already uses) -- avoids the original bug (LIMIT 0 = no rows) via the default rather than a floor", async () => {
+        expect(await runWithTopK(0)).toBe(10);
       });
 
       it("clamps a negative value up to 1, instead of Postgres throwing 'LIMIT must not be negative'", async () => {
