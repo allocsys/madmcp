@@ -25,7 +25,12 @@ import {
   getFileIndex,
 } from '../db/queries.js';
 
-const WORKER_ID = `${process.env.FLY_ALLOC_ID || 'local'}-${randomUUID().slice(0, 8)}`;
+// RAILWAY_REPLICA_ID identifies a specific running instance; falls back to
+// RAILWAY_DEPLOYMENT_ID (shared across replicas of one deploy) then 'local'
+// (e.g. running outside Railway). Only used as a human-readable label on
+// scan_jobs.claimed_by -- claimNextQueuedJob's actual concurrency safety
+// comes from SELECT ... FOR UPDATE SKIP LOCKED, not from this being unique.
+const WORKER_ID = `${process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || 'local'}-${randomUUID().slice(0, 8)}`;
 const POLL_INTERVAL_MS = 5000;
 
 // Extensions tried (in order, with no extension first) when resolving a
