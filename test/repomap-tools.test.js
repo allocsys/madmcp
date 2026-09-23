@@ -205,7 +205,7 @@ describe("connectors/repomap/tools.js", () => {
 
     it("formats successful graph results for symbols", async () => {
       queryGraph.mockResolvedValueOnce({
-        results: [{ qualifiedName: "mod.foo", filePath: "src/a.js", startLine: 1, endLine: 5, depth: 1 }],
+        results: [{ name: "foo", qualifiedName: "mod.foo", filePath: "src/a.js", startLine: 1, endLine: 5, depth: 1 }],
       });
 
       const result = await server.tools.repo_map({ repo: "widgets", mode: "graph", symbol: "foo" });
