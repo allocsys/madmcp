@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/repomap/embed.js — embeds repo_map search queries via the
+// connectors/repomap/embed.js — embeds map.query search queries via the
 // Gemini API, for madmcp's direct (worker-bypassing) query path.
 //
 // Ported from worker/src/embed/gemini.js -- MUST stay in lockstep with it:
@@ -20,7 +20,7 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 // moving to the next key only on an auth/quota-shaped failure (401/403/429).
 export async function embedQuery(text) {
   if (!GEMINI_API_KEYS.length) {
-    throw new Error("GEMINI_API_KEYS (or legacy GEMINI_API_KEY) is not set -- required to embed repo_map search queries.");
+    throw new Error("GEMINI_API_KEYS (or legacy GEMINI_API_KEY) is not set -- required to embed map.query search queries.");
   }
 
   let lastErr;
