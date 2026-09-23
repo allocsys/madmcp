@@ -13,7 +13,25 @@ export async function cloneRepo({ owner, repo, ref, cloneToken }) {
     : `https://github.com/${owner}/${repo}.git`; // public repo fallback
 
   const git = simpleGit();
-  await git.clone(url, dir, ['--depth', '1', ...(ref ? ['--branch', ref] : [])]);
+  try {
+    await git.clone(url, dir, ['--depth', '1', ...(ref ? ['--branch', ref] : [])]);
+  } catch (err) {
+    // git can't tell a private repo from a nonexistent one when the
+    // request is unauthenticated -- GitHub returns 401 either way, and
+    // git's own message for that ("could not read Username ... No such
+    // device or address") is accurate but unhelpful. Give a clearer error
+    // for exactly that case; anything else (bad ref, network failure,
+    // etc.) passes through unchanged.
+    if (!cloneToken && /could not read username/i.test(err.message)) {
+      await rm(dir, { recursive: true, force: true });
+      throw new Error(
+        `Could not clone ${owner}/${repo}: not found, or not public. ` +
+        `If this repo is private, pass a cloneToken (madmcp mints one via ` +
+        `get_repo_clone_token). Otherwise check the owner/repo spelling.`
+      );
+    }
+    throw err;
+  }
 
   const cloned = simpleGit(dir);
   const log = await cloned.log({ maxCount: 1 });
