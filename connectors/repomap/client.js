@@ -55,13 +55,20 @@ export async function startScan({ owner = DEFAULT_OWNER, repo, ref }) {
     ({ token: cloneToken } = await getCloneToken(owner, repo));
   } catch (err) {
     // The GitHub App is only installed on a narrow set of repos. Minting
-    // fails with "not accessible to the parent installation" for any repo
-    // outside that set -- expected for public repos the App was never
-    // installed on, not a real error. Fall back to a tokenless clone; the
-    // worker already supports that for public repos (worker/src/scan/
-    // clone.js). Anything else (missing config, genuine auth failure) still
-    // throws.
-    if (!/not accessible to the parent installation/i.test(err.message)) {
+    // fails for any repo outside that set -- expected for public repos the
+    // App was never installed on, not a real error. Fall back to a
+    // tokenless clone; the worker already supports that for public repos
+    // (worker/src/scan/clone.js). Anything else (missing config, genuine
+    // auth failure) still throws.
+    //
+    // Prefer the actual HTTP status (set in app_auth.js) over matching
+    // GitHub's error wording -- that wording isn't a stable contract and
+    // has already drifted once. Status check first; the string match is
+    // kept only as a fallback for an error object that predates err.status
+    // being set, and covers a couple of phrasings GitHub has used for this.
+    const notInstalled = err.status === 404 || err.status === 422 ||
+      /not accessible to the parent installation|resource not accessible by integration/i.test(err.message);
+    if (!notInstalled) {
       throw err;
     }
   }
