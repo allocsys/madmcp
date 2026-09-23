@@ -42,7 +42,11 @@ describe("connectors/repomap/queries.js", () => {
       const results = await queryChunksDb({ owner: "o", repo: "r", query: "q" });
 
       expect(results).toEqual([]);
-      expect(query).toHaveBeenCalledWith("SELECT id FROM repos WHERE owner = $1 AND name = $2", ["o", "r"]);
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/SELECT .*FROM repos WHERE owner = \$1 AND name = \$2/s);
+      expect(sql).toMatch(/last_scanned_commit/);
+      expect(sql).toMatch(/default_ref/);
+      expect(params).toEqual(["o", "r"]);
     });
 
     it("successfully embeds text and runs pgvector semantic search query", async () => {
