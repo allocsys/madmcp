@@ -10,8 +10,11 @@ import pgvector from "pgvector";
 import { query } from "./db.js";
 import { embedQuery } from "./embed.js";
 
-async function getRepoRow(owner, repo) {
-  const { rows } = await query(`SELECT id FROM repos WHERE owner = $1 AND name = $2`, [owner, repo]);
+export async function getRepoRow(owner, repo) {
+  const { rows } = await query(
+    `SELECT id, last_scanned_commit, default_ref FROM repos WHERE owner = $1 AND name = $2`,
+    [owner, repo]
+  );
   return rows[0] || null;
 }
 

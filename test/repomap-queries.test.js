@@ -42,7 +42,11 @@ describe("connectors/repomap/queries.js", () => {
       const results = await queryChunksDb({ owner: "o", repo: "r", query: "q" });
 
       expect(results).toEqual([]);
-      expect(query).toHaveBeenCalledWith("SELECT id FROM repos WHERE owner = $1 AND name = $2", ["o", "r"]);
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/SELECT .*FROM repos WHERE owner = \$1 AND name = \$2/s);
+      expect(sql).toMatch(/last_scanned_commit/);
+      expect(sql).toMatch(/default_ref/);
+      expect(params).toEqual(["o", "r"]);
     });
 
     it("successfully embeds text and runs pgvector semantic search query", async () => {
@@ -123,7 +127,7 @@ describe("connectors/repomap/queries.js", () => {
     it("handles graph traversal with file mode (direction: imports)", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT id FROM files WHERE")) {
@@ -155,7 +159,7 @@ describe("connectors/repomap/queries.js", () => {
     it("handles graph traversal with symbol mode (direction: callers)", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT id FROM symbols WHERE")) {
@@ -205,7 +209,7 @@ describe("connectors/repomap/queries.js", () => {
     it("returns empty if graph traversal returns no nodeIds", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT id FROM symbols WHERE")) {
@@ -231,7 +235,7 @@ describe("connectors/repomap/queries.js", () => {
     it("defaults to reading symbols in file when only file is given with callers direction", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT s.id FROM symbols s JOIN files f")) {

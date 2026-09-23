@@ -15,7 +15,8 @@
 
 import { REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, DEFAULT_OWNER } from "../../config.js";
 import { getCloneToken } from "../github/app_auth.js";
-import { queryChunksDb, queryGraphDb } from "./queries.js";
+import { githubRequest } from "../github/client.js";
+import { queryChunksDb, queryGraphDb, getRepoRow } from "./queries.js";
 
 function assertConfigured() {
   if (!REPO_MAP_WORKER_URL) throw new Error("REPO_MAP_WORKER_URL is not set -- the repo_map worker hasn't been deployed/configured yet.");
@@ -74,10 +75,45 @@ export async function getScanStatus(jobId) {
   return workerRequest(`/status/${encodeURIComponent(jobId)}`);
 }
 
+// Compares the repo's current HEAD sha (for `ref`, or the repo's own
+// default_ref if `ref` is omitted) against repos.last_scanned_commit and, on
+// a mismatch, fires an incremental repo_map_scan in the background -- fired
+// and NOT awaited to completion, so this never adds scan latency to the read
+// that triggered it. That read still answers from whatever's currently
+// indexed; the *next* read sees the fresh data once the background scan
+// lands. This is what lets repo_map self-heal staleness without every write
+// tool (edit_file/create_repo_file/overwrite_files) needing to know or care
+// that repo_map exists.
+//
+// Deliberately fails soft: a repo that's never been scanned has no row (not
+// this function's problem -- the caller's existing "no results, has it been
+// scanned?" message covers that), and any error fetching the HEAD sha or
+// enqueuing the scan (transient GitHub API hiccup, worker briefly down,
+// etc.) is swallowed rather than thrown -- a failed staleness check should
+// never break the read path itself. It only awaits startScan() far enough to
+// know the scan was enqueued (jobId back), never getScanStatus/polling.
+async function ensureFresh({ owner = DEFAULT_OWNER, repo, ref }) {
+  try {
+    const repoRow = await getRepoRow(owner, repo);
+    if (!repoRow) return; // never scanned -- nothing to compare against
+
+    const branch = ref || repoRow.default_ref;
+    const { object } = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+    const headSha = object?.sha;
+    if (!headSha || headSha === repoRow.last_scanned_commit) return; // already fresh
+
+    await startScan({ owner, repo, ref: branch });
+  } catch {
+    // Staleness check itself failing is not the caller's problem -- fall
+    // through and let the read answer from whatever's currently indexed.
+  }
+}
+
 // Semantic search over embedded chunks (functions/classes) in a scanned repo.
 // Queries Neon directly -- see queries.js. Returns the same { results } shape
 // the worker's HTTP endpoint used to, so tools.js needed no changes.
 export async function searchChunks({ owner = DEFAULT_OWNER, repo, query, topK }) {
+  await ensureFresh({ owner, repo });
   const results = await queryChunksDb({ owner, repo, query, topK });
   return { results };
 }
@@ -85,6 +121,7 @@ export async function searchChunks({ owner = DEFAULT_OWNER, repo, query, topK })
 // Graph traversal: callers/callees of a symbol, or importers/imports of a file.
 // Queries Neon directly -- see queries.js.
 export async function queryGraph({ owner = DEFAULT_OWNER, repo, symbol, file, direction, depth }) {
+  await ensureFresh({ owner, repo });
   const results = await queryGraphDb({ owner, repo, symbol, file, direction, depth });
   return { results };
 }

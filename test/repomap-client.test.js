@@ -28,9 +28,19 @@ vi.mock("../connectors/github/app_auth.js", () => ({
 // HTTP hop -- see client.js's file header) -- mock at this boundary rather
 // than fetch, which also means db.js/embed.js (and their REPO_MAP_DATABASE_URL/
 // GEMINI_API_KEYS config.js dependency) never load in this test file.
+// getRepoRow is also mocked here -- it's what ensureFresh() (client.js) uses
+// to read last_scanned_commit/default_ref for the staleness check below.
 vi.mock("../connectors/repomap/queries.js", () => ({
   queryChunksDb: vi.fn(),
   queryGraphDb: vi.fn(),
+  getRepoRow: vi.fn(),
+}));
+
+// ensureFresh()'s HEAD-sha check goes through githubRequest, not raw fetch --
+// mock at that boundary so these tests aren't coupled to githubRequest's own
+// retry/throttle internals (already covered by test/github-client.test.js).
+vi.mock("../connectors/github/client.js", () => ({
+  githubRequest: vi.fn(),
 }));
 
 describe("connectors/repomap/client.js", () => {
@@ -207,6 +217,113 @@ describe("connectors/repomap/client.js", () => {
       expect(result).toEqual({ results: [{ name: "foo", filePath: "src/a.js", depth: 1 }] });
       expect(queryGraphDb).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", symbol: "foo", file: undefined, direction: "callers", depth: 2 });
       expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    describe("ensureFresh (staleness check called from searchChunks/queryGraph)", () => {
+      beforeEach(async () => {
+        const { getCloneToken } = await import("../connectors/github/app_auth.js");
+        getCloneToken.mockResolvedValue({ token: "ghs_x" });
+      });
+
+      it("never-scanned repo (no row): does not call githubRequest or startScan, still answers the read", async () => {
+        const { getRepoRow, queryChunksDb } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce(null);
+        queryChunksDb.mockResolvedValueOnce([]);
+        global.fetch = vi.fn();
+
+        const { searchChunks } = await import("../connectors/repomap/client.js");
+        const result = await searchChunks({ owner: "allocsys", repo: "widgets", query: "q" });
+
+        expect(result).toEqual({ results: [] });
+        expect(githubRequest).not.toHaveBeenCalled();
+        expect(global.fetch).not.toHaveBeenCalled();
+      });
+
+      it("fresh HEAD (matches last_scanned_commit): does not fire a scan", async () => {
+        const { getRepoRow, queryGraphDb } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "abc123", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "abc123" } });
+        queryGraphDb.mockResolvedValueOnce([]);
+        global.fetch = vi.fn();
+
+        const { queryGraph } = await import("../connectors/repomap/client.js");
+        await queryGraph({ owner: "allocsys", repo: "widgets", symbol: "foo" });
+
+        expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/main");
+        expect(global.fetch).not.toHaveBeenCalled(); // startScan (which hits fetch) never fired
+      });
+
+      it("stale HEAD (mismatch): fires startScan in the background without blocking the read's result", async () => {
+        const { getRepoRow, queryChunksDb } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "old_sha", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "new_sha" } });
+        queryChunksDb.mockResolvedValueOnce([{ filePath: "src/a.js" }]);
+        mockFetchOnce(202, { jobId: 42, status: "queued" });
+
+        const { searchChunks } = await import("../connectors/repomap/client.js");
+        const result = await searchChunks({ owner: "allocsys", repo: "widgets", query: "q" });
+
+        // Read still answers from whatever's currently indexed -- doesn't wait on the rescan.
+        expect(result).toEqual({ results: [{ filePath: "src/a.js" }] });
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        const [url, init] = global.fetch.mock.calls[0];
+        expect(url).toBe(`${WORKER_URL}/scan`);
+        const sentBody = JSON.parse(init.body);
+        expect(sentBody).toMatchObject({ owner: "allocsys", repo: "widgets", ref: "main" });
+      });
+
+      it("always checks HEAD against the repo's default_ref -- searchChunks/queryGraph accept no ref param (only repo_map_scan does)", async () => {
+        const { getRepoRow, queryGraphDb } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "abc", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "abc" } });
+        queryGraphDb.mockResolvedValueOnce([]);
+        global.fetch = vi.fn();
+
+        const { queryGraph } = await import("../connectors/repomap/client.js");
+        // A stray `ref` here is not destructured by queryGraph and has no effect --
+        // documenting that on purpose, not testing a real forwarding path.
+        await queryGraph({ owner: "allocsys", repo: "widgets", symbol: "foo", ref: "feature-branch" });
+
+        expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/main");
+      });
+
+      it("swallows a failure fetching HEAD sha and still returns the read's results", async () => {
+        const { getRepoRow, queryChunksDb } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "abc", default_ref: "main" });
+        githubRequest.mockRejectedValueOnce(new Error("GitHub API hiccup"));
+        queryChunksDb.mockResolvedValueOnce([{ filePath: "src/a.js" }]);
+        global.fetch = vi.fn();
+
+        const { searchChunks } = await import("../connectors/repomap/client.js");
+        const result = await searchChunks({ owner: "allocsys", repo: "widgets", query: "q" });
+
+        expect(result).toEqual({ results: [{ filePath: "src/a.js" }] });
+        expect(global.fetch).not.toHaveBeenCalled(); // never got far enough to call startScan
+      });
+
+      it("swallows a failure enqueuing the rescan itself and still returns the read's results", async () => {
+        const { getRepoRow, queryGraphDb } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "old_sha", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "new_sha" } });
+        queryGraphDb.mockResolvedValueOnce([{ name: "foo" }]);
+        global.fetch = vi.fn().mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          text: async () => JSON.stringify({ error: "worker briefly down" }),
+        });
+
+        const { queryGraph } = await import("../connectors/repomap/client.js");
+        const result = await queryGraph({ owner: "allocsys", repo: "widgets", symbol: "foo" });
+
+        expect(result).toEqual({ results: [{ name: "foo" }] });
+      });
     });
 
     it("throws an Error including the worker's error message on a non-2xx response", async () => {

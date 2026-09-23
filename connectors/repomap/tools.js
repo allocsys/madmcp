@@ -14,7 +14,7 @@ export function register(server) {
   server.tool(
     "repo_map_scan",
     "DOES: Index (or re-index) a repo into repo_map's code graph + embeddings so repo_map can search/traverse it -- OR, if jobId is given, poll the status of a scan already in progress.\n" +
-    "RULE: call this before repo_map on a repo that's never been scanned, or when it may be stale (new commits since the last scan). Re-scans are incremental (only changed files are re-parsed/re-embedded), so it's cheap to call again.\n" +
+    "RULE: call this before repo_map on a repo that's never been scanned. repo_map itself now checks the repo's current HEAD against the last scan on every query and fires an incremental re-scan in the background on a mismatch, so you no longer need to call this yourself just because it 'might be stale' -- the read still answers immediately from whatever's indexed and picks up the fresh data on the next call. Still call this explicitly when you want to wait for a scan to finish before querying (e.g. right after pointing repo_map at a brand-new repo), or to check progress via jobId. Re-scans are incremental (only changed files are re-parsed/re-embedded), so it's cheap to call again.\n" +
     "ASYNC: scanning runs in the background on the worker. This returns a jobId immediately -- call again with that jobId to poll status ('queued' | 'running' | 'done' | 'failed'). A fresh large repo can take a while; a re-scan with few changed files is fast.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
