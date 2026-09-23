@@ -4,7 +4,7 @@ import Parser from 'web-tree-sitter';
 // Broad language support via tree-sitter WASM grammars.
 // Each entry needs the corresponding tree-sitter-<lang>.wasm file available
 // (fetch at build time into worker/grammars/ — see README TODO).
-const LANGUAGE_BY_EXT = {
+export const LANGUAGE_BY_EXT = {
   '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
   '.ts': 'typescript', '.tsx': 'tsx',
   '.py': 'python',
