@@ -26,6 +26,7 @@ import * as research   from "./connectors/exa/research_tools.js";
 import * as frontend   from "./connectors/delegate/designer/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
+import * as repomap    from "./connectors/repomap/tools.js";
 
 // Factory function to build a fresh McpServer instance with all connectors registered.
 // On Vercel, serverless functions reuse warm containers across separate requests/invocations.
@@ -51,6 +52,7 @@ function createMcpServer() {
   frontend.register(server);
   sync.register(server);
   jules.register(server);
+  repomap.register(server);
 
   return server;
 }
