@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // connectors/repomap/client.js — talks to the repo_map worker (worker/,
-// deployed separately on Fly.io). Auth: shared-secret bearer token
+// deployed separately on Railway). Auth: shared-secret bearer token
 // (worker/src/auth.js). Scanning a repo requires a clone token minted via
 // GitHub App auth (same mechanism as the get_repo_clone_token MCP tool),
 // since the worker needs to clone the target repo itself.
