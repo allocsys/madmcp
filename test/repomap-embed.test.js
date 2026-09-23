@@ -18,7 +18,7 @@ describe("connectors/repomap/embed.js", () => {
   });
 
   it("throws an error when GEMINI_API_KEYS is empty", async () => {
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       GEMINI_API_KEYS: [],
     }));
 
@@ -34,7 +34,7 @@ describe("connectors/repomap/embed.js", () => {
       json: async () => ({ embedding: { values: mockEmbedding } }),
     });
 
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       GEMINI_API_KEYS: ["key-1"],
     }));
 
@@ -72,7 +72,7 @@ describe("connectors/repomap/embed.js", () => {
         json: async () => ({ embedding: { values: mockEmbedding } }),
       });
 
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       GEMINI_API_KEYS: ["key-exhausted", "key-fresh"],
     }));
 
@@ -92,7 +92,7 @@ describe("connectors/repomap/embed.js", () => {
       text: async () => "Internal Server Error",
     });
 
-    vi.doMock("../../config.js", () => ({
+    vi.doMock("../config.js", () => ({
       GEMINI_API_KEYS: ["key-1", "key-2"],
     }));
 
