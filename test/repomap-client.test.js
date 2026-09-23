@@ -130,6 +130,36 @@ describe("connectors/repomap/client.js", () => {
       expect(sentBody).toEqual({ owner: "allocsys", repo: "widgets", ref: "main", cloneToken: "ghs_realtoken123" });
     });
 
+    it("startScan falls back to a tokenless clone when the App isn't installed on the repo", async () => {
+      const { getCloneToken } = await import("../connectors/github/app_auth.js");
+      getCloneToken.mockRejectedValue(
+        new Error(
+          "Failed to mint installation token for someuser/somerepo (422): " +
+          "There is at least one repository that does not exist or is not accessible to the parent installation."
+        )
+      );
+      mockFetchOnce(202, { jobId: 9, status: "queued" });
+
+      const { startScan } = await import("../connectors/repomap/client.js");
+      const result = await startScan({ owner: "someuser", repo: "somerepo" });
+
+      expect(result).toEqual({ jobId: 9, status: "queued" });
+      const [, init] = global.fetch.mock.calls[0];
+      const sentBody = JSON.parse(init.body);
+      expect(sentBody).toEqual({ owner: "someuser", repo: "somerepo", ref: undefined, cloneToken: undefined });
+    });
+
+    it("startScan still rethrows a getCloneToken error unrelated to install scope, without calling fetch", async () => {
+      global.fetch = vi.fn();
+      const { getCloneToken } = await import("../connectors/github/app_auth.js");
+      getCloneToken.mockRejectedValue(new Error("GITHUB_APP_PRIVATE_KEY not configured"));
+
+      const { startScan } = await import("../connectors/repomap/client.js");
+
+      await expect(startScan({ repo: "widgets" })).rejects.toThrow(/GITHUB_APP_PRIVATE_KEY not configured/);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
     it("startScan defaults owner to DEFAULT_OWNER when omitted", async () => {
       const { getCloneToken } = await import("../connectors/github/app_auth.js");
       getCloneToken.mockResolvedValue({ token: "ghs_x" });
