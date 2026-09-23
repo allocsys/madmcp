@@ -77,6 +77,9 @@ export function register(server) {
         if (!symbol && !file) {
           return { content: [{ type: "text", text: "symbol or file is required for mode \"graph\"." }], isError: true };
         }
+        if ((direction === "importers" || direction === "imports") && !file) {
+          return { content: [{ type: "text", text: `file is required when direction is "${direction}" (symbol alone isn't enough -- importers/imports walk file-level edges).` }], isError: true };
+        }
         const { results } = await queryGraph({ owner, repo, symbol, file, direction, depth });
         if (!results?.length) return { content: [{ type: "text", text: `No results. Has ${owner}/${repo} been scanned yet? (repo_map_scan)` }] };
         const lines = results.map((r) =>
