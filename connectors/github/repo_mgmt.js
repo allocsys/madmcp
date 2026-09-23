@@ -12,7 +12,8 @@ export function register(server) {
 
   server.tool(
     "create_repo",
-    "Create a new GitHub repository under the authenticated user or an org.",
+    "Create a new GitHub repository under the authenticated user or an org.\n" +
+    "RULE: if the repo's initial content already exists locally (e.g. files already written in the sandbox) rather than being built here file-by-file, don't call this to create an empty repo and then push files one at a time via create_repo_file/edit_file. Instead: get_repo_clone_token to mint a fresh push-capable token, then push the local files directly with git/gh (e.g. `gh repo create owner/name --source=. --push`, or `git init && git remote add origin ... && git push`). Faster, and preserves local commit history if there is one.",
     {
       name:        z.string().describe("Repository name (no spaces)"),
       description: z.string().optional().describe("Short description of the repository"),
