@@ -90,6 +90,56 @@ describe("connectors/repomap/queries.js", () => {
       expect(query).toHaveBeenCalledTimes(2);
       expect(embedQuery).toHaveBeenCalledWith("hello");
     });
+
+    describe("topK clamping", () => {
+      async function runWithTopK(topK) {
+        const { query } = await import("../connectors/repomap/db.js");
+        const { embedQuery } = await import("../connectors/repomap/embed.js");
+        query.mockResolvedValueOnce({ rows: [{ id: 42 }] }); // getRepoRow
+        embedQuery.mockResolvedValueOnce([0.1]);
+        query.mockResolvedValueOnce({ rows: [] }); // chunk query
+
+        const { queryChunksDb } = await import("../connectors/repomap/queries.js");
+        await queryChunksDb({ owner: "o", repo: "r", query: "q", topK });
+
+        const [, params] = query.mock.calls[1]; // second query() call is the chunk search
+        return params[2]; // LIMIT $3
+      }
+
+      it("passes a normal topK through unchanged", async () => {
+        expect(await runWithTopK(5)).toBe(5);
+      });
+
+      it("defaults to 10 when topK is omitted", async () => {
+        const { query } = await import("../connectors/repomap/db.js");
+        const { embedQuery } = await import("../connectors/repomap/embed.js");
+        query.mockResolvedValueOnce({ rows: [{ id: 42 }] });
+        embedQuery.mockResolvedValueOnce([0.1]);
+        query.mockResolvedValueOnce({ rows: [] });
+
+        const { queryChunksDb } = await import("../connectors/repomap/queries.js");
+        await queryChunksDb({ owner: "o", repo: "r", query: "q" });
+
+        const [, params] = query.mock.calls[1];
+        expect(params[2]).toBe(10);
+      });
+
+      it("clamps 0 up to the floor of 1, instead of silently returning nothing", async () => {
+        expect(await runWithTopK(0)).toBe(1);
+      });
+
+      it("clamps a negative value up to 1, instead of Postgres throwing 'LIMIT must not be negative'", async () => {
+        expect(await runWithTopK(-5)).toBe(1);
+      });
+
+      it("clamps an oversized value down to the ceiling of 50", async () => {
+        expect(await runWithTopK(9999)).toBe(50);
+      });
+
+      it("clamps a non-numeric value to the default of 10", async () => {
+        expect(await runWithTopK("not a number")).toBe(10);
+      });
+    });
   });
 
   describe("queryGraphDb", () => {
