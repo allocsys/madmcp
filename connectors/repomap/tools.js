@@ -37,7 +37,7 @@ export function register(server) {
         const job = await startScan({ owner, repo, ref });
         return { content: [{ type: "text", text: `Scan started for ${owner}/${repo}${ref ? `@${ref}` : ""}. jobId: ${job.jobId} (status: ${job.status}). Call repo_map_scan again with this jobId to check progress.` }] };
       } catch (err) {
-        return { content: [{ type: "text", text: err.message }], isError: true };
+        return { content: [{ type: "text", text: `repo_map_scan (${jobId ? "status check" : "start scan"}): ${err.message}` }], isError: true };
       }
     }
   );
