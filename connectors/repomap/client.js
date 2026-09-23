@@ -1,13 +1,21 @@
 // ---------------------------------------------------------------------------
-// connectors/repomap/client.js — talks to the repo_map worker (worker/,
-// deployed separately on Railway). Auth: shared-secret bearer token
-// (worker/src/auth.js). Scanning a repo requires a clone token minted via
-// GitHub App auth (same mechanism as the get_repo_clone_token MCP tool),
-// since the worker needs to clone the target repo itself.
+// connectors/repomap/client.js — repo_map_scan (write path) talks to the
+// repo_map worker (worker/, deployed separately on Railway) over HTTP,
+// auth'd with a shared-secret bearer token (worker/src/auth.js). Scanning a
+// repo requires a clone token minted via GitHub App auth (same mechanism as
+// the get_repo_clone_token MCP tool), since the worker needs to clone the
+// target repo itself.
+//
+// repo_map's search/graph (read path) query Neon directly (queries.js) --
+// no worker hop needed, since neither semantic search nor graph traversal
+// require anything the worker uniquely provides (the worker's job is the
+// scan: clone + parse + chunk + embed + write). See queries.js/db.js for
+// why this uses a separate, read-only DB credential from the worker's.
 // ---------------------------------------------------------------------------
 
 import { REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, DEFAULT_OWNER } from "../../config.js";
 import { getCloneToken } from "../github/app_auth.js";
+import { queryChunksDb, queryGraphDb } from "./queries.js";
 
 function assertConfigured() {
   if (!REPO_MAP_WORKER_URL) throw new Error("REPO_MAP_WORKER_URL is not set -- the repo_map worker hasn't been deployed/configured yet.");
@@ -53,17 +61,16 @@ export async function getScanStatus(jobId) {
 }
 
 // Semantic search over embedded chunks (functions/classes) in a scanned repo.
+// Queries Neon directly -- see queries.js. Returns the same { results } shape
+// the worker's HTTP endpoint used to, so tools.js needed no changes.
 export async function searchChunks({ owner = DEFAULT_OWNER, repo, query, topK }) {
-  return workerRequest("/query/search", {
-    method: "POST",
-    body: { owner, repo, query, topK },
-  });
+  const results = await queryChunksDb({ owner, repo, query, topK });
+  return { results };
 }
 
 // Graph traversal: callers/callees of a symbol, or importers/imports of a file.
+// Queries Neon directly -- see queries.js.
 export async function queryGraph({ owner = DEFAULT_OWNER, repo, symbol, file, direction, depth }) {
-  return workerRequest("/query/graph", {
-    method: "POST",
-    body: { owner, repo, symbol, file, direction, depth },
-  });
+  const results = await queryGraphDb({ owner, repo, symbol, file, direction, depth });
+  return { results };
 }
