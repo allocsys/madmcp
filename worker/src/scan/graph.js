@@ -7,7 +7,7 @@
 const IMPORT_NODE_TYPES = new Set(['import_statement', 'import_declaration', 'require_call']);
 const CALL_NODE_TYPES = new Set(['call_expression', 'call']);
 
-export function buildEdges({ filePath, content, tree, symbolsByLocalId }) {
+export function buildEdges({ filePath, content, tree, symbolLocalIdByNodeId }) {
   const edges = [];
   if (!tree) return edges; // language without a loaded grammar — no edges, still walked/hashed
 
@@ -36,7 +36,12 @@ export function buildEdges({ filePath, content, tree, symbolsByLocalId }) {
       }
     }
 
-    const nextEnclosing = symbolsByLocalId.has(node.id) ? node.id : enclosingSymbolLocalId;
+    // Descending into a function/class/method node switches "enclosing
+    // symbol" to that node's own localId (looked up from parse.js's map);
+    // otherwise keep carrying whatever symbol we were already inside.
+    const nextEnclosing = symbolLocalIdByNodeId.has(node.id)
+      ? symbolLocalIdByNodeId.get(node.id)
+      : enclosingSymbolLocalId;
     for (const child of node.children || []) visit(child, nextEnclosing);
   }
 
