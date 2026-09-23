@@ -61,6 +61,19 @@ Works unauthenticated at low rate limits — only provision this if you're hitti
 > openssl rand -hex 32
 > ```
 
+### repo_map — `REPO_MAP_WORKER_URL`, `REPO_MAP_SHARED_SECRET`, `REPO_MAP_DATABASE_URL` (optional)
+None of these come from a provider either — they're the connection details for madmcp's own repo_map worker (a separate service on Railway that clones, parses, and embeds repos into a code graph). All three are optional at startup: unset, the `repo_map`/`repo_map_scan` tools just stay disabled like any other unconfigured connector.
+
+- **`REPO_MAP_WORKER_URL`** — the deployed worker's base URL (e.g. its Railway public domain). Used for the scan/status calls (`repo_map_scan`) that only the worker can do, since it's the only thing that writes to the database.
+- **`REPO_MAP_SHARED_SECRET`** — a long random string, generated the same way as `MCP_SHARED_KEY` above:
+  ```
+  openssl rand -hex 32
+  ```
+  Must be set to the **same value** in two places: this server's env (so it can authenticate to the worker) and the worker's own env on Railway (so it knows which callers to accept). Set both together — updating one without the other breaks scan requests with a 401.
+- **`REPO_MAP_DATABASE_URL`** — a Postgres connection string for a **read-only** Neon role (conventionally named `repo_map_reader`), separate from the worker's own read-write `DATABASE_URL`. `repo_map`'s search/graph modes query Neon directly from this server rather than round-tripping through the worker, so this needs its own credential. Rotate it by resetting the role's password in the Neon console/API and pasting the new connection string here — the worker is unaffected since it uses a different (read-write) role entirely.
+
+> **Rotation note:** both `REPO_MAP_SHARED_SECRET` and the `repo_map_reader` password are plain secrets with no expiry — rotate them periodically the same way you would any other long-lived credential. After rotating either one, this server needs a fresh deployment to pick up the new env var value (Vercel doesn't auto-redeploy on an env var edit the way Railway does); trigger one manually from the dashboard or CLI.
+
 ---
 
 ## ⚠️ Advanced: GitHub App credentials
