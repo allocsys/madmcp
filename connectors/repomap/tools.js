@@ -49,7 +49,7 @@ export function register(server) {
     "search mode: finds the functions/classes most semantically relevant to a natural-language query -- good for \"where is X handled\" style questions.\n" +
     "graph mode: given a symbol name (or a file, for imports) walks callers/callees/importers/imports up to `depth` hops -- good for \"what calls this\" / \"what does this depend on\" style questions.\n" +
     "CAVEAT: right after this repo's HEAD changes, the first read here fires a background rescan (see repo_map_scan's docstring) -- a query that lands while that rescan is still writing can see a partially-updated graph (e.g. some but not all of a changed file's edges), so a thin or empty-looking result immediately after a HEAD change isn't necessarily wrong. It self-corrects: re-run the same query a bit later once the rescan has had time to finish.\n" +
-    "RULE: never repeat an identical call expecting a different result -- output is deterministic. Empty/thin result = not scanned, mid-rescan (see CAVEAT), or truly absent -- not a retry signal. To retry: reword the query, poll repo_map_scan's jobId, or wait once then retry -- never loop identical calls.",
+    "RULE: never loop identical calls to force fresher results -- staleness self-heals (CAVEAT: a HEAD mismatch already auto-triggers a rescan). Repeating the same query doesn't speed that up. Empty/thin result = not scanned, rescan in flight, or truly absent. Wait once, then retry at most once.",
     {
       owner:     z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:      z.string().describe("Repository name (must already be scanned via repo_map_scan)."),
