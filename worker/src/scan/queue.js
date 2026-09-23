@@ -24,6 +24,8 @@ import {
   getSymbolIndex,
   getFileIndex,
   markFileIndexed,
+  setJobFilesTotal,
+  incrementJobFilesDone,
 } from '../db/queries.js';
 
 // RAILWAY_REPLICA_ID identifies a specific running instance; falls back to
@@ -96,6 +98,10 @@ async function processJob(job) {
     const knownHashes = await getKnownFileHashes(job.repo_id);
     const { changed, unchanged, deleted } = diffFiles(knownHashes, freshFiles);
 
+    // Set once diffing is done so getScanStatus can report X/Y progress
+    // while this job is still 'running' -- see setJobFilesTotal's docstring.
+    await setJobFilesTotal(job.id, changed.length);
+
     for (const path of deleted) {
       await deleteFile(job.repo_id, path);
     }
@@ -165,6 +171,9 @@ async function processJob(job) {
       } catch (err) {
         console.error(`repo-map scan job ${job.id}: pass 2 failed for ${path} (will retry next scan):`, err);
         failedFiles.push(`${path}: ${err.message}`);
+      } finally {
+        // Counts as "done" either way -- see incrementJobFilesDone's docstring.
+        await incrementJobFilesDone(job.id);
       }
     }
 

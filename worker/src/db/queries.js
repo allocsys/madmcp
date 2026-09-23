@@ -42,6 +42,22 @@ export async function claimNextQueuedJob(workerId) {
   return rows[0] || null;
 }
 
+// Sets the number of files this scan needs to (re)process, once diffFiles
+// has run -- lets getScanStatus report an X/Y progress figure while status
+// is still 'running', instead of callers only ever seeing 'running' with no
+// sense of how far along a long scan (e.g. a full re-embed) actually is.
+export async function setJobFilesTotal(jobId, total) {
+  await query(`UPDATE scan_jobs SET files_total = $2 WHERE id = $1`, [jobId, total]);
+}
+
+// Bumps files_done by one -- called once per file in queue.js's pass 2 loop,
+// in a finally so it counts regardless of whether that file's pass 2 work
+// succeeded or failed (a failed file has still been "processed" for progress
+// purposes, even though its fully_indexed_at stays NULL for retry).
+export async function incrementJobFilesDone(jobId) {
+  await query(`UPDATE scan_jobs SET files_done = files_done + 1 WHERE id = $1`, [jobId]);
+}
+
 export async function finishScanJob(jobId, { status, error, filesScanned, filesChanged, chunksEmbedded }) {
   await query(
     `UPDATE scan_jobs

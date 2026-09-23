@@ -24,11 +24,16 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   files_scanned INTEGER DEFAULT 0,
   files_changed INTEGER DEFAULT 0,
   chunks_embedded INTEGER DEFAULT 0,
+  files_total   INTEGER DEFAULT 0,  -- files needing (re)processing this scan, set once diffing is done
+  files_done    INTEGER DEFAULT 0,  -- files finished (success or failure) in pass 2 so far -- lets callers show progress while status is still 'running'
   started_at    TIMESTAMPTZ,
   finished_at   TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs (status);
+-- Idempotent for existing deployed DBs where the table predates these columns.
+ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS files_total INTEGER DEFAULT 0;
+ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS files_done INTEGER DEFAULT 0;
 
 -- one row per file, keyed by content hash for incremental re-scans
 CREATE TABLE IF NOT EXISTS files (

@@ -71,7 +71,7 @@ describe("connectors/github/files.js", () => {
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
         content: "full content",
-        replacements: [{ find: "x", replace: "y" }],
+        replacements: [{ old_str: "x", new_str: "y" }],
       });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toMatch(/exactly one of/i);
@@ -112,13 +112,13 @@ describe("connectors/github/files.js", () => {
     });
   });
 
-  describe("edit_file — replacements (targeted find/replace) mode", () => {
-    it("aborts the whole call if a find string is not found, without committing", async () => {
+  describe("edit_file — replacements (targeted str_replace) mode", () => {
+    it("aborts the whole call if an old_str string is not found, without committing", async () => {
       readFileViaBlob.mockResolvedValue("line one\nline two\n");
 
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
-        replacements: [{ find: "does not exist", replace: "x" }],
+        replacements: [{ old_str: "does not exist", new_str: "x" }],
       });
 
       expect(result.isError).toBe(true);
@@ -126,12 +126,12 @@ describe("connectors/github/files.js", () => {
       expect(githubRequest).not.toHaveBeenCalled();
     });
 
-    it("aborts the whole call if a find string appears more than once, without committing", async () => {
+    it("aborts the whole call if an old_str string appears more than once, without committing", async () => {
       readFileViaBlob.mockResolvedValue("dup\ndup\n");
 
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
-        replacements: [{ find: "dup", replace: "x" }],
+        replacements: [{ old_str: "dup", new_str: "x" }],
       });
 
       expect(result.isError).toBe(true);
@@ -144,7 +144,7 @@ describe("connectors/github/files.js", () => {
 
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
-        replacements: [{ find: "same", replace: "same" }],
+        replacements: [{ old_str: "same", new_str: "same" }],
       });
 
       expect(result.content[0].text).toMatch(/no changes/i);
@@ -159,7 +159,7 @@ describe("connectors/github/files.js", () => {
 
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap beta",
-        replacements: [{ find: "beta", replace: "BETA" }],
+        replacements: [{ old_str: "beta", new_str: "BETA" }],
       });
 
       expect(result.content[0].text).toMatch(/Committed 1 replacement/);
@@ -181,8 +181,8 @@ describe("connectors/github/files.js", () => {
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap two",
         replacements: [
-          { find: "one", replace: "ONE" },
-          { find: "three", replace: "THREE" },
+          { old_str: "one", new_str: "ONE" },
+          { old_str: "three", new_str: "THREE" },
         ],
       });
 
