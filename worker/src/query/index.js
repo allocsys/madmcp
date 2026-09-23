@@ -69,6 +69,16 @@ export async function queryGraph({ owner, repo, symbol, file, direction = 'calle
   if (fileMode) {
     const { rows } = await query(`SELECT id FROM files WHERE repo_id = $1 AND path = $2`, [repoRow.id, file]);
     startIds = rows.map((r) => r.id);
+  } else if (symbol && file) {
+    // Both given -- scope the name lookup to that file so a same-named symbol
+    // elsewhere in the repo doesn't get merged into the traversal. Previously
+    // `file` was silently ignored here whenever `symbol` was truthy.
+    const { rows } = await query(
+      `SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+       WHERE s.repo_id = $1 AND (s.name = $2 OR s.qualified_name = $2) AND f.path = $3`,
+      [repoRow.id, symbol, file]
+    );
+    startIds = rows.map((r) => r.id);
   } else if (symbol) {
     const { rows } = await query(
       `SELECT id FROM symbols WHERE repo_id = $1 AND (name = $2 OR qualified_name = $2)`,

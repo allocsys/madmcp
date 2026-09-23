@@ -47,15 +47,16 @@ export function register(server) {
     "DOES: Query an already-scanned repo's code graph -- EITHER semantic search over functions/classes (mode: \"search\") OR graph traversal of calls/imports (mode: \"graph\").\n" +
     "RULE: repo must have been indexed first via repo_map_scan, or this returns empty results, not an error.\n" +
     "search mode: finds the functions/classes most semantically relevant to a natural-language query -- good for \"where is X handled\" style questions.\n" +
-    "graph mode: given a symbol name (or a file, for imports) walks callers/callees/importers/imports up to `depth` hops -- good for \"what calls this\" / \"what does this depend on\" style questions.",
+    "graph mode: given a symbol name (or a file, for imports) walks callers/callees/importers/imports up to `depth` hops -- good for \"what calls this\" / \"what does this depend on\" style questions.\n" +
+    "CAVEAT: right after this repo's HEAD changes, the first read here fires a background rescan (see repo_map_scan's docstring) -- a query that lands while that rescan is still writing can see a partially-updated graph (e.g. some but not all of a changed file's edges), so a thin or empty-looking result immediately after a HEAD change isn't necessarily wrong. It self-corrects: re-run the same query a bit later once the rescan has had time to finish.",
     {
       owner:     z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:      z.string().describe("Repository name (must already be scanned via repo_map_scan)."),
       mode:      z.enum(["search", "graph"]).describe("\"search\" for semantic search, \"graph\" for call/import traversal."),
       query:     z.string().optional().describe("search mode: natural-language description of what you're looking for."),
       topK:      z.number().optional().describe("search mode: max results to return (default 10)."),
-      symbol:    z.string().optional().describe("graph mode: function/class/method name (or ClassName.methodName) to start from. Required for direction callers/callees, unless file is given instead."),
-      file:      z.string().optional().describe("graph mode: file path (repo-relative) to start from -- required for direction importers/imports, or usable in place of symbol to mean \"all symbols in this file\"."),
+      symbol:    z.string().optional().describe("graph mode: function/class/method name (or ClassName.methodName) to start from. Required for direction callers/callees, unless file is given instead. If file is also given, the name lookup is scoped to that file -- useful when the same name (e.g. a module's own `register` export) exists in multiple files and you want a specific one, not every match repo-wide."),
+      file:      z.string().optional().describe("graph mode: file path (repo-relative) to start from -- required for direction importers/imports, or usable in place of symbol to mean \"all symbols in this file\". If symbol is also given, scopes that symbol's name lookup to this file rather than searching the whole repo."),
       direction: z.enum(["callers", "callees", "importers", "imports"]).optional().describe("graph mode: which edges to walk (default: callees)."),
       depth:     z.number().optional().describe("graph mode: how many hops to walk (default 1, max 5)."),
     },

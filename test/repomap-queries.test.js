@@ -238,7 +238,7 @@ describe("connectors/repomap/queries.js", () => {
         if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
-        if (sql.includes("SELECT s.id FROM symbols s JOIN files f")) {
+        if (sql.includes("SELECT s.id FROM symbols s JOIN files f") && sql.includes("f.path = $2")) {
           return Promise.resolve({ rows: [{ id: 501 }] });
         }
         if (sql.includes("WITH RECURSIVE walk")) {
@@ -256,6 +256,38 @@ describe("connectors/repomap/queries.js", () => {
       });
 
       expect(results).toEqual([]);
+    });
+
+    it("scopes the symbol lookup to file when both symbol and file are given (previously file was silently ignored)", async () => {
+      const { query } = await import("../connectors/repomap/db.js");
+      let capturedSql, capturedParams;
+      query.mockImplementation((sql, params) => {
+        if (sql.includes("FROM repos WHERE")) {
+          return Promise.resolve({ rows: [{ id: 42 }] });
+        }
+        if (sql.includes("SELECT s.id FROM symbols s JOIN files f") && sql.includes("f.path = $3")) {
+          capturedSql = sql;
+          capturedParams = params;
+          return Promise.resolve({ rows: [{ id: 777 }] });
+        }
+        if (sql.includes("WITH RECURSIVE walk")) {
+          return Promise.resolve({ rows: [] });
+        }
+        return Promise.reject(new Error("unexpected sql: " + sql));
+      });
+
+      const { queryGraphDb } = await import("../connectors/repomap/queries.js");
+      const results = await queryGraphDb({
+        owner: "o",
+        repo: "r",
+        symbol: "register",
+        file: "connectors/repomap/tools.js",
+        direction: "callers",
+      });
+
+      expect(results).toEqual([]);
+      expect(capturedSql).toMatch(/WHERE s\.repo_id = \$1 AND \(s\.name = \$2 OR s\.qualified_name = \$2\) AND f\.path = \$3/);
+      expect(capturedParams).toEqual([42, "register", "connectors/repomap/tools.js"]);
     });
   });
 });
