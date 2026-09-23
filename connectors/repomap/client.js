@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
-// connectors/repomap/client.js — repo_map_scan (write path) talks to the
+// connectors/repomap/client.js — map.index (write path) talks to the
 // repo_map worker (worker/, deployed separately on Railway) over HTTP,
 // auth'd with a shared-secret bearer token (worker/src/auth.js). Scanning a
 // repo requires a clone token minted via GitHub App auth (same mechanism as
 // the get_repo_clone_token MCP tool), since the worker needs to clone the
 // target repo itself.
 //
-// repo_map's search/graph (read path) query Neon directly (queries.js) --
+// map.query's search/graph (read path) query Neon directly (queries.js) --
 // no worker hop needed, since neither semantic search nor graph traversal
 // require anything the worker uniquely provides (the worker's job is the
 // scan: clone + parse + chunk + embed + write). See queries.js/db.js for
@@ -84,13 +84,13 @@ export async function getScanStatus(jobId) {
 
 // Compares the repo's current HEAD sha (for `ref`, or the repo's own
 // default_ref if `ref` is omitted) against repos.last_scanned_commit and, on
-// a mismatch, fires an incremental repo_map_scan in the background -- fired
+// a mismatch, fires an incremental map.index scan in the background -- fired
 // and NOT awaited to completion, so this never adds scan latency to the read
 // that triggered it. That read still answers from whatever's currently
 // indexed; the *next* read sees the fresh data once the background scan
-// lands. This is what lets repo_map self-heal staleness without every write
+// lands. This is what lets map.query self-heal staleness without every write
 // tool (edit_file/create_repo_file/overwrite_files) needing to know or care
-// that repo_map exists.
+// that map.query exists.
 //
 // Deliberately fails soft: a repo that's never been scanned has no row (not
 // this function's problem -- the caller's existing "no results, has it been
