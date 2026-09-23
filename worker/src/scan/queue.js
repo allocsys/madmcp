@@ -23,6 +23,7 @@ import {
   insertChunks,
   getSymbolIndex,
   getFileIndex,
+  markFileIndexed,
 } from '../db/queries.js';
 
 // RAILWAY_REPLICA_ID identifies a specific running instance; falls back to
@@ -118,38 +119,66 @@ async function processJob(job) {
     const symbolIndex = await getSymbolIndex(job.repo_id); // name -> [{symbolId, fileId, qualifiedName}]
     const fileIndex = await getFileIndex(job.repo_id); // path -> fileId
 
+    // Each file's pass-2 work (edges + chunks/embeddings) is isolated in its
+    // own try/catch. Previously a single file's embedTexts() call throwing
+    // (e.g. an oversized chunk hitting Gemini's input-size limit -- see
+    // chunk.js) propagated straight out of this loop, aborting the ENTIRE
+    // job. That was bad in two ways: (1) every OTHER changed file in this
+    // scan -- including ones already successfully processed earlier in this
+    // same loop -- got marked 'failed' along with it, and (2) because pass 1
+    // already committed this file's content_hash unconditionally, the next
+    // scan's diff would see "unchanged" and skip it forever, permanently
+    // stranding it half-indexed (symbols present, edges/chunks never
+    // inserted). Isolating the failure here means: other files still get
+    // fully indexed this run, and the failed file's fully_indexed_at stays
+    // NULL (upsertFile reset it in pass 1, and markFileIndexed below is only
+    // reached on success) so getKnownFileHashes won't trust its hash next
+    // time -- it keeps getting retried on every future scan instead of
+    // silently vanishing from the index.
     let chunksEmbedded = 0;
+    const failedFiles = [];
     for (const [path, parsed] of parsedByPath) {
-      const rawEdges = buildEdges({
-        filePath: path,
-        content: parsed.content,
-        tree: parsed.tree,
-        symbolLocalIdByNodeId: parsed.symbolLocalIdByNodeId,
-      });
-      const resolvedEdges = rawEdges.map((e) =>
-        resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex)
-      );
+      try {
+        const rawEdges = buildEdges({
+          filePath: path,
+          content: parsed.content,
+          tree: parsed.tree,
+          symbolLocalIdByNodeId: parsed.symbolLocalIdByNodeId,
+        });
+        const resolvedEdges = rawEdges.map((e) =>
+          resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex)
+        );
 
-      const chunks = buildChunks({ filePath: path, content: parsed.content, symbols: parsed.symbols });
-      const embeddings = await embedTexts(chunks.map((c) => c.content));
-      const chunksWithEmbedding = chunks.map((c, i) => ({
-        symbolId: c.localId != null ? parsed.symbolIdByLocal.get(c.localId) : null,
-        content: c.content,
-        embedding: embeddings[i],
-        contentHash: c.contentHash,
-      }));
+        const chunks = buildChunks({ filePath: path, content: parsed.content, symbols: parsed.symbols });
+        const embeddings = await embedTexts(chunks.map((c) => c.content));
+        const chunksWithEmbedding = chunks.map((c, i) => ({
+          symbolId: c.localId != null ? parsed.symbolIdByLocal.get(c.localId) : null,
+          content: c.content,
+          embedding: embeddings[i],
+          contentHash: c.contentHash,
+        }));
 
-      await insertEdges({ repoId: job.repo_id, fileId: parsed.fileId, edges: resolvedEdges });
-      await insertChunks({ repoId: job.repo_id, fileId: parsed.fileId, chunks: chunksWithEmbedding });
-      chunksEmbedded += chunksWithEmbedding.length;
+        await insertEdges({ repoId: job.repo_id, fileId: parsed.fileId, edges: resolvedEdges });
+        await insertChunks({ repoId: job.repo_id, fileId: parsed.fileId, chunks: chunksWithEmbedding });
+        await markFileIndexed(parsed.fileId);
+        chunksEmbedded += chunksWithEmbedding.length;
+      } catch (err) {
+        console.error(`repo-map scan job ${job.id}: pass 2 failed for ${path} (will retry next scan):`, err);
+        failedFiles.push(`${path}: ${err.message}`);
+      }
     }
 
     await updateRepoCommit(job.repo_id, cloned.commit);
     await finishScanJob(job.id, {
+      // Still 'done' -- real forward progress was made on every file that
+      // didn't fail, and failed files aren't lost, just deferred to the next
+      // scan (see fully_indexed_at). A job-level 'failed' status here would
+      // wrongly suggest nothing was accomplished and nothing recoverable.
       status: 'done',
       filesScanned: freshFiles.size,
       filesChanged: changed.length,
       chunksEmbedded,
+      error: failedFiles.length ? `${failedFiles.length} file(s) failed pass 2, will retry next scan:\n${failedFiles.join('\n')}` : null,
     });
   } catch (err) {
     console.error(`repo-map scan job ${job.id} failed:`, err);
