@@ -5,7 +5,7 @@ import { diffFiles } from './hash.js';
 import { parseFile } from './parse.js';
 import { buildChunks } from './chunk.js';
 import { buildEdges } from './graph.js';
-import { embedTexts } from '../embed/openai.js';
+import { embedTexts } from '../embed/gemini.js';
 import {
   upsertRepo,
   getRepoById,
