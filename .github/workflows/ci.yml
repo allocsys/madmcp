@@ -70,6 +70,26 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Install worker dependencies
+        run: |
+          set -e
+          cd worker
+          if [ -f package-lock.json ]; then
+            if npm ci; then
+              echo "Installed worker deps via npm ci (lockfile in sync)."
+            else
+              echo "::warning::worker/package-lock.json is out of sync -- falling back to npm install."
+              rm -rf node_modules
+              npm install
+            fi
+          else
+            echo "::warning::No worker/package-lock.json found -- falling back to npm install so CI can still run."
+            npm install
+          fi
+
+      - name: Run worker unit tests
+        run: cd worker && npm test
+
       - name: Smoke test -- server boots and GET /health responds
         run: |
           set -e
