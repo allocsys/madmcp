@@ -20,7 +20,7 @@ let pool;
 
 function getPool() {
   if (!REPO_MAP_DATABASE_URL) {
-    throw new Error("REPO_MAP_DATABASE_URL is not set -- required to query repo_map directly from madmcp. Use a read-only Neon role's connection string here, distinct from the worker's read-write DATABASE_URL.");
+    throw new Error("REPO_MAP_DATABASE_URL is not set -- required to query map.query directly from madmcp. Use a read-only Neon role's connection string here, distinct from the worker's read-write DATABASE_URL.");
   }
   if (!pool) {
     pool = new Pool({
