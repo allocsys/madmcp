@@ -154,6 +154,7 @@ describe("connectors/repomap/client.js", () => {
     });
 
     it("searchChunks calls queryChunksDb directly (no worker HTTP hop) and wraps the result", async () => {
+      global.fetch = vi.fn();
       const { queryChunksDb } = await import("../connectors/repomap/queries.js");
       queryChunksDb.mockResolvedValueOnce([{ filePath: "src/a.js", distance: 0.1 }]);
 
@@ -166,6 +167,7 @@ describe("connectors/repomap/client.js", () => {
     });
 
     it("queryGraph calls queryGraphDb directly (no worker HTTP hop) and wraps the result", async () => {
+      global.fetch = vi.fn();
       const { queryGraphDb } = await import("../connectors/repomap/queries.js");
       queryGraphDb.mockResolvedValueOnce([{ name: "foo", filePath: "src/a.js", depth: 1 }]);
 
