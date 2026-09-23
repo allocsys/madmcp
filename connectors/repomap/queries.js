@@ -27,6 +27,8 @@ export async function queryChunksDb({ owner, repo, query: text, topK = 10 }) {
   const repoRow = await getRepoRow(owner, repo);
   if (!repoRow) return [];
 
+  const limit = Math.max(1, Math.min(Number(topK) || 10, 50));
+
   const embedding = await embedQuery(text);
   const vec = pgvector.toSql(embedding);
 
@@ -40,7 +42,7 @@ export async function queryChunksDb({ owner, repo, query: text, topK = 10 }) {
      WHERE c.repo_id = $1
      ORDER BY c.embedding <=> $2
      LIMIT $3`,
-    [repoRow.id, vec, topK]
+    [repoRow.id, vec, limit]
   );
 
   return rows.map((r) => ({
