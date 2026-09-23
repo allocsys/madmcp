@@ -1,3 +1,4 @@
+import pgvector from 'pgvector';
 import { query, withTransaction } from './client.js';
 
 export async function upsertRepo({ owner, name, defaultRef }) {
@@ -126,7 +127,10 @@ export async function insertChunks({ repoId, fileId, chunks }) {
     await query(
       `INSERT INTO chunks (repo_id, symbol_id, file_id, content, embedding, content_hash)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [repoId, c.symbolId || null, fileId, c.content, c.embedding, c.contentHash]
+      // pgvector.toSql converts the plain JS number[] into the '[0.1,0.2,...]'
+      // text format Postgres' vector type expects — a raw array would be sent
+      // as a Postgres array literal ('{0.1,0.2}') and fail against vector(1536).
+      [repoId, c.symbolId || null, fileId, c.content, pgvector.toSql(c.embedding), c.contentHash]
     );
   }
 }
