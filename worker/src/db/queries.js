@@ -203,7 +203,7 @@ export async function replaceFileArtifacts({ fileId, repoId, symbols, edges, chu
           c.localId ? symbolIdByLocal.get(c.localId) : null,
           fileId,
           c.content,
-          c.embedding, // pgvector accepts array directly via pgvector helper on the query layer
+          pgvector.toSql(c.embedding),
           c.contentHash,
         ]
       );
