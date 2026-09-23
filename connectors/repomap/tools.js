@@ -29,7 +29,10 @@ export function register(server) {
           const job = await getScanStatus(jobId);
           const summary = job.status === "done"
             ? ` (${job.files_scanned ?? "?"} files scanned, ${job.files_changed ?? "?"} changed, ${job.chunks_embedded ?? "?"} chunks embedded)`
-            : job.status === "failed" ? ` -- ${job.error || "unknown error"}` : "";
+            : job.status === "failed" ? ` -- ${job.error || "unknown error"}`
+            : job.status === "running" && job.files_total
+              ? ` -- ${job.files_done ?? 0}/${job.files_total} files (${Math.round(((job.files_done ?? 0) / job.files_total) * 100)}%)`
+            : "";
           return { content: [{ type: "text", text: `Job ${jobId}: ${job.status}${summary}` }] };
         }
         if (!repo) {
