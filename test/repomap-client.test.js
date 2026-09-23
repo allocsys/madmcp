@@ -170,6 +170,64 @@ describe("connectors/repomap/client.js", () => {
       expect(global.fetch).not.toHaveBeenCalled();
     });
 
+    describe("startScan's not-installed fallback prefers err.status over message wording", () => {
+      function notInstalledError(status) {
+        // Message deliberately does NOT match the old/new regex, to prove
+        // the status check alone is what triggers the fallback.
+        const err = new Error("Failed to mint installation token for someuser/somerepo: some new wording GitHub might use someday");
+        if (status !== undefined) err.status = status;
+        return err;
+      }
+
+      it("falls back on err.status 404, regardless of message wording", async () => {
+        const { getCloneToken } = await import("../connectors/github/app_auth.js");
+        getCloneToken.mockRejectedValue(notInstalledError(404));
+        mockFetchOnce(202, { jobId: 10, status: "queued" });
+
+        const { startScan } = await import("../connectors/repomap/client.js");
+        const result = await startScan({ owner: "someuser", repo: "somerepo" });
+
+        expect(result).toEqual({ jobId: 10, status: "queued" });
+        const [, init] = global.fetch.mock.calls[0];
+        expect(JSON.parse(init.body).cloneToken).toBeUndefined();
+      });
+
+      it("falls back on err.status 422, regardless of message wording", async () => {
+        const { getCloneToken } = await import("../connectors/github/app_auth.js");
+        getCloneToken.mockRejectedValue(notInstalledError(422));
+        mockFetchOnce(202, { jobId: 11, status: "queued" });
+
+        const { startScan } = await import("../connectors/repomap/client.js");
+        const result = await startScan({ owner: "someuser", repo: "somerepo" });
+
+        expect(result).toEqual({ jobId: 11, status: "queued" });
+      });
+
+      it("still falls back via message-match when err.status is absent (older error shape)", async () => {
+        const { getCloneToken } = await import("../connectors/github/app_auth.js");
+        getCloneToken.mockRejectedValue(
+          new Error("resource not accessible by integration")
+        );
+        mockFetchOnce(202, { jobId: 12, status: "queued" });
+
+        const { startScan } = await import("../connectors/repomap/client.js");
+        const result = await startScan({ owner: "someuser", repo: "somerepo" });
+
+        expect(result).toEqual({ jobId: 12, status: "queued" });
+      });
+
+      it("rethrows when err.status is an unrelated code and the message doesn't match either", async () => {
+        global.fetch = vi.fn();
+        const { getCloneToken } = await import("../connectors/github/app_auth.js");
+        getCloneToken.mockRejectedValue(notInstalledError(500));
+
+        const { startScan } = await import("../connectors/repomap/client.js");
+
+        await expect(startScan({ repo: "widgets" })).rejects.toThrow(/some new wording/);
+        expect(global.fetch).not.toHaveBeenCalled();
+      });
+    });
+
     it("startScan defaults owner to DEFAULT_OWNER when omitted", async () => {
       const { getCloneToken } = await import("../connectors/github/app_auth.js");
       getCloneToken.mockResolvedValue({ token: "ghs_x" });
