@@ -11,7 +11,7 @@ export function register(server) {
     "delegate_agent",
     "DOES: Open-ended, multi-step READ-ONLY investigation across GitHub/Notion/Cloudflare -- Gemini runs its own server-side loop (bounded by max_steps) reading files/trees/commits/logs/pages across as many turns as needed, cross-checks claims BETWEEN sources, flags discrepancies, returns one synthesized answer.\n" +
     "RULE: default choice for multi-file or open-ended investigation -- prefer over manual read_file/get_file_tree/list_directory loops UNLESS you need exactly one named file.\n" +
-    "RULE: question is semantic/graph-shaped on an already-scanned repo -> repo_map instead (single query, cheaper). Use this for open-ended or cross-source investigations only.\n" +
+    "RULE: question is semantic/graph-shaped on an already-scanned repo -> map.query instead (single query, cheaper). Use this for open-ended or cross-source investigations only.\n" +
     "NOT: web access -> use delegate_research (task param, wide mode) instead. NOT: any write -> read-only by design.\n" +
     "USE FOR: e.g. 'why is CI failing on PR #42', 'summarize what changed in this repo over the last week' -- cases needing 5-10+ manual cross-system calls otherwise.\n" +
     "RESUME: failed/partial run -> response includes resume_run_id -> pass back to continue from last completed step instead of restarting.\n" +
