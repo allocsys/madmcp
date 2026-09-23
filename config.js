@@ -408,6 +408,15 @@ export const JEV_MODEL        = process.env.JEV_MODEL || "jev-1";
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
+// repo_map worker (worker/ subfolder, deployed separately on Fly.io) --
+// madmcp talks to it as a client over HTTP, authenticated with a shared
+// secret (worker/src/auth.js expects "Authorization: Bearer <secret>").
+// Not set until the Fly app is actually deployed (see checkpoint TODO);
+// repo_map/repo_map_scan tools fail with a clear config error until both
+// of these are set, same pattern as every other optional connector above.
+export const REPO_MAP_WORKER_URL = process.env.REPO_MAP_WORKER_URL;
+export const REPO_MAP_SHARED_SECRET = process.env.REPO_MAP_SHARED_SECRET;
+
 export const IP_ALLOWLIST_ENABLED = process.env.IP_ALLOWLIST_ENABLED !== "false";
 export const ALLOWED_IP_RANGES = (process.env.ALLOWED_IP_RANGES || "160.79.104.0/21,208.77.244.90/32")
   .split(",")
