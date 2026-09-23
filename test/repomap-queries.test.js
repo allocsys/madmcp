@@ -127,7 +127,7 @@ describe("connectors/repomap/queries.js", () => {
     it("handles graph traversal with file mode (direction: imports)", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT id FROM files WHERE")) {
@@ -159,7 +159,7 @@ describe("connectors/repomap/queries.js", () => {
     it("handles graph traversal with symbol mode (direction: callers)", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT id FROM symbols WHERE")) {
@@ -209,7 +209,7 @@ describe("connectors/repomap/queries.js", () => {
     it("returns empty if graph traversal returns no nodeIds", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT id FROM symbols WHERE")) {
@@ -235,7 +235,7 @@ describe("connectors/repomap/queries.js", () => {
     it("defaults to reading symbols in file when only file is given with callers direction", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       query.mockImplementation((sql, params) => {
-        if (sql.includes("SELECT id FROM repos")) {
+        if (sql.includes("FROM repos WHERE")) {
           return Promise.resolve({ rows: [{ id: 42 }] });
         }
         if (sql.includes("SELECT s.id FROM symbols s JOIN files f")) {
