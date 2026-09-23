@@ -24,6 +24,15 @@ vi.mock("../connectors/github/app_auth.js", () => ({
   getCloneToken: vi.fn(),
 }));
 
+// searchChunks/queryGraph now query Neon directly via queries.js (no worker
+// HTTP hop -- see client.js's file header) -- mock at this boundary rather
+// than fetch, which also means db.js/embed.js (and their REPO_MAP_DATABASE_URL/
+// GEMINI_API_KEYS config.js dependency) never load in this test file.
+vi.mock("../connectors/repomap/queries.js", () => ({
+  queryChunksDb: vi.fn(),
+  queryGraphDb: vi.fn(),
+}));
+
 describe("connectors/repomap/client.js", () => {
   const realFetch = global.fetch;
 
@@ -144,28 +153,28 @@ describe("connectors/repomap/client.js", () => {
       expect(init.method).toBe("GET");
     });
 
-    it("searchChunks POSTs to /query/search with owner/repo/query/topK", async () => {
-      mockFetchOnce(200, { results: [{ filePath: "src/a.js", distance: 0.1 }] });
+    it("searchChunks calls queryChunksDb directly (no worker HTTP hop) and wraps the result", async () => {
+      const { queryChunksDb } = await import("../connectors/repomap/queries.js");
+      queryChunksDb.mockResolvedValueOnce([{ filePath: "src/a.js", distance: 0.1 }]);
 
       const { searchChunks } = await import("../connectors/repomap/client.js");
       const result = await searchChunks({ owner: "allocsys", repo: "widgets", query: "parse config", topK: 5 });
 
-      expect(result.results).toHaveLength(1);
-      const [url, init] = global.fetch.mock.calls[0];
-      expect(url).toBe(`${WORKER_URL}/query/search`);
-      expect(JSON.parse(init.body)).toEqual({ owner: "allocsys", repo: "widgets", query: "parse config", topK: 5 });
+      expect(result).toEqual({ results: [{ filePath: "src/a.js", distance: 0.1 }] });
+      expect(queryChunksDb).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", query: "parse config", topK: 5 });
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
-    it("queryGraph POSTs to /query/graph with symbol/file/direction/depth", async () => {
-      mockFetchOnce(200, { results: [{ name: "foo", filePath: "src/a.js", depth: 1 }] });
+    it("queryGraph calls queryGraphDb directly (no worker HTTP hop) and wraps the result", async () => {
+      const { queryGraphDb } = await import("../connectors/repomap/queries.js");
+      queryGraphDb.mockResolvedValueOnce([{ name: "foo", filePath: "src/a.js", depth: 1 }]);
 
       const { queryGraph } = await import("../connectors/repomap/client.js");
       const result = await queryGraph({ owner: "allocsys", repo: "widgets", symbol: "foo", direction: "callers", depth: 2 });
 
-      expect(result.results).toHaveLength(1);
-      const [url, init] = global.fetch.mock.calls[0];
-      expect(url).toBe(`${WORKER_URL}/query/graph`);
-      expect(JSON.parse(init.body)).toEqual({ owner: "allocsys", repo: "widgets", symbol: "foo", file: undefined, direction: "callers", depth: 2 });
+      expect(result).toEqual({ results: [{ name: "foo", filePath: "src/a.js", depth: 1 }] });
+      expect(queryGraphDb).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", symbol: "foo", file: undefined, direction: "callers", depth: 2 });
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
     it("throws an Error including the worker's error message on a non-2xx response", async () => {
