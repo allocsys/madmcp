@@ -68,6 +68,14 @@ function parseRetryDelaySeconds(message) {
   return match ? Math.ceil(parseFloat(match[1])) : null;
 }
 
+// Test-only: clears rotation/cooldown state between test cases so they
+// don't leak into each other via this module's intentional cross-call
+// state (see file header). Not used by any non-test code path.
+export function __resetRotationStateForTests() {
+  cooldownUntil.clear();
+  keyRotationCounter = 0;
+}
+
 function isCoolingDown(keyIndex) {
   const until = cooldownUntil.get(keyIndex);
   return until !== undefined && until > Date.now();
