@@ -71,6 +71,7 @@ export function register(server) {
     "read_file",
     "USE: single, specifically-named file, exact path already known.\n" +
     "RULE: >2 files needed, OR request = understand/review/summarize a repo or directory (any phrasing: 'read the repo', 'dig into it', 'get up to speed') -> delegate_agent instead. Never loop read_file manually for that.\n" +
+    "RULE: question is semantic (\"where is X\") or graph-shaped (\"what calls this\") -> repo_map instead (auto-refreshes if stale).\n" +
     "RULE: repo is PUBLIC and goal = run/test/lint code (not just read it) -> git clone via bash_tool instead (github.com/codeload.github.com/raw.githubusercontent.com allowlisted; zero context cost; can execute code). PUBLIC REPOS ONLY -- no GitHub creds in sandbox.\n" +
     "DOES: reads a file's contents from a GitHub repository. ALWAYS call with no char_offset/char_limit first -- this returns the whole file in one call for anything under ~100,000 chars (the common case, covers most files), and for anything larger returns a clearly marked '\u26a0\ufe0f File too large' notice plus the exact char_offset to continue from.\n" +
     "RULE: do NOT guess or pre-emptively pass char_offset/char_limit on a file whose real size you don't already know -- only pass them once you actually have a reason to: either this SAME tool's own prior response on this SAME file already returned a truncation notice telling you the total size and the offset to continue from, or independent evidence (e.g. a github_search_code hit reporting a specific line deep inside a file you already know is large) tells you exactly where to jump. Guessing an offset on a file that turns out to be small wastes a call and returns a truncated, unhelpful fragment instead of the content you actually needed -- if in doubt, just call with no params.\n" +
@@ -93,7 +94,8 @@ export function register(server) {
   server.tool(
     "list_directory",
     "DOES: List files/folders at a path.\n" +
-    "RULE: drilling into many directories one at a time to map an unfamiliar repo -> delegate_agent instead, server-side in one call.",
+    "RULE: drilling into many directories one at a time to map an unfamiliar repo -> delegate_agent instead, server-side in one call.\n" +
+    "RULE: looking for WHERE something is implemented, not folder contents -> repo_map instead.",
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
@@ -112,6 +114,7 @@ export function register(server) {
   server.tool(
     "get_file_tree",
     "USE: one-time single tree snapshot.\n" +
+    "RULE: next step is locating functionality, not viewing repo shape -> repo_map instead.\n" +
     "RULE: result has >~10 files, OR next step = reading/searching multiple files from it -> STOP, use delegate_agent for the whole investigation instead. Applies regardless of phrasing ('thorough read', 'quick look', 'dig deeper' all count). Never chain this into manual read_file loops.\n" +
     "RULE: repo is PUBLIC and goal = run/test/lint multiple files (not just read them) -> git clone via bash_tool instead (see read_file's description; zero context cost, can execute code, public repos only).\n" +
     "DOES: recursively lists all files and folders in a GitHub repository (full tree).",
