@@ -176,7 +176,7 @@ export function register(server) {
     "edit_file",
     "DOES: Edit an existing or new file's contents, committed in one call. Exactly one of two mutually exclusive modes:\n" +
     "  `content` (full overwrite) -- rewrites the whole file, creating it if it doesn't exist.\n" +
-    "  `replacements` (targeted find/replace) -- only changed strings need to be sent; each `find` must appear exactly once in the file or the WHOLE call is rejected and nothing is committed; the file must already exist; returns a unified diff.\n" +
+    "  `replacements` (targeted str_replace, same naming as the sandbox's str_replace tool) -- only changed strings need to be sent; each `old_str` must appear exactly once in the file or the WHOLE call is rejected and nothing is committed; the file must already exist; returns a unified diff.\n" +
     "RULE: must fail if the path already exists -> create_repo_file instead. Several files as one atomic commit -> overwrite_files.",
     {
       owner:        z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
@@ -184,9 +184,9 @@ export function register(server) {
       path:         z.string().describe("File path within the repo"),
       content:      z.string().optional().describe("Full new content of the file (plain text). Mutually exclusive with `replacements`. Creates the file if it doesn't exist."),
       replacements: z.array(z.object({
-        find:    z.string().describe("Exact string to find (must appear exactly once in the file)"),
-        replace: z.string().describe("String to replace it with"),
-      })).min(1).optional().describe("List of find-and-replace operations to apply sequentially. Mutually exclusive with `content`. The file must already exist."),
+        old_str: z.string().describe("Exact string to find (must appear exactly once in the file)"),
+        new_str: z.string().describe("String to replace it with"),
+      })).min(1).optional().describe("List of str_replace operations to apply sequentially. Mutually exclusive with `content`. The file must already exist."),
       message: z.string().describe("Commit message"),
       branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
     },
@@ -200,11 +200,11 @@ export function register(server) {
         let updated = original;
 
         const errors = [];
-        for (const { find, replace } of replacements) {
-          const count = updated.split(find).length - 1;
-          if (count === 0) { errors.push(`⚠️ String not found: ${JSON.stringify(find)}`); continue; }
-          if (count > 1)   { errors.push(`⚠️ String found ${count} times (must be unique): ${JSON.stringify(find)}`); continue; }
-          updated = updated.replace(find, replace);
+        for (const { old_str, new_str } of replacements) {
+          const count = updated.split(old_str).length - 1;
+          if (count === 0) { errors.push(`⚠️ String not found: ${JSON.stringify(old_str)}`); continue; }
+          if (count > 1)   { errors.push(`⚠️ String found ${count} times (must be unique): ${JSON.stringify(old_str)}`); continue; }
+          updated = updated.replace(old_str, new_str);
         }
 
         if (errors.length) {
