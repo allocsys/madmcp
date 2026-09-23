@@ -201,6 +201,25 @@ describe("connectors/github/app_auth.js", () => {
         /Failed to mint installation token for acme\/widgets \(500\): \(no response body\)/
       );
     });
+
+    it("attaches the real HTTP status as err.status, for callers to branch on instead of parsing the message", async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        text: () => Promise.resolve("There is at least one repository that does not exist or is not accessible to the parent installation."),
+      });
+      const { getCloneToken } = await loadAppAuth();
+
+      let caught;
+      try {
+        await getCloneToken("acme", "widgets");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeDefined();
+      expect(caught.status).toBe(422);
+    });
   });
 
   describe("getCloneToken — waitUntil-scheduled revoke (single-use guard)", () => {
