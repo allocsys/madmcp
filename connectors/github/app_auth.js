@@ -139,10 +139,12 @@ async function mintInstallationToken(owner, repo) {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(
+    const err = new Error(
       `Failed to mint installation token for ${owner}/${repo} (${res.status}): ${detail || "(no response body)"}. ` +
       `Common causes: the App isn't installed on this repo, or the installation ID is wrong.`
     );
+    err.status = res.status; // lets callers branch on the real status instead of parsing this message's wording
+    throw err;
   }
   const data = await res.json();
   return { token: data.token, expiresAt: data.expires_at }; // expires_at: ISO 8601 string
