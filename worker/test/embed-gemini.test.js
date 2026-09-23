@@ -13,7 +13,7 @@ import { embedTexts } from '../src/embed/gemini.js';
 
 describe('embedTexts', () => {
   const ORIGINAL_KEY = process.env.GEMINI_API_KEY;
-  const originalFetch = global.fetch;
+  const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
     process.env.GEMINI_API_KEY = 'test-gemini-key';
@@ -22,12 +22,12 @@ describe('embedTexts', () => {
   afterEach(() => {
     if (ORIGINAL_KEY === undefined) delete process.env.GEMINI_API_KEY;
     else process.env.GEMINI_API_KEY = ORIGINAL_KEY;
-    global.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
   });
 
   test('returns empty array immediately for empty input without calling fetch', async () => {
     let fetchCalled = false;
-    global.fetch = async () => {
+    globalThis.fetch = async () => {
       fetchCalled = true;
       return { ok: true, json: async () => ({}) };
     };
@@ -55,7 +55,7 @@ describe('embedTexts', () => {
 
     let capturedUrl;
     let capturedOptions;
-    global.fetch = async (url, options) => {
+    globalThis.fetch = async (url, options) => {
       capturedUrl = url;
       capturedOptions = options;
       return {
@@ -84,7 +84,7 @@ describe('embedTexts', () => {
   });
 
   test('throws an error when fetch response is not ok', async () => {
-    global.fetch = async () => ({
+    globalThis.fetch = async () => ({
       ok: false,
       status: 400,
       text: async () => 'Invalid argument',
