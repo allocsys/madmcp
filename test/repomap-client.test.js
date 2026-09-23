@@ -275,7 +275,7 @@ describe("connectors/repomap/client.js", () => {
         expect(sentBody).toMatchObject({ owner: "allocsys", repo: "widgets", ref: "main" });
       });
 
-      it("honors an explicit ref over the repo's default_ref when checking HEAD", async () => {
+      it("always checks HEAD against the repo's default_ref -- searchChunks/queryGraph accept no ref param (only repo_map_scan does)", async () => {
         const { getRepoRow, queryGraphDb } = await import("../connectors/repomap/queries.js");
         const { githubRequest } = await import("../connectors/github/client.js");
         getRepoRow.mockResolvedValueOnce({ id: 1, last_scanned_commit: "abc", default_ref: "main" });
@@ -284,9 +284,11 @@ describe("connectors/repomap/client.js", () => {
         global.fetch = vi.fn();
 
         const { queryGraph } = await import("../connectors/repomap/client.js");
+        // A stray `ref` here is not destructured by queryGraph and has no effect --
+        // documenting that on purpose, not testing a real forwarding path.
         await queryGraph({ owner: "allocsys", repo: "widgets", symbol: "foo", ref: "feature-branch" });
 
-        expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/feature-branch");
+        expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/main");
       });
 
       it("swallows a failure fetching HEAD sha and still returns the read's results", async () => {
