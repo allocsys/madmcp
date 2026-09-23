@@ -28,9 +28,19 @@ vi.mock("../connectors/github/app_auth.js", () => ({
 // HTTP hop -- see client.js's file header) -- mock at this boundary rather
 // than fetch, which also means db.js/embed.js (and their REPO_MAP_DATABASE_URL/
 // GEMINI_API_KEYS config.js dependency) never load in this test file.
+// getRepoRow is also mocked here -- it's what ensureFresh() (client.js) uses
+// to read last_scanned_commit/default_ref for the staleness check below.
 vi.mock("../connectors/repomap/queries.js", () => ({
   queryChunksDb: vi.fn(),
   queryGraphDb: vi.fn(),
+  getRepoRow: vi.fn(),
+}));
+
+// ensureFresh()'s HEAD-sha check goes through githubRequest, not raw fetch --
+// mock at that boundary so these tests aren't coupled to githubRequest's own
+// retry/throttle internals (already covered by test/github-client.test.js).
+vi.mock("../connectors/github/client.js", () => ({
+  githubRequest: vi.fn(),
 }));
 
 describe("connectors/repomap/client.js", () => {
