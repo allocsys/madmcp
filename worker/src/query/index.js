@@ -6,7 +6,7 @@
 
 import pgvector from 'pgvector';
 import { query } from '../db/client.js';
-import { embedTexts } from '../embed/openai.js';
+import { embedTexts } from '../embed/gemini.js';
 
 async function getRepoRow(owner, repo) {
   const { rows } = await query(`SELECT id FROM repos WHERE owner = $1 AND name = $2`, [owner, repo]);

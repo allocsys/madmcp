@@ -18,7 +18,8 @@
 #
 # Secrets (set as Railway service variables, NOT committed):
 #   DATABASE_URL           - Neon Postgres connection string (pgvector enabled)
-#   OPENAI_API_KEY          - for embeddings
+#   GEMINI_API_KEY          - for embeddings (gemini-embedding-001, see
+#                             src/embed/gemini.js)
 #   REPO_MAP_SHARED_SECRET  - shared-secret header value madmcp must send
 #                             (worker/src/auth.js expects
 #                             "Authorization: Bearer <this value>")

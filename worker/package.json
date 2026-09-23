@@ -17,7 +17,6 @@
     "pgvector": "^0.2.0",
     "simple-git": "^3.25.0",
     "web-tree-sitter": "^0.22.6",
-    "openai": "^4.60.0",
     "dotenv": "^16.4.5",
     "tree-sitter-wasms": "^0.1.13"
   }
