@@ -2,6 +2,12 @@
 FROM node:20-slim AS base
 WORKDIR /app
 
+# simple-git (used by src/scan/clone.js) shells out to the git binary,
+# which node:20-slim does not ship.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json* ./
 COPY scripts ./scripts
 RUN npm install --omit=dev
