@@ -12,9 +12,13 @@ import pg from "pg";
 
 vi.mock("pg", () => {
   const mQuery = vi.fn();
-  const mPool = vi.fn(() => ({
-    query: mQuery,
-  }));
+  // Regular function, not an arrow function: db.js does `new Pool(...)`,
+  // and arrow functions have no [[Construct]] internal slot -- vi.fn()
+  // wrapping an arrow function throws "is not a constructor" the moment
+  // it's invoked with `new`.
+  const mPool = vi.fn(function () {
+    return { query: mQuery };
+  });
   return {
     default: {
       Pool: mPool,
@@ -39,9 +43,9 @@ describe("connectors/repomap/db.js", () => {
 
   it("successfully executes query when configured", async () => {
     const mockQuery = vi.fn().mockResolvedValueOnce({ rows: [{ id: 1 }] });
-    pg.Pool.mockImplementationOnce(() => ({
-      query: mockQuery,
-    }));
+    pg.Pool.mockImplementationOnce(function () {
+      return { query: mockQuery };
+    });
 
     vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: "postgres://user:pass@localhost:5432/db",
@@ -56,9 +60,9 @@ describe("connectors/repomap/db.js", () => {
 
   it("handles query execution errors from the pool", async () => {
     const mockQuery = vi.fn().mockRejectedValueOnce(new Error("connection timeout"));
-    pg.Pool.mockImplementationOnce(() => ({
-      query: mockQuery,
-    }));
+    pg.Pool.mockImplementationOnce(function () {
+      return { query: mockQuery };
+    });
 
     vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: "postgres://user:pass@localhost:5432/db",
@@ -70,9 +74,9 @@ describe("connectors/repomap/db.js", () => {
 
   it("only performs read (SELECT/WITH) operations consistent with repo_map_reader role", async () => {
     const mockQuery = vi.fn().mockResolvedValue({ rows: [] });
-    pg.Pool.mockImplementationOnce(() => ({
-      query: mockQuery,
-    }));
+    pg.Pool.mockImplementationOnce(function () {
+      return { query: mockQuery };
+    });
 
     vi.doMock("../config.js", () => ({
       REPO_MAP_DATABASE_URL: "postgres://user:pass@localhost:5432/db",
