@@ -408,7 +408,7 @@ export const JEV_MODEL        = process.env.JEV_MODEL || "jev-1";
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
-// repo_map worker (worker/ subfolder, deployed separately on Fly.io) --
+// repo_map worker (worker/ subfolder, deployed separately on Railway) --
 // madmcp talks to it as a client over HTTP, authenticated with a shared
 // secret (worker/src/auth.js expects "Authorization: Bearer <secret>").
 // Not set until the Fly app is actually deployed (see checkpoint TODO);
