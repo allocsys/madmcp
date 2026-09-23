@@ -89,7 +89,7 @@ export function register(server) {
         );
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
-        return { content: [{ type: "text", text: err.message }], isError: true };
+        return { content: [{ type: "text", text: `repo_map (mode: ${mode}): ${err.message}` }], isError: true };
       }
     }
   );
