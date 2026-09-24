@@ -11,9 +11,8 @@
 // instructions -- same posture designer_delegate.js's own file header
 // insists on for its narrower scope.
 //
-// NOT YET WIRED to any agent loop or MCP tool registration.
-// Unit tested independently of both, per the step ordering --
-// see test/editor-tool-functions.test.js.
+// Consumed by connectors/delegate/editor/editor_delegate.js's agent loop.
+// Unit tested independently of it -- see test/editor-tool-functions.test.js.
 //
 // Write function shape is modeled on the stress-tested edit_file MCP tool
 // (connectors/github/files.js): two mutually-exclusive modes --
@@ -21,7 +20,13 @@
 //   `replacements` -- targeted find/replace, each `find` must appear
 //                     exactly once in the file or the whole call is
 //                     rejected and nothing is committed. Requires the file
-//                     to already exist. Returns a unified diff.
+//                     to already exist. The unified diff is OPT-IN: it is
+//                     built only when process.env.EDITOR_INCLUDE_DIFF ===
+//                     "true" (read per call) or the caller passes
+//                     `includeDiff: true`; otherwise `diff` is null. Mirrors
+//                     edit_file's EDITOR_INCLUDE_DIFF-style gate in files.js
+//                     (EDIT_FILE_INCLUDE_DIFF). buildUnifiedDiff itself is
+//                     unchanged and still exported.
 // ---------------------------------------------------------------------------
 
 import { githubRequest, toBase64, fromBase64 } from "./client.js";
@@ -223,8 +228,17 @@ export async function assertNotDefaultBranch(owner, repo, branch) {
 
 // --- write_file ------------------------------------------------------------
 
+// Whether writeFile should build the (LCS-based, O(lines_before * lines_after)
+// in time and memory) unified diff. An explicit boolean `includeDiff` from the
+// caller wins; otherwise fall back to the EDITOR_INCLUDE_DIFF env flag, read at
+// call time so it can be toggled without a reload (and stubbed in tests).
+function shouldBuildDiff(includeDiff) {
+  if (typeof includeDiff === "boolean") return includeDiff;
+  return process.env.EDITOR_INCLUDE_DIFF === "true";
+}
+
 export async function writeFile(owner, repo, path, options = {}) {
-  const { content, replacements, branch, baseSha, message } = options;
+  const { content, replacements, branch, baseSha, message, includeDiff } = options;
 
   if ((content === undefined) === (replacements === undefined)) {
     throw new Error("Provide exactly one of `content` (full overwrite) or `replacements` (targeted find/replace).");
@@ -253,7 +267,9 @@ export async function writeFile(owner, repo, path, options = {}) {
       throw new Error(`${path} does not exist on branch ${branch}, so replacements mode (which requires an existing file) cannot be used. Do not switch to content mode to create it unless the task explicitly called for creating this file. Otherwise, stop and report this exact path back as unresolved.`);
     }
     afterContent = applyReplacements(existingContent, replacements);
-    diff = buildUnifiedDiff(path, existingContent, afterContent);
+    if (shouldBuildDiff(includeDiff)) {
+      diff = buildUnifiedDiff(path, existingContent, afterContent);
+    }
   }
 
   // Guardrails #3/#4 (allow/deny + package.json risky-fields content check).
