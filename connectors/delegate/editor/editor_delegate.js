@@ -72,6 +72,7 @@ import {
   EDITOR_MAX_FILES_PER_RUN,
   EDITOR_MAX_WRITES_PER_FILE,
   EDITOR_MAX_VALIDATE_CALLS,
+  EDITOR_RISK_FLAG_THRESHOLD,
   TYPESAFE_ENABLED,
 } from "../../../config.js";
 import { scoreTaskComplexity, scoreEditRisk, stepBudgetForComplexity } from "../../typesafe/client.js";
@@ -188,7 +189,7 @@ function looksLikeCompletionClaim(answer) {
 // run. owner/repo/branch are captured here, NOT exposed as parameters the
 // model can set -- same fencing rationale as designer_delegate.js's
 // buildFunctions (guardrail #1).
-function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, validateCounts, effectiveTask }) {
+function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, validateCounts, effectiveTask, riskFlags, transcript }) {
   const FUNCTIONS = [
     {
       name: "read_file",
@@ -271,6 +272,25 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
                     risk: riskResult.risk,
                     confidence: riskResult.confidence,
                   };
+                  // Caller-facing only, gated to EDITOR_RISK_FLAG_THRESHOLD (default
+                  // 0.7) so this fires rarely, on genuinely flagged writes only.
+                  // Pushed to riskFlags/transcript here, NEVER folded into the
+                  // string this closure returns below -- that return value is
+                  // the ONLY thing that becomes the write_file functionResponse
+                  // the model sees, so this cannot influence the model's next
+                  // step, the writes-vs-claim verification pass, or stuck-loop
+                  // detection. Purely a record for whatever consumes the run's
+                  // returned result / transcript after the fact.
+                  if (riskResult.risk !== null && riskResult.risk >= EDITOR_RISK_FLAG_THRESHOLD) {
+                    riskFlags.push({
+                      path,
+                      risk: riskResult.risk,
+                      matchesTask: riskResult.matchesTask,
+                      confidence: riskResult.confidence,
+                      commitSha: result.commitSha,
+                    });
+                    transcript.push(`[risk] TypeSafe flagged "${path}" (commit ${result.commitSha.slice(0, 7)}) as high risk: risk=${riskResult.risk.toFixed(2)}, matchesTask=${riskResult.matchesTask}, confidence=${riskResult.confidence.toFixed(2)}. Caller-only note -- not shown to the model.`);
+                  }
                 }
               }
             } catch {
@@ -361,6 +381,12 @@ export async function runEditorAgent(opts = {}) {
   let writtenFiles;
   let writesPerFile;
   let validateCounts;
+  // Caller-facing high-risk write flags (see buildFunctions' write_file
+  // closure and EDITOR_RISK_FLAG_THRESHOLD in config.js). Same lifecycle as
+  // writtenFiles -- restored from a checkpoint on resume, persisted on every
+  // saveState/saveCheckpoint, included in every returned result below --
+  // but never read back into `contents`, so it can never reach the model.
+  let riskFlags;
   let effectiveOwner = owner;
   let effectiveRepo = repo;
   let effectiveBranch = branch;
@@ -427,6 +453,7 @@ export async function runEditorAgent(opts = {}) {
       runId: resume_run_id,
       task: checkpoint.task,
       writtenFiles: checkpoint.writtenFiles || [],
+      riskFlags: checkpoint.riskFlags || [],
       fallbackModelUsed: checkpoint.fallbackModelUsed || null,
       failed: false,
     };
@@ -437,6 +464,7 @@ export async function runEditorAgent(opts = {}) {
     transcript = checkpoint.transcript;
     startStep = checkpoint.stepsDone + 1;
     writtenFiles = checkpoint.writtenFiles || [];
+    riskFlags = checkpoint.riskFlags || [];
     writesPerFile = new Map(Object.entries(checkpoint.writesPerFile || {}));
     validateCounts = new Map(Object.entries(checkpoint.validateCounts || {}));
     effectiveOwner = checkpoint.owner;
@@ -490,6 +518,7 @@ export async function runEditorAgent(opts = {}) {
     transcript = [];
     startStep = 1;
     writtenFiles = [];
+    riskFlags = [];
     writesPerFile = new Map();
     validateCounts = new Map();
   }
@@ -527,7 +556,7 @@ export async function runEditorAgent(opts = {}) {
   }
 
   const { FUNCTIONS, declarations } = buildFunctions({
-    owner: effectiveOwner, repo: effectiveRepo, branch: effectiveBranch, writtenFiles, writesPerFile, validateCounts, effectiveTask,
+    owner: effectiveOwner, repo: effectiveRepo, branch: effectiveBranch, writtenFiles, writesPerFile, validateCounts, effectiveTask, riskFlags, transcript,
   });
 
   if (checkpoint && startStep > cappedSteps) {
@@ -538,6 +567,7 @@ export async function runEditorAgent(opts = {}) {
       runId,
       task: effectiveTask,
       writtenFiles,
+      riskFlags,
       failed: true,
     };
   }
@@ -551,6 +581,7 @@ export async function runEditorAgent(opts = {}) {
     repo: effectiveRepo,
     branch: effectiveBranch,
     writtenFiles,
+    riskFlags,
     writesPerFile: Object.fromEntries(writesPerFile),
     validateCounts: Object.fromEntries(validateCounts),
     repeatCounts: Object.fromEntries(repeatCounts),
@@ -594,6 +625,7 @@ export async function runEditorAgent(opts = {}) {
         runId,
         task: effectiveTask,
         writtenFiles,
+        riskFlags,
         failed: true,
       };
     }
@@ -613,6 +645,7 @@ export async function runEditorAgent(opts = {}) {
         runId,
         task: effectiveTask,
         writtenFiles,
+        riskFlags,
         failed: true,
       };
     }
@@ -633,6 +666,7 @@ export async function runEditorAgent(opts = {}) {
           runId,
           task: effectiveTask,
           writtenFiles,
+          riskFlags,
           failed: true,
         };
       }
@@ -733,6 +767,7 @@ export async function runEditorAgent(opts = {}) {
         repo: effectiveRepo,
         branch: effectiveBranch,
         writtenFiles,
+        riskFlags,
         writesPerFile: Object.fromEntries(writesPerFile),
         validateCounts: Object.fromEntries(validateCounts),
         repeatCounts: Object.fromEntries(repeatCounts),
@@ -744,7 +779,7 @@ export async function runEditorAgent(opts = {}) {
         status: "done",
         finalAnswer,
       });
-      return { answer: finalAnswer, steps: step, transcript, runId, task: effectiveTask, writtenFiles, fallbackModelUsed, failed: false };
+      return { answer: finalAnswer, steps: step, transcript, runId, task: effectiveTask, writtenFiles, riskFlags, fallbackModelUsed, failed: false };
     }
 
     contents.push({ role: "model", parts });
@@ -818,6 +853,7 @@ export async function runEditorAgent(opts = {}) {
         runId,
         task: effectiveTask,
         writtenFiles,
+        riskFlags,
         failed: true,
       };
     }
@@ -867,6 +903,7 @@ export async function runEditorAgent(opts = {}) {
     runId,
     task: effectiveTask,
     writtenFiles,
+    riskFlags,
     failed: true,
   };
 }
@@ -924,6 +961,7 @@ export async function seedEditorRun({ owner, repo, branch, task, max_steps = EDI
     repo,
     branch,
     writtenFiles: [],
+    riskFlags: [],
     writesPerFile: {},
     validateCounts: {},
     repeatCounts: {},
