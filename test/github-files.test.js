@@ -151,7 +151,7 @@ describe("connectors/github/files.js", () => {
       expect(githubRequest).not.toHaveBeenCalled();
     });
 
-    it("commits a valid unique replacement and returns a unified diff", async () => {
+    it("commits a valid unique replacement and returns a short confirmation (no diff by default)", async () => {
       readFileViaBlob.mockResolvedValue("alpha\nbeta\ngamma\n");
       githubRequest
         .mockResolvedValueOnce({ sha: "existing-sha" })            // existence check before PUT
@@ -163,13 +163,35 @@ describe("connectors/github/files.js", () => {
       });
 
       expect(result.content[0].text).toMatch(/Committed 1 replacement/);
-      expect(result.content[0].text).toMatch(/-beta/);
-      expect(result.content[0].text).toMatch(/\+BETA/);
+      expect(result.content[0].text).not.toMatch(/-beta/);
+      expect(result.content[0].text).not.toMatch(/\+BETA/);
+      expect(result.content[0].text).not.toMatch(/--- a\.txt/);
 
       const putCall = githubRequest.mock.calls[1];
       const committedContent = Buffer.from(putCall[1].body.content, "base64").toString("utf-8");
       expect(committedContent).toBe("alpha\nBETA\ngamma\n");
       expect(putCall[1].body.sha).toBe("existing-sha");
+    });
+
+    it("still builds and returns the unified diff when EDIT_FILE_INCLUDE_DIFF=true", async () => {
+      vi.stubEnv("EDIT_FILE_INCLUDE_DIFF", "true");
+      try {
+        readFileViaBlob.mockResolvedValue("alpha\nbeta\ngamma\n");
+        githubRequest
+          .mockResolvedValueOnce({ sha: "existing-sha" })
+          .mockResolvedValueOnce({ commit: { sha: "aaa1111111" } });
+
+        const result = await server.tools.edit_file({
+          owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap beta",
+          replacements: [{ old_str: "beta", new_str: "BETA" }],
+        });
+
+        expect(result.content[0].text).toMatch(/Committed 1 replacement/);
+        expect(result.content[0].text).toMatch(/-beta/);
+        expect(result.content[0].text).toMatch(/\+BETA/);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it("applies multiple replacements sequentially in one commit", async () => {
