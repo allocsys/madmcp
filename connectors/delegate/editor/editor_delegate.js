@@ -289,7 +289,8 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
                       confidence: riskResult.confidence,
                       commitSha: result.commitSha,
                     });
-                    transcript.push(`[risk] TypeSafe flagged "${path}" (commit ${result.commitSha.slice(0, 7)}) as high risk: risk=${riskResult.risk.toFixed(2)}, matchesTask=${riskResult.matchesTask}, confidence=${riskResult.confidence.toFixed(2)}. Caller-only note -- not shown to the model.`);
+                    const confidenceStr = riskResult.confidence !== null ? riskResult.confidence.toFixed(2) : "n/a";
+                    transcript.push(`[risk] TypeSafe flagged "${path}" (commit ${result.commitSha.slice(0, 7)}) as high risk: risk=${riskResult.risk.toFixed(2)}, matchesTask=${riskResult.matchesTask}, confidence=${confidenceStr}. Caller-only note -- not shown to the model.`);
                   }
                 }
               }
