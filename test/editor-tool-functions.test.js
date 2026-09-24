@@ -11,7 +11,7 @@
 // test/frontend-agent-tools.test.js.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../connectors/github/client.js", () => ({
   githubRequest: vi.fn(),
@@ -38,6 +38,13 @@ function mockDefaultBranchLookup() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Pin the diff flag off so default-behavior tests don't depend on the
+  // ambient environment; individual tests re-stub it to "true" as needed.
+  vi.stubEnv("EDITOR_INCLUDE_DIFF", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("readFile", () => {
@@ -199,7 +206,17 @@ describe("writeFile", () => {
     expect(result.created).toBe(false);
   });
 
-  it("replacements mode applies the patch against the current branch content and returns a diff", async () => {
+  // Queues the three GitHub calls for a simple one-line replacement write
+  // (default-branch lookup, existing-file read, PUT).
+  function mockSimpleReplacementWrite() {
+    mockDefaultBranchLookup();
+    githubRequest.mockResolvedValueOnce({ content: Buffer.from("const x = 1;").toString("base64"), sha: "sha-1" });
+    githubRequest.mockResolvedValueOnce({ content: { sha: "sha-2" }, commit: { sha: "commit789" } });
+  }
+
+  const X_REPLACEMENT = { replacements: [{ find: "x = 1", replace: "x = 2" }], branch: "feature" };
+
+  it("replacements mode applies the patch against the current branch content and returns no diff by default", async () => {
     mockDefaultBranchLookup();
     githubRequest.mockResolvedValueOnce({ content: Buffer.from("const x = 1;").toString("base64"), sha: "sha-1" });
     githubRequest.mockResolvedValueOnce({ content: { sha: "sha-2" }, commit: { sha: "commit789" } });
@@ -210,8 +227,46 @@ describe("writeFile", () => {
     });
 
     expect(result.content).toBe("const x = 2;");
+    expect(result.diff).toBeNull();
+    expect(githubRequest).toHaveBeenCalledTimes(3); // the write itself still happens
+  });
+
+  it("replacements mode builds the unified diff when EDITOR_INCLUDE_DIFF=true", async () => {
+    vi.stubEnv("EDITOR_INCLUDE_DIFF", "true");
+    mockSimpleReplacementWrite();
+
+    const result = await writeFile(OWNER, REPO, "a.js", X_REPLACEMENT);
+
+    expect(result.content).toBe("const x = 2;");
     expect(result.diff).toContain("-const x = 1;");
     expect(result.diff).toContain("+const x = 2;");
+  });
+
+  it("only the exact string \"true\" enables the env flag", async () => {
+    vi.stubEnv("EDITOR_INCLUDE_DIFF", "1");
+    mockSimpleReplacementWrite();
+
+    const result = await writeFile(OWNER, REPO, "a.js", X_REPLACEMENT);
+
+    expect(result.diff).toBeNull();
+  });
+
+  it("an explicit includeDiff: true builds the diff even with the env flag off", async () => {
+    mockSimpleReplacementWrite();
+
+    const result = await writeFile(OWNER, REPO, "a.js", { ...X_REPLACEMENT, includeDiff: true });
+
+    expect(result.diff).toContain("-const x = 1;");
+    expect(result.diff).toContain("+const x = 2;");
+  });
+
+  it("an explicit includeDiff: false suppresses the diff even with the env flag on", async () => {
+    vi.stubEnv("EDITOR_INCLUDE_DIFF", "true");
+    mockSimpleReplacementWrite();
+
+    const result = await writeFile(OWNER, REPO, "a.js", { ...X_REPLACEMENT, includeDiff: false });
+
+    expect(result.diff).toBeNull();
   });
 
   it("replacements mode on a nonexistent file is rejected with a clear message", async () => {
@@ -232,7 +287,21 @@ describe("writeFile", () => {
     });
 
     expect(result.noop).toBe(true);
+    expect(result.diff).toBeNull();
     expect(githubRequest).toHaveBeenCalledTimes(2); // default-branch lookup + existing-file read only, no PUT
+  });
+
+  it("the no-op path reports '(no differences)' when the diff flag is on", async () => {
+    vi.stubEnv("EDITOR_INCLUDE_DIFF", "true");
+    mockDefaultBranchLookup();
+    githubRequest.mockResolvedValueOnce({ content: Buffer.from("same").toString("base64"), sha: "sha-1" });
+
+    const result = await writeFile(OWNER, REPO, "a.js", {
+      replacements: [{ find: "same", replace: "same" }], branch: "feature",
+    });
+
+    expect(result.noop).toBe(true);
+    expect(result.diff).toContain("(no differences)");
   });
 
   it("rejects when base_sha does not match the file's current sha (stale read)", async () => {

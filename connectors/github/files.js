@@ -176,7 +176,7 @@ export function register(server) {
     "edit_file",
     "DOES: Edit an existing or new file's contents, committed in one call. Exactly one of two mutually exclusive modes:\n" +
     "  `content` (full overwrite) -- rewrites the whole file, creating it if it doesn't exist.\n" +
-    "  `replacements` (targeted str_replace, same naming as the sandbox's str_replace tool) -- only changed strings need to be sent; each `old_str` must appear exactly once in the file or the WHOLE call is rejected and nothing is committed; the file must already exist; returns a unified diff.\n" +
+    "  `replacements` (targeted str_replace, same naming as the sandbox's str_replace tool) -- only changed strings need to be sent; each `old_str` must appear exactly once in the file or the WHOLE call is rejected and nothing is committed; the file must already exist; returns a short commit confirmation.\n" +
     "RULE: must fail if the path already exists -> create_repo_file instead. Several files as one atomic commit -> overwrite_files.",
     {
       owner:        z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
@@ -220,6 +220,15 @@ export function register(server) {
           method: "PUT",
           body: { message, content: toBase64(updated), branch, sha: existing.sha },
         });
+
+        // The unified diff below is redundant for the calling model (it just wrote
+        // the replacements), so it's disabled by default. The diff-building code is
+        // intentionally kept intact -- set EDIT_FILE_INCLUDE_DIFF=true to bring it back.
+        if (process.env.EDIT_FILE_INCLUDE_DIFF !== "true") {
+          return {
+            content: [{ type: "text", text: `✅ Committed ${replacements.length} replacement(s) to ${path} (commit ${result.commit.sha.slice(0, 7)}).` }],
+          };
+        }
 
         // Build unified diff
         const aLines = original.split("\n");

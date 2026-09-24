@@ -245,7 +245,15 @@ function buildFunctions({ owner, repo, branch, writtenFiles, writesPerFile, vali
         }
 
         try {
-          const result = await writeFile(owner, repo, path, { content, replacements, baseSha: base_sha, branch, message });
+          // The diff is never shown to the model (this closure returns only
+          // a one-line "Wrote ..." string). Its sole consumer is the TypeSafe
+          // scoreEditRisk call below, so only ask writeFile to build it when
+          // that call will run; otherwise writeFile's own EDITOR_INCLUDE_DIFF
+          // env gate decides (default off).
+          const result = await writeFile(owner, repo, path, {
+            content, replacements, baseSha: base_sha, branch, message,
+            includeDiff: TYPESAFE_ENABLED ? true : undefined,
+          });
           writesPerFile.set(path, priorWrites + 1);
           if (!alreadyTouched) writtenFiles.push(path);
           if (result.noop) {
