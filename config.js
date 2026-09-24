@@ -405,6 +405,15 @@ export const JULES_API     = "https://jules.googleapis.com/v1alpha";
 export const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY;
 export const TYPESAFE_ENABLED = process.env.TYPESAFE_ENABLED === "true";
 export const JEV_MODEL        = process.env.JEV_MODEL || "jev-1";
+// Minimum scoreEditRisk() risk score (0.0-1.0) for a write to be surfaced as
+// a caller-facing risk flag (editor_delegate.js's write_file closure, pushed
+// to riskFlags/transcript, NEVER into the string returned to the model --
+// see that file's own comment for why). Deliberately gated high: most writes
+// should produce no flag at all, and the score itself is an unproven,
+// best-effort signal (scoreEditRisk's caller wraps it in a bare try/catch
+// and treats it as informational only), so this is tuned to only catch the
+// writes worth a human's attention, not to police every edit.
+export const EDITOR_RISK_FLAG_THRESHOLD = Number(process.env.EDITOR_RISK_FLAG_THRESHOLD) || 0.7;
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
