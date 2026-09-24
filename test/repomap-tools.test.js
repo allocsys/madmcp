@@ -25,7 +25,7 @@
 // for the layers underneath.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../config.js", () => ({ DEFAULT_OWNER: "allocsys" }));
 
@@ -52,11 +52,26 @@ function makeFakeServer() {
   };
 }
 
+// pollToBudget() keeps polling getScanStatus (sleeping 3s between calls) until
+// the job is done/failed or its 45s budget elapses. For "still running" cases the
+// mock must keep returning a running job, and fake timers let us blow through the
+// budget instantly instead of exhausting a Once-mock (which returned undefined and
+// caused "Cannot read properties of undefined (reading 'status')").
+async function settle(promise) {
+  await vi.advanceTimersByTimeAsync(60000);
+  return promise;
+}
+
 describe("connectors/repomap/tools.js", () => {
   let server, map;
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    getScanStatus.mockReset();
     server = makeFakeServer();
     register(server);
     map = server.tools["map"];
@@ -78,9 +93,10 @@ describe("connectors/repomap/tools.js", () => {
 
   describe("resuming via jobId", () => {
     it("still running: reports progress and tells the caller to resume with the same jobId", async () => {
-      getScanStatus.mockResolvedValueOnce({ status: "running", files_done: 3, files_total: 10 });
+      vi.useFakeTimers();
+      getScanStatus.mockResolvedValue({ status: "running", files_done: 3, files_total: 10 });
 
-      const result = await map({ jobId: "job-1" });
+      const result = await settle(map({ jobId: "job-1" }));
 
       expect(getScanStatus).toHaveBeenCalledWith("job-1");
       expect(result.content[0].text).toContain("running");
@@ -189,9 +205,10 @@ describe("connectors/repomap/tools.js", () => {
     it("scan does not finish in budget, no mode: tells the caller to resume with jobId", async () => {
       getFreshness.mockResolvedValueOnce({ scanned: false });
       startScan.mockResolvedValueOnce({ jobId: "job-8", status: "queued" });
-      getScanStatus.mockResolvedValueOnce({ status: "running", files_done: 4, files_total: 50 });
+      vi.useFakeTimers();
+      getScanStatus.mockResolvedValue({ status: "running", files_done: 4, files_total: 50 });
 
-      const result = await map({ repo: "widgets" });
+      const result = await settle(map({ repo: "widgets" }));
 
       expect(result.content[0].text).toMatch(/Still in progress -- call map again with jobId "job-8" to resume\./);
       expect(searchChunks).not.toHaveBeenCalled();
@@ -200,9 +217,10 @@ describe("connectors/repomap/tools.js", () => {
     it("scan does not finish in budget, with mode: resume hint includes the query args to repeat", async () => {
       getFreshness.mockResolvedValueOnce({ scanned: false });
       startScan.mockResolvedValueOnce({ jobId: "job-9", status: "queued" });
-      getScanStatus.mockResolvedValueOnce({ status: "running", files_done: 1, files_total: 50 });
+      vi.useFakeTimers();
+      getScanStatus.mockResolvedValue({ status: "running", files_done: 1, files_total: 50 });
 
-      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo" });
+      const result = await settle(map({ repo: "widgets", mode: "graph", symbol: "foo" }));
 
       expect(result.content[0].text).toMatch(/jobId "job-9" \(and the same repo\/mode\/symbol or file args\) to resume\./);
       expect(queryGraph).not.toHaveBeenCalled();
@@ -211,9 +229,10 @@ describe("connectors/repomap/tools.js", () => {
     it("scan does not finish in budget, mode search: resume hint says 'query' not 'symbol or file'", async () => {
       getFreshness.mockResolvedValueOnce({ scanned: false });
       startScan.mockResolvedValueOnce({ jobId: "job-10", status: "queued" });
-      getScanStatus.mockResolvedValueOnce({ status: "running" });
+      vi.useFakeTimers();
+      getScanStatus.mockResolvedValue({ status: "running" });
 
-      const result = await map({ repo: "widgets", mode: "search", query: "q" });
+      const result = await settle(map({ repo: "widgets", mode: "search", query: "q" }));
 
       expect(result.content[0].text).toMatch(/jobId "job-10" \(and the same repo\/mode\/query args\) to resume\./);
     });
