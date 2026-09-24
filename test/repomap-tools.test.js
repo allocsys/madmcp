@@ -1,21 +1,28 @@
 // ---------------------------------------------------------------------------
 // test/repomap-tools.test.js
 //
-// Direct unit coverage for connectors/repomap/tools.js (the map.index +
-// map.query MCP tool handlers -- formerly repo_map_scan/repo_map, renamed
-// for name-similarity clarity). Previously untested at this layer -- only
-// the client.js/queries.js modules below it had coverage. Covers:
-//   - map.index: repo-required guard, jobId-poll vs start-scan branching,
-//     and that caught errors are prefixed with which operation failed
-//   - map.query: query-required (search) / symbol-or-file-required (graph)
-//     guards, the new file-required-for-importers/imports guard, and that
-//     caught errors are prefixed with which mode failed
-//   - "no results" messaging vs a genuine thrown error, kept distinct
+// Direct unit coverage for connectors/repomap/tools.js (the hybrid `map`
+// MCP tool -- formerly two tools, map.index + map.query, merged because the
+// name similarity caused repeated mix-ups between polling a scan and
+// querying the graph, and because staleness used to be silently healed in
+// the background instead of being visible to the caller). Covers:
+//   - repo-required guard when jobId is not given
+//   - jobId resume path: still running vs done, and done with no mode /
+//     mode-but-no-repo / mode+repo (runs the query)
+//   - fresh-repo path: no mode (status line only) vs mode (runs query)
+//   - never-scanned / stale-repo path: blocking scan then optional query,
+//     and the scan-not-finished-inside-the-budget branch (both on the
+//     first call and once resumed via jobId)
+//   - runQuery's shared validation: query required for mode "search",
+//     symbol-or-file required for mode "graph", file required specifically
+//     for direction importers/imports
+//   - formatSearchResults/formatGraphResults, incl. "No results."
+//   - top-level catch prefixes the error with "map: "
 //
-// startScan/getScanStatus/searchChunks/queryGraph (connectors/repomap/
-// client.js) are mocked -- this is a handler unit test, not a live-network
-// test. See repomap-client.test.js / repomap-queries.test.js for the layers
-// underneath.
+// startScan/getScanStatus/getFreshness/searchChunks/queryGraph
+// (connectors/repomap/client.js) are mocked -- this is a handler unit test,
+// not a live-network test. See repomap-client.test.js / repomap-queries.test.js
+// for the layers underneath.
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -25,14 +32,15 @@ vi.mock("../config.js", () => ({ DEFAULT_OWNER: "allocsys" }));
 vi.mock("../connectors/repomap/client.js", () => ({
   startScan: vi.fn(),
   getScanStatus: vi.fn(),
+  getFreshness: vi.fn(),
   searchChunks: vi.fn(),
   queryGraph: vi.fn(),
 }));
 
-import { startScan, getScanStatus, searchChunks, queryGraph } from "../connectors/repomap/client.js";
+import { startScan, getScanStatus, getFreshness, searchChunks, queryGraph } from "../connectors/repomap/client.js";
 import { register } from "../connectors/repomap/tools.js";
 
-// Minimal fake MCP server: just captures the handler function for each
+// Minimal fake MCP server: just captures the handler function for the
 // registered tool name so tests can call it directly.
 function makeFakeServer() {
   const tools = {};
@@ -45,133 +53,200 @@ function makeFakeServer() {
 }
 
 describe("connectors/repomap/tools.js", () => {
-  let server;
+  let server, map;
 
   beforeEach(() => {
     vi.clearAllMocks();
     server = makeFakeServer();
     register(server);
+    map = server.tools["map"];
   });
 
-  describe("map.index", () => {
-    it("requires repo when jobId is not given", async () => {
-      const result = await server.tools["map.index"]({});
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toMatch(/repo is required/);
-      expect(startScan).not.toHaveBeenCalled();
-    });
+  it("registers a single `map` tool (not map.index/map.query)", () => {
+    expect(map).toBeTypeOf("function");
+    expect(server.tools["map.index"]).toBeUndefined();
+    expect(server.tools["map.query"]).toBeUndefined();
+  });
 
-    it("polls status via getScanStatus when jobId is given, without calling startScan", async () => {
-      getScanStatus.mockResolvedValueOnce({ status: "done", files_scanned: 12, files_changed: 3, chunks_embedded: 40 });
+  it("requires repo when jobId is not given", async () => {
+    const result = await map({});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/repo is required when jobId is not given/);
+    expect(getFreshness).not.toHaveBeenCalled();
+    expect(startScan).not.toHaveBeenCalled();
+  });
 
-      const result = await server.tools["map.index"]({ jobId: "job-1" });
+  describe("resuming via jobId", () => {
+    it("still running: reports progress and tells the caller to resume with the same jobId", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "running", files_done: 3, files_total: 10 });
+
+      const result = await map({ jobId: "job-1" });
 
       expect(getScanStatus).toHaveBeenCalledWith("job-1");
+      expect(result.content[0].text).toContain("running");
+      expect(result.content[0].text).toMatch(/3\/10/);
+      expect(result.content[0].text).toMatch(/Still in progress -- call map again with jobId "job-1"/);
       expect(startScan).not.toHaveBeenCalled();
-      expect(result.content[0].text).toMatch(/Job job-1: done \(12 files scanned, 3 changed, 40 chunks embedded\)/);
+      expect(result.isError).toBeUndefined();
     });
 
-    it("surfaces a failed job's error in the status summary", async () => {
-      getScanStatus.mockResolvedValueOnce({ status: "failed", error: "embedding batch 400" });
+    it("done, no mode: reports done and invites a follow-up query", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "done", files_scanned: 12, files_changed: 3, chunks_embedded: 40 });
 
-      const result = await server.tools["map.index"]({ jobId: "job-2" });
+      const result = await map({ jobId: "job-2" });
 
-      expect(result.content[0].text).toBe("Job job-2: failed -- embedding batch 400");
+      expect(result.content[0].text).toMatch(/Job job-2: done \(12 files scanned, 3 changed, 40 chunks embedded\)/);
+      expect(result.content[0].text).toMatch(/Repo is now fresh -- call map again with mode\/query/);
+      expect(searchChunks).not.toHaveBeenCalled();
+      expect(queryGraph).not.toHaveBeenCalled();
     });
 
-    it("starts a scan via startScan when repo is given and no jobId", async () => {
-      startScan.mockResolvedValueOnce({ jobId: "job-3", status: "queued" });
+    it("done, mode given but no repo: asks for repo instead of guessing", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "done" });
 
-      const result = await server.tools["map.index"]({ owner: "allocsys", repo: "widgets", ref: "main" });
+      const result = await map({ jobId: "job-3", mode: "search", query: "parse config" });
 
-      expect(startScan).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", ref: "main" });
-      expect(getScanStatus).not.toHaveBeenCalled();
-      expect(result.content[0].text).toMatch(/Scan started for allocsys\/widgets@main. jobId: job-3/);
-    });
-
-    it("defaults owner to DEFAULT_OWNER when omitted", async () => {
-      startScan.mockResolvedValueOnce({ jobId: "job-4", status: "queued" });
-
-      await server.tools["map.index"]({ repo: "widgets" });
-
-      expect(startScan).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", ref: undefined });
-    });
-
-    it("prefixes a caught error from starting a scan with 'start scan'", async () => {
-      startScan.mockRejectedValueOnce(new Error("worker unreachable"));
-
-      const result = await server.tools["map.index"]({ repo: "widgets" });
-
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe("map.index (start scan): worker unreachable");
-    });
-
-    it("prefixes a caught error from polling status with 'status check'", async () => {
-      getScanStatus.mockRejectedValueOnce(new Error("worker unreachable"));
-
-      const result = await server.tools["map.index"]({ jobId: "job-5" });
-
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe("map.index (status check): worker unreachable");
-    });
-  });
-
-  describe("map.query — mode: search", () => {
-    it("requires query", async () => {
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "search" });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toMatch(/query is required/);
+      expect(result.content[0].text).toMatch(/Pass repo \(and owner if not "allocsys"\) alongside mode\/query/);
       expect(searchChunks).not.toHaveBeenCalled();
     });
 
-    it("reports 'no results' distinctly from a thrown error when the repo hasn't been scanned", async () => {
-      searchChunks.mockResolvedValueOnce({ results: [] });
-
-      const result = await server.tools["map.query"]({ owner: "allocsys", repo: "widgets", mode: "search", query: "parse config" });
-
-      expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toMatch(/No results\. Has allocsys\/widgets been scanned yet\?/);
-    });
-
-    it("formats successful search results", async () => {
+    it("done, mode + repo: runs the query and prefixes it with the done status", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "done", files_scanned: 5, files_changed: 1, chunks_embedded: 9 });
       searchChunks.mockResolvedValueOnce({
         results: [{ filePath: "src/a.js", symbolName: "foo", qualifiedName: "mod.foo", startLine: 1, endLine: 5, distance: 0.123456 }],
       });
 
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "search", query: "q" });
+      const result = await map({ jobId: "job-4", repo: "widgets", mode: "search", query: "parse config" });
 
-      expect(result.content[0].text).toBe("src/a.js — mod.foo (L1-5) [dist 0.123]");
+      expect(searchChunks).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", query: "parse config", topK: undefined });
+      expect(result.content[0].text).toMatch(/^Job job-4: done/);
+      expect(result.content[0].text).toContain("src/a.js — mod.foo (L1-5) [dist 0.123]");
     });
 
-    it("prefixes a caught error with 'mode: search'", async () => {
-      searchChunks.mockRejectedValueOnce(new Error("db unavailable"));
+    it("failed job: surfaces the error in the status line", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "failed", error: "embedding batch 400" });
 
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "search", query: "q" });
+      const result = await map({ jobId: "job-5" });
 
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe("map.query (mode: search): db unavailable");
+      expect(result.content[0].text).toContain("failed -- embedding batch 400");
+      expect(result.content[0].text).toMatch(/Still in progress -- call map again with jobId "job-5"/);
     });
   });
 
-  describe("map.query — mode: graph", () => {
-    it("requires symbol or file", async () => {
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph" });
+  describe("fresh repo (no scan needed)", () => {
+    it("no mode: reports up to date with the scanned commit, no query run", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: true, lastScannedCommit: "abc123", branch: "main" });
+
+      const result = await map({ repo: "widgets" });
+
+      expect(getFreshness).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", ref: undefined });
+      expect(result.content[0].text).toMatch(/allocsys\/widgets is up to date \(commit abc123\)/);
+      expect(startScan).not.toHaveBeenCalled();
+      expect(searchChunks).not.toHaveBeenCalled();
+    });
+
+    it("with mode: runs the query directly, no scan", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: true, lastScannedCommit: "abc123", branch: "main" });
+      queryGraph.mockResolvedValueOnce({
+        results: [{ name: "foo", qualifiedName: "mod.foo", filePath: "src/a.js", startLine: 1, endLine: 5, depth: 1 }],
+      });
+
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo" });
+
+      expect(startScan).not.toHaveBeenCalled();
+      expect(queryGraph).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", symbol: "foo", file: undefined, direction: undefined, depth: undefined });
+      expect(result.content[0].text).toBe("mod.foo — src/a.js (L1-5) [depth 1]");
+    });
+  });
+
+  describe("never-scanned / stale repo (blocking scan first)", () => {
+    it("never scanned, scan finishes in budget, no mode: reports 'never been scanned -- scanning now' + done", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: false });
+      startScan.mockResolvedValueOnce({ jobId: "job-6", status: "queued" });
+      getScanStatus.mockResolvedValueOnce({ status: "done", files_scanned: 20, files_changed: 20, chunks_embedded: 80 });
+
+      const result = await map({ repo: "widgets", ref: "main" });
+
+      expect(startScan).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", ref: "main" });
+      expect(result.content[0].text).toMatch(/allocsys\/widgets has never been scanned -- scanning now\./);
+      expect(result.content[0].text).toMatch(/done \(20 files scanned, 20 changed, 80 chunks embedded\)/);
+      expect(searchChunks).not.toHaveBeenCalled();
+    });
+
+    it("stale, scan finishes in budget, with mode: reports 'was stale -- rescanning' then runs the query", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: false, branch: "main" });
+      startScan.mockResolvedValueOnce({ jobId: "job-7", status: "queued" });
+      getScanStatus.mockResolvedValueOnce({ status: "done" });
+      searchChunks.mockResolvedValueOnce({ results: [] });
+
+      const result = await map({ repo: "widgets", mode: "search", query: "q" });
+
+      expect(startScan).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", ref: "main" });
+      expect(result.content[0].text).toMatch(/allocsys\/widgets was stale -- rescanning\./);
+      expect(result.content[0].text).toContain("No results.");
+    });
+
+    it("scan does not finish in budget, no mode: tells the caller to resume with jobId", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: false });
+      startScan.mockResolvedValueOnce({ jobId: "job-8", status: "queued" });
+      getScanStatus.mockResolvedValueOnce({ status: "running", files_done: 4, files_total: 50 });
+
+      const result = await map({ repo: "widgets" });
+
+      expect(result.content[0].text).toMatch(/Still in progress -- call map again with jobId "job-8" to resume\./);
+      expect(searchChunks).not.toHaveBeenCalled();
+    });
+
+    it("scan does not finish in budget, with mode: resume hint includes the query args to repeat", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: false });
+      startScan.mockResolvedValueOnce({ jobId: "job-9", status: "queued" });
+      getScanStatus.mockResolvedValueOnce({ status: "running", files_done: 1, files_total: 50 });
+
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo" });
+
+      expect(result.content[0].text).toMatch(/jobId "job-9" \(and the same repo\/mode\/symbol or file args\) to resume\./);
+      expect(queryGraph).not.toHaveBeenCalled();
+    });
+
+    it("scan does not finish in budget, mode search: resume hint says 'query' not 'symbol or file'", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: false });
+      startScan.mockResolvedValueOnce({ jobId: "job-10", status: "queued" });
+      getScanStatus.mockResolvedValueOnce({ status: "running" });
+
+      const result = await map({ repo: "widgets", mode: "search", query: "q" });
+
+      expect(result.content[0].text).toMatch(/jobId "job-10" \(and the same repo\/mode\/query args\) to resume\./);
+    });
+  });
+
+  describe("runQuery validation (shared by the fresh and just-scanned paths)", () => {
+    beforeEach(() => {
+      getFreshness.mockResolvedValue({ scanned: true, fresh: true, lastScannedCommit: "abc", branch: "main" });
+    });
+
+    it("requires query for mode: search", async () => {
+      const result = await map({ repo: "widgets", mode: "search" });
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toMatch(/symbol or file is required/);
+      expect(result.content[0].text).toMatch(/query is required for mode "search"/);
+      expect(searchChunks).not.toHaveBeenCalled();
+    });
+
+    it("requires symbol or file for mode: graph", async () => {
+      const result = await map({ repo: "widgets", mode: "graph" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/symbol or file is required for mode "graph"/);
       expect(queryGraph).not.toHaveBeenCalled();
     });
 
     it("requires file specifically when direction is importers, even if symbol is given", async () => {
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", symbol: "foo", direction: "importers" });
-
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo", direction: "importers" });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toMatch(/file is required when direction is "importers"/);
       expect(queryGraph).not.toHaveBeenCalled();
     });
 
     it("requires file specifically when direction is imports, even if symbol is given", async () => {
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", symbol: "foo", direction: "imports" });
-
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo", direction: "imports" });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toMatch(/file is required when direction is "imports"/);
       expect(queryGraph).not.toHaveBeenCalled();
@@ -180,7 +255,7 @@ describe("connectors/repomap/tools.js", () => {
     it("does not require file for importers/imports once file is actually given", async () => {
       queryGraph.mockResolvedValueOnce({ results: [] });
 
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", file: "src/a.js", direction: "imports" });
+      const result = await map({ repo: "widgets", mode: "graph", file: "src/a.js", direction: "imports" });
 
       expect(result.isError).toBeUndefined();
       expect(queryGraph).toHaveBeenCalledWith({ owner: "allocsys", repo: "widgets", symbol: undefined, file: "src/a.js", direction: "imports", depth: undefined });
@@ -189,48 +264,43 @@ describe("connectors/repomap/tools.js", () => {
     it("does NOT require file for callers/callees -- symbol alone is enough", async () => {
       queryGraph.mockResolvedValueOnce({ results: [] });
 
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", symbol: "foo", direction: "callers" });
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo", direction: "callers" });
 
       expect(result.isError).toBeUndefined();
       expect(queryGraph).toHaveBeenCalled();
     });
+  });
 
-    it("reports 'no results' distinctly from a thrown error", async () => {
+  describe("formatting", () => {
+    beforeEach(() => {
+      getFreshness.mockResolvedValue({ scanned: true, fresh: true, lastScannedCommit: "abc", branch: "main" });
+    });
+
+    it("search: 'No results.' when empty", async () => {
+      searchChunks.mockResolvedValueOnce({ results: [] });
+      const result = await map({ repo: "widgets", mode: "search", query: "q" });
+      expect(result.content[0].text).toBe("No results.");
+    });
+
+    it("graph: 'No results.' when empty", async () => {
       queryGraph.mockResolvedValueOnce({ results: [] });
-
-      const result = await server.tools["map.query"]({ owner: "allocsys", repo: "widgets", mode: "graph", symbol: "foo" });
-
-      expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toMatch(/No results\. Has allocsys\/widgets been scanned yet\?/);
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo" });
+      expect(result.content[0].text).toBe("No results.");
     });
 
-    it("formats successful graph results for symbols", async () => {
-      queryGraph.mockResolvedValueOnce({
-        results: [{ name: "foo", qualifiedName: "mod.foo", filePath: "src/a.js", startLine: 1, endLine: 5, depth: 1 }],
-      });
-
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", symbol: "foo" });
-
-      expect(result.content[0].text).toBe("mod.foo — src/a.js (L1-5) [depth 1]");
-    });
-
-    it("formats successful graph results for files (importers/imports)", async () => {
-      queryGraph.mockResolvedValueOnce({
-        results: [{ filePath: "src/b.js", depth: 1 }],
-      });
-
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", file: "src/a.js", direction: "imports" });
-
+    it("graph: formats file-level results (importers/imports) without a symbol name", async () => {
+      queryGraph.mockResolvedValueOnce({ results: [{ filePath: "src/b.js", depth: 1 }] });
+      const result = await map({ repo: "widgets", mode: "graph", file: "src/a.js", direction: "imports" });
       expect(result.content[0].text).toBe("src/b.js (depth 1)");
     });
+  });
 
-    it("prefixes a caught error with 'mode: graph'", async () => {
-      queryGraph.mockRejectedValueOnce(new Error("db unavailable"));
+  it("wraps a thrown error with the 'map: ' prefix", async () => {
+    getFreshness.mockRejectedValueOnce(new Error("db unavailable"));
 
-      const result = await server.tools["map.query"]({ repo: "widgets", mode: "graph", symbol: "foo" });
+    const result = await map({ repo: "widgets" });
 
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe("map.query (mode: graph): db unavailable");
-    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe("map: db unavailable");
   });
 });
