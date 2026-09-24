@@ -251,6 +251,70 @@ describe("connectors/repomap/client.js", () => {
       expect(init.method).toBe("GET");
     });
 
+    describe("getFreshness (pure HEAD-vs-last_scanned_commit check, no side effects)", () => {
+      it("returns { scanned: false } when the repo has never been scanned, without calling githubRequest", async () => {
+        const { getRepoRow } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce(null);
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        const result = await getFreshness({ owner: "allocsys", repo: "widgets" });
+
+        expect(result).toEqual({ scanned: false });
+        expect(githubRequest).not.toHaveBeenCalled();
+      });
+
+      it("reports fresh: true when HEAD matches last_scanned_commit, using the repo's default_ref", async () => {
+        const { getRepoRow } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ last_scanned_commit: "abc123", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "abc123" } });
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        const result = await getFreshness({ owner: "allocsys", repo: "widgets" });
+
+        expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/main");
+        expect(result).toEqual({ scanned: true, fresh: true, headSha: "abc123", lastScannedCommit: "abc123", branch: "main" });
+      });
+
+      it("reports fresh: false on a HEAD mismatch, without starting a scan itself", async () => {
+        const { getRepoRow } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ last_scanned_commit: "old_sha", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "new_sha" } });
+        global.fetch = vi.fn();
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        const result = await getFreshness({ owner: "allocsys", repo: "widgets" });
+
+        expect(result).toEqual({ scanned: true, fresh: false, headSha: "new_sha", lastScannedCommit: "old_sha", branch: "main" });
+        expect(global.fetch).not.toHaveBeenCalled(); // pure check -- caller (the `map` tool) decides whether to scan
+      });
+
+      it("uses an explicit ref instead of default_ref when given", async () => {
+        const { getRepoRow } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ last_scanned_commit: "abc", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "feat_sha" } });
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        const result = await getFreshness({ owner: "allocsys", repo: "widgets", ref: "feature-branch" });
+
+        expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/feature-branch");
+        expect(result.branch).toBe("feature-branch");
+      });
+
+      it("propagates a failure fetching HEAD sha (unlike ensureFresh, which swallows it)", async () => {
+        const { getRepoRow } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ last_scanned_commit: "abc", default_ref: "main" });
+        githubRequest.mockRejectedValueOnce(new Error("GitHub API hiccup"));
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        await expect(getFreshness({ owner: "allocsys", repo: "widgets" })).rejects.toThrow(/GitHub API hiccup/);
+      });
+    });
+
     it("searchChunks calls queryChunksDb directly (no worker HTTP hop) and wraps the result", async () => {
       global.fetch = vi.fn();
       const { queryChunksDb } = await import("../connectors/repomap/queries.js");
