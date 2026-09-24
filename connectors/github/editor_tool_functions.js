@@ -23,10 +23,9 @@
 //                     to already exist. The unified diff is OPT-IN: it is
 //                     built only when process.env.EDITOR_INCLUDE_DIFF ===
 //                     "true" (read per call) or the caller passes
-//                     `includeDiff: true`; otherwise `diff` is null. Mirrors
-//                     edit_file's EDITOR_INCLUDE_DIFF-style gate in files.js
-//                     (EDIT_FILE_INCLUDE_DIFF). buildUnifiedDiff itself is
-//                     unchanged and still exported.
+//                     `includeDiff: true`; otherwise `diff` is null. Same idea
+//                     as edit_file's EDIT_FILE_INCLUDE_DIFF gate in files.js.
+//                     buildUnifiedDiff itself is unchanged and still exported.
 // ---------------------------------------------------------------------------
 
 import { githubRequest, toBase64, fromBase64 } from "./client.js";
