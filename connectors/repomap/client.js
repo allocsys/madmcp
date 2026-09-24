@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
-// connectors/repomap/client.js — map.index (write path) talks to the
+// connectors/repomap/client.js — map (index+query) talks to the
 // repo_map worker (worker/, deployed separately on Railway) over HTTP,
 // auth'd with a shared-secret bearer token (worker/src/auth.js). Scanning a
 // repo requires a clone token minted via GitHub App auth (same mechanism as
 // the get_repo_clone_token MCP tool), since the worker needs to clone the
 // target repo itself.
 //
-// map.query's search/graph (read path) query Neon directly (queries.js) --
+// The query/read path (search/graph) queries Neon directly (queries.js) --
 // no worker hop needed, since neither semantic search nor graph traversal
 // require anything the worker uniquely provides (the worker's job is the
 // scan: clone + parse + chunk + embed + write). See queries.js/db.js for
@@ -82,34 +82,47 @@ export async function getScanStatus(jobId) {
   return workerRequest(`/status/${encodeURIComponent(jobId)}`);
 }
 
-// Compares the repo's current HEAD sha (for `ref`, or the repo's own
-// default_ref if `ref` is omitted) against repos.last_scanned_commit and, on
-// a mismatch, fires an incremental map.index scan in the background -- fired
-// and NOT awaited to completion, so this never adds scan latency to the read
-// that triggered it. That read still answers from whatever's currently
-// indexed; the *next* read sees the fresh data once the background scan
-// lands. This is what lets map.query self-heal staleness without every write
-// tool (edit_file/create_repo_file/overwrite_files) needing to know or care
-// that map.query exists.
+// Pure freshness check (no side effects): compares the repo's current HEAD
+// sha (for `ref`, or the repo's own default_ref if `ref` is omitted) against
+// repos.last_scanned_commit. Exported so callers (the `map` tool) can decide
+// what to do about staleness themselves -- block and show progress, queue a
+// background scan, just report status, etc -- rather than this module
+// always making that call for them.
 //
-// Deliberately fails soft: a repo that's never been scanned has no row (not
-// this function's problem -- the caller's existing "no results, has it been
-// scanned?" message covers that), and any error fetching the HEAD sha or
-// enqueuing the scan (transient GitHub API hiccup, worker briefly down,
-// etc.) is swallowed rather than thrown -- a failed staleness check should
-// never break the read path itself. It only awaits startScan() far enough to
-// know the scan was enqueued (jobId back), never getScanStatus/polling.
+// Deliberately reports {scanned:false} rather than throwing when the repo
+// has never been scanned (not this function's problem -- callers already
+// have a "never scanned" message to show). Errors fetching the HEAD sha
+// (transient GitHub API hiccup) do propagate here, since callers that
+// explicitly asked for a freshness check want to know it failed, unlike the
+// old fire-and-forget path below which needs to fail soft.
+export async function getFreshness({ owner = DEFAULT_OWNER, repo, ref }) {
+  const repoRow = await getRepoRow(owner, repo);
+  if (!repoRow) return { scanned: false };
+  const branch = ref || repoRow.default_ref;
+  const { object } = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+  const headSha = object?.sha;
+  return {
+    scanned: true,
+    fresh: !!headSha && headSha === repoRow.last_scanned_commit,
+    headSha,
+    lastScannedCommit: repoRow.last_scanned_commit,
+    branch,
+  };
+}
+
+// Fire-and-forget staleness check, fired and NOT awaited to completion, so
+// this never adds scan latency to the read that triggered it -- that read
+// still answers from whatever's currently indexed; the *next* read sees the
+// fresh data once the background scan lands. Kept for searchChunks/
+// queryGraph below so any lower-level caller of those (not going through the
+// `map` tool's explicit blocking gate) still gets this self-healing
+// behavior. Failures here are swallowed -- a staleness check should never
+// break the read path itself.
 async function ensureFresh({ owner = DEFAULT_OWNER, repo, ref }) {
   try {
-    const repoRow = await getRepoRow(owner, repo);
-    if (!repoRow) return; // never scanned -- nothing to compare against
-
-    const branch = ref || repoRow.default_ref;
-    const { object } = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
-    const headSha = object?.sha;
-    if (!headSha || headSha === repoRow.last_scanned_commit) return; // already fresh
-
-    await startScan({ owner, repo, ref: branch });
+    const status = await getFreshness({ owner, repo, ref });
+    if (!status.scanned || status.fresh) return; // never scanned (not our problem) or already fresh
+    await startScan({ owner, repo, ref: status.branch });
   } catch {
     // Staleness check itself failing is not the caller's problem -- fall
     // through and let the read answer from whatever's currently indexed.
