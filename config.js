@@ -405,6 +405,26 @@ export const JULES_API     = "https://jules.googleapis.com/v1alpha";
 export const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY;
 export const TYPESAFE_ENABLED = process.env.TYPESAFE_ENABLED === "true";
 export const JEV_MODEL        = process.env.JEV_MODEL || "jev-1";
+// Minimum scoreEditRisk() risk score (0.0-1.0) for a write to be surfaced as
+// a caller-facing risk flag (editor_delegate.js's write_file closure, pushed
+// to riskFlags/transcript, NEVER into the string returned to the model --
+// see that file's own comment for why). Deliberately gated high: most writes
+// should produce no flag at all, and the score itself is an unproven,
+// best-effort signal (scoreEditRisk's caller wraps it in a bare try/catch
+// and treats it as informational only), so this is tuned to only catch the
+// writes worth a human's attention, not to police every edit.
+const _editorRiskFlagThresholdRaw = process.env.EDITOR_RISK_FLAG_THRESHOLD;
+const _editorRiskFlagThresholdParsed =
+  _editorRiskFlagThresholdRaw === undefined || _editorRiskFlagThresholdRaw === ""
+    ? NaN
+    : Number(_editorRiskFlagThresholdRaw);
+// Number(env) || 0.7 would treat 0 as falsy and silently fall back to 0.7,
+// making it impossible to flag every write via EDITOR_RISK_FLAG_THRESHOLD=0.
+// Only fall back to the default when the env var is unset/empty or fails to
+// parse as a number at all.
+export const EDITOR_RISK_FLAG_THRESHOLD = Number.isNaN(_editorRiskFlagThresholdParsed)
+  ? 0.7
+  : _editorRiskFlagThresholdParsed;
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
