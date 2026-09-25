@@ -139,12 +139,59 @@ of 17 -- meaningful headroom, especially since this run used 17 of a
 ~20-step default budget and was one unlucky step away from hitting the cap
 on a task that isn't even particularly complex.
 
-Not yet tested: a task that induces an actual wrong-path *guess* (e.g. a
-blind `github_read_file` on a plausible-but-wrong path used directly in an
-answer) -- this run never got that far off track because it defaulted to
-searching instead of guessing a read. Worth a second test run targeting
-that failure mode specifically before concluding the correctness half of
-the original hypothesis either way.
+### Test 2: targeting a wrong-path guess specifically
+
+Ran a second task deliberately targeting a non-obvious nested path
+(`connectors/delegate/designer/designer_tools.js`) to see if `delegate_agent`
+would guess a wrong flat path instead of checking the tree first:
+
+> Task: "In the allocsys/madmcp repo, explain exactly how the
+> delegate_designer tool enforces its read/write file scope: which file
+> extensions are allowed, whether there's a path-prefix restriction, how
+> the branch requirement (must not be the default branch) is checked, and
+> whether checks are live-verified against GitHub or trusted from the
+> argument. Name the exact file path(s) and function name(s) involved."
+
+Run id `5c5e34f6-974d-4b5e-bd86-9575478abcd8`, **6 steps taken, `github_get_file_tree` never called at all**:
+- Step 1: one `github_search_code` orientation call.
+- Step 2: **guessed** `connectors/frontend/designer_tool_functions.js` --
+  manually re-verified against `designer_delegate.js`'s real imports after
+  the run finished: this guess was **correct**, not a decoy/stale file as
+  suspected going in.
+- Step 3: **guessed** `connectors/delegate/designer/designer_tools.js` --
+  also correct on the first try, no tree lookup needed.
+- Steps 4-5: read `designer_delegate.js` and `config.js` directly (both
+  already-known-correct paths from step 2/3's content).
+- Step 6: forced-final synthesis, no tool call.
+
+**Final answer was correct**, including one subtlety verified by hand:
+`designer_delegate.js`'s own header comment claims the branch check lives
+in `designer_tools.js`, but the actual code shows it executing inside
+`designer_delegate.js`'s own `runDesignAgent` (a live `GET /repos/{owner}/{repo}`
+call compared against the `branch` argument). The model's answer matched
+the real code, not the stale comment -- a good sign about how it weighs a
+direct read over other information.
+
+**This complicates the discovery-step case.** Gemini pattern-matched the
+repo's naming convention (likely generalizing from `editor_tool_functions.js`'s
+analogous structure, visible in other tool descriptions it had access to)
+and got two structural guesses right on the first try, with zero tree/list
+calls, in 6 total steps -- more efficient than test 1's 17-step run, and
+more efficient than a mandatory-discovery version of *this* run would have
+been (a forced `get_file_tree` step here is a pure +1-step tax with no
+correctness upside, since the guesses were already right).
+
+**Net across both tests:** test 1 (no guessing, but wasteful --
+discovery-too-late) argues for a discovery step; test 2 (guessing, correct,
+efficient) argues against forcing one unconditionally. Neither test
+reproduced a genuine wrong-path hallucination yet -- both times Gemini
+either searched conservatively or guessed correctly. This is a small sample
+(n=2) and both tasks were read-only investigations in the same repo
+Gemini apparently has decent structural priors for; still worth more runs,
+ideally on a less internally-consistent/predictable repo, before deciding
+unconditional vs conditional (open question 1 below) -- but the current
+evidence leans toward **conditional**, not unconditional: an always-on
+discovery step would have made test 2 strictly worse for no benefit.
 
 ## Still open / not decided
 
