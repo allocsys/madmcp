@@ -38,11 +38,12 @@ Mem0/Context7 at this time):
 - **Step 1**: Gemini may only call a restricted tool subset:
   - `github_get_file_tree`
   - `github_list_directory`
-  - `github_search_code` (**not yet exposed to Gemini** — currently only
-    wired up for the calling model via `connectors/github/search.js`; needs
-    to be ported into `agent_delegate.js`'s `FUNCTIONS` array with its own
-    Gemini-facing declaration + `execute`, same pattern as the other
-    GitHub FUNCTIONS entries)
+  - `github_search_code` (**correction, 2026-09-25: already exposed to
+    Gemini** — a full `FUNCTIONS` entry with its own declaration + `execute`
+    exists in `agent_delegate.js` already, same `fallbackCodeSearch`
+    tarball-grep behavior as the calling-model version in
+    `connectors/github/search.js`. Missed on first read of the file — no
+    porting work needed here after all, just the step-1 gate itself.)
   - Explicitly **not** `github_read_file` — that's the whole point of the
     gate; `read_file` only becomes available from step 2 onward.
 - **Step 2+**: full `FUNCTIONS` list unchanged, as today.
