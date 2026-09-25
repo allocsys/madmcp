@@ -11,18 +11,24 @@ An initial automated review (via delegate_agent/Gemini) flagged several issues t
 `NOTION_INDEX_DATABASE_ID`, `NOTION_SYNC_PARENT_PAGE_ID`, and `GEMINI_NOTION_ROOT_PAGE_ID` hardcode fallback UUIDs. This is a real, demonstrated risk — `NOTION_SYNC_PARENT_PAGE_ID`'s default page already went 404 once in production (deleted/unshared 2026-08-01) and had to be manually patched.
 - [ ] Add monitoring/alerting for Notion 404s tied to these IDs so drift is caught automatically instead of by manual discovery.
 
-### 2. Path-based shared key (`/mcp/:key`) leaks into logs
+### 2. Eager module-level `McpServer` singleton doubles construction cost (server.js)
+`const mcpServer = createMcpServer();` runs unconditionally at module load, building a full `McpServer` with all 13 connectors registered. In production `handleMcp` never uses it — it always builds its own fresh per-request instance (required, since Vercel reuses warm containers across requests and `connect()` throws if called twice on one instance). So every cold start pays for constructing **two** full server instances: the per-request one that's actually used, plus this unused singleton. It exists for `test/mcp-integration.test.js` and anything else importing `{ mcpServer }` directly — not just tests, but its only real consumers are test/single-connect use, not the request path.
+- [ ] Stop building the singleton eagerly at import time. Export `createMcpServer` itself and have the test file call the factory directly, or gate the singleton behind `NODE_ENV === "test"`.
+- [ ] Verify nothing outside tests imports `{ mcpServer }` before removing/gating it.
+
+### 3. Path-based shared key (`/mcp/:key`) leaks into logs
 Necessary today because Claude.ai's custom connector UI doesn't yet support header-based auth for MCP servers, so it can't simply be removed. Still leaks the shared key into access/reverse-proxy logs and browser history.
 - [ ] Track Claude.ai's connector auth support and drop the path-based route once header auth is available.
 - [ ] In the meantime, consider treating the key as rotatable/short-lived to limit blast radius from log exposure.
 
 ## Findings from the initial pass that were REJECTED on verification
 - ~~`@babel/parser ^8.0.6`, `eslint ^10.11.0`, `zod ^4.6.5` are unreleased/nonexistent versions~~ — **false**. All three are real, current stable releases as of Sept 2026 (Babel 8.0.0: June 2026; ESLint 10.0.0: Feb 2026, v9 EOL Aug 2026; Zod 4.0.0: July 2025). No dependency action needed.
-- ~~Dual `createMcpServer()` instantiation is confusing duplication~~ — **intentional, documented**: per-request instances avoid a Vercel warm-container reconnect crash; the module-level singleton exists only for tests.
+- ~~Dual `createMcpServer()` instantiation is confusing duplication~~ — **partially rejected**: per-request instantiation is intentional and required (avoids a Vercel warm-container reconnect crash). But the module-level singleton being built *eagerly, unconditionally* is a real inefficiency — see verified finding #2 above.
 - ~~Global `req.rawBody` capture adds meaningful overhead~~ — **already justified in-code** as a cheap buffer reference needed for QStash signature verification.
 - ~~Missing rate limiting on `/api/agent-worker` etc. is a gap~~ — **deliberate**: these rely on QStash's own signature verification (fails closed), and a limiter sized for MCP bursts would break legitimate long step-chains.
 - ~~IP allowlist / proxy header risk~~ — **already handled**: `TRUST_PROXY_HOPS` is configurable and documented.
 
 ## Next steps
 - Decide on a monitoring approach for the Notion fallback IDs (e.g. alert on repeated 404s from Notion connector calls).
+- Fix the eager singleton construction in server.js (finding #2) — next session.
 - No dependency PRs needed — package.json is fine as-is.
