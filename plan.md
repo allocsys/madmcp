@@ -93,6 +93,59 @@ to search.
 actually guarantee no stray-repo search; defaulting only reduces the odds
 of it.
 
+## Live test evidence (2026-09-25)
+
+Ran a real `delegate_agent` call against this repo before building anything,
+to check whether the discovery-step problem is real:
+
+> Task: "In the allocsys/madmcp repo, explain how the delegate_agent tool
+> handles a Gemini API rate-limit (429) error mid-investigation: what
+> retry/backoff logic exists, where checkpoints get saved, and what the
+> caller is told. Cite the actual file(s) and function name(s) involved."
+
+Run id `c8a235f2-2d9f-4460-adf8-d36fca308b3e`, async mode, 17 steps taken.
+
+**Result: the final answer was correct** (matched a manual read: cascade in
+`connectors/gemini/client.js` -> `connectors/llm/router.js` ->
+`isTransientGeminiError`/catch in `agent_delegate.js`'s `runInvestigation`
+-> `saveCheckpoint`). So this run did **not** reproduce the
+"confidently-wrong-guess" failure mode the original problem statement was
+framed around.
+
+**What it did show: `github_get_file_tree` wasn't called until step 14 of
+17.** Steps 1-13 were spent on:
+- one reasonable orientation `github_search_code` call (step 1),
+- paginating `agent_delegate.js` out of order by char_offset (0 -> 120000
+  -> 150000 -> 90000 across steps 2/7/8/11) because it didn't know the
+  file's actual structure/length upfront,
+- 6 more `github_search_code` calls (steps 3,4,5,6,9,10,12,13) hunting for
+  symbols it suspected existed (`isTransientGeminiError`, `saveCheckpoint`,
+  `runInvestigation`, `providerChat`, `geminiClient`) -- several of which
+  were re-finding things already inside the file it had partially read,
+  and one (`geminiClient`) was a flat-out wrong guess, zero results.
+
+Step 14: `github_get_file_tree` finally called. Steps 15-16, immediately
+after: reads `connectors/llm/router.js` and `connectors/gemini/client.js`
+-- both correct paths, no guessing, 2 clean calls -- because it now had the
+repo's actual shape instead of hunting for it piecemeal via search.
+
+**Conclusion: the discovery-step idea is validated, but for a different
+reason than originally framed.** The problem this run demonstrates isn't
+hallucinated/wrong answers -- it's **step-budget waste from lack of
+upfront orientation**. 13 of 17 steps were spent groping before one
+`get_file_tree` call unlocked the 2 steps that actually solved the task. If
+discovery had come first, this run plausibly finishes in ~5-6 steps instead
+of 17 -- meaningful headroom, especially since this run used 17 of a
+~20-step default budget and was one unlucky step away from hitting the cap
+on a task that isn't even particularly complex.
+
+Not yet tested: a task that induces an actual wrong-path *guess* (e.g. a
+blind `github_read_file` on a plausible-but-wrong path used directly in an
+answer) -- this run never got that far off track because it defaulted to
+searching instead of guessing a read. Worth a second test run targeting
+that failure mode specifically before concluding the correctness half of
+the original hypothesis either way.
+
 ## Still open / not decided
 
 1. **Unconditional vs conditional**: should the discovery step always fire,
