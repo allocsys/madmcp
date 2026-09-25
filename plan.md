@@ -31,8 +31,17 @@ MCP's spec-recommended auth model is OAuth 2.1 with the server acting as its own
 - **Migration path:** run both auth methods side by side behind a flag (`AUTH_MODE=shared_key|oauth`) for one deploy cycle, confirm the Claude.ai connector reconnects cleanly via OAuth, then remove `requireMcpKey`, `MCP_SHARED_KEY`, and the `/mcp/:key` route entirely (closes finding #3's actual leak — no key ever appears in a URL or log line again).
 - **Library choice:** evaluate `@modelcontextprotocol/sdk`'s own auth helpers first (the SDK has been adding OAuth server scaffolding) before reaching for a general-purpose OAuth library, to keep the dependency surface aligned with the rest of the server.
 
-- [ ] Spike: confirm exactly which OAuth flow Claude.ai's connector dashboard expects (auth code + PKCE vs. something else) — check the dashboard's setup instructions for the specific redirect URI / discovery requirements it validates against.
-- [ ] Add `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, `/token` routes.
+- [x] **Spike resolved** (confirmed against Anthropic's connector docs, claude.com/docs/connectors/building/authentication, 2026-09-25):
+  - Flow is OAuth 2.1 authorization-code + PKCE (S256 mandatory), as assumed. For a single-tenant custom connector (one org, low/occasional connection volume), **DCR (`oauth_dcr`) is the right registration mechanism** — CIMD/Anthropic-held creds are only preferred over DCR for high-traffic *directory* listings, which doesn't apply here.
+  - Discovery must be explicit: unauthenticated requests to `/mcp` must return `401` with `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource"`. Claude does not honor a `WWW-Authenticate` header on a `200` — this exact handshake is required, not optional fallback probing.
+  - `/.well-known/oauth-protected-resource` (RFC 9728): `resource` field must exactly match the MCP server URL as entered in the Claude.ai connector settings; `authorization_servers` lists our issuer URL.
+  - `/.well-known/oauth-authorization-server` (RFC 8414) must include a `registration_endpoint` (DCR) and advertise `"code_challenge_methods_supported": ["S256"]`.
+  - Redirect URI to accept: `https://claude.ai/api/mcp/auth_callback` only — the `localhost`/`127.0.0.1` loopback variants in the spec are for Claude Code's native client, not the hosted web/mobile surface we're targeting.
+  - `POST /register` (DCR) parses `application/json`; `POST /token` must parse `application/x-www-form-urlencoded` — these differ, so the two routes can't share one body-parser assumption.
+  - Refresh tokens must rotate on each use (required for DCR's public-client registration) and be returned in the same response that invalidates the old one; token errors must use RFC 6749 codes (`invalid_grant`) for Claude's reactive-refresh-on-401 logic to recognize them.
+  - Claude times out discovery/registration/token calls at 10s and refresh calls at 30s — `/token` must not block on slow downstream (Neon) calls.
+  - Anthropic's requests originate from `160.79.104.0/21`, relevant only if anything in front of these routes does IP filtering.
+- [ ] Add `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, `/token` routes per the confirmed requirements above.
 - [ ] Add token persistence (Neon) + `requireMcpBearerToken` middleware.
 - [ ] Dual-run behind `AUTH_MODE` flag, cut over, then delete `requireMcpKey` / `MCP_SHARED_KEY` / `/mcp/:key`.
 - [ ] No manual key-rotation tooling — superseded by this migration.
