@@ -7,16 +7,16 @@ An initial automated review (via delegate_agent/Gemini) flagged several issues t
 
 ## Verified findings
 
-### 1. Notion ID fallback drift risk (config.js)
+### 1. Notion ID fallback drift risk (config.js) — ✅ FIXED (branch `fix/plan-md-findings`)
 `NOTION_INDEX_DATABASE_ID`, `NOTION_SYNC_PARENT_PAGE_ID`, and `GEMINI_NOTION_ROOT_PAGE_ID` hardcode fallback UUIDs. This is a real, demonstrated risk — `NOTION_SYNC_PARENT_PAGE_ID`'s default page already went 404 once in production (deleted/unshared 2026-08-01) and had to be manually patched.
-- [ ] Add monitoring/alerting for Notion 404s tied to these IDs so drift is caught automatically instead of by manual discovery.
+- [x] Add monitoring/alerting for Notion 404s tied to these IDs so drift is caught automatically instead of by manual discovery. `connectors/notion/client.js`'s `notionRequest` now calls `maybeAlertOnFallbackId404`, which emits a distinct `ALERT: Notion 404 on hardcoded fallback ID ...` line via `console.error` whenever a 404's request path contains one of the three IDs, before the normal error is thrown. Point a log-based alert (Vercel log drain, Render alert rule, etc.) at the `ALERT:` prefix. Purely observational — does not change what `notionRequest` returns/throws.
 
-### 2. Eager module-level `McpServer` singleton doubles construction cost (server.js)
+### 2. Eager module-level `McpServer` singleton doubles construction cost (server.js) — ✅ FIXED (branch `fix/plan-md-findings`)
 `const mcpServer = createMcpServer();` runs unconditionally at module load, building a full `McpServer` with all 13 connectors registered. In production `handleMcp` never uses it — it always builds its own fresh per-request instance (required, since Vercel reuses warm containers across requests and `connect()` throws if called twice on one instance). So every cold start pays for constructing **two** full server instances: the per-request one that's actually used, plus this unused singleton. It exists for `test/mcp-integration.test.js` and anything else importing `{ mcpServer }` directly — not just tests, but its only real consumers are test/single-connect use, not the request path.
-- [ ] Stop building the singleton eagerly at import time. Export `createMcpServer` itself and have the test file call the factory directly, or gate the singleton behind `NODE_ENV === "test"`.
-- [ ] Verify nothing outside tests imports `{ mcpServer }` before removing/gating it.
+- [x] Stop building the singleton eagerly at import time. `server.js` now exports `createMcpServer` itself (no module-level `mcpServer` singleton at all); `test/mcp-integration.test.js`'s `beforeAll` calls `createMcpServer()` directly.
+- [x] Verify nothing outside tests imports `{ mcpServer }` before removing/gating it. Confirmed via repo-wide search — `test/mcp-integration.test.js` was the only consumer.
 
-### 3. Path-based shared key (`/mcp/:key`) leaks into logs
+### 3. Path-based shared key (`/mcp/:key`) leaks into logs — still open, no in-app fix available
 Necessary today because Claude.ai's custom connector UI doesn't yet support header-based auth for MCP servers, so it can't simply be removed. Still leaks the shared key into access/reverse-proxy logs and browser history.
 - [ ] Track Claude.ai's connector auth support and drop the path-based route once header auth is available.
 - [ ] In the meantime, consider treating the key as rotatable/short-lived to limit blast radius from log exposure.
