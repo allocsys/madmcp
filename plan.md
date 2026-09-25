@@ -181,17 +181,72 @@ more efficient than a mandatory-discovery version of *this* run would have
 been (a forced `get_file_tree` step here is a pure +1-step tax with no
 correctness upside, since the guesses were already right).
 
-**Net across both tests:** test 1 (no guessing, but wasteful --
-discovery-too-late) argues for a discovery step; test 2 (guessing, correct,
-efficient) argues against forcing one unconditionally. Neither test
-reproduced a genuine wrong-path hallucination yet -- both times Gemini
-either searched conservatively or guessed correctly. This is a small sample
-(n=2) and both tasks were read-only investigations in the same repo
-Gemini apparently has decent structural priors for; still worth more runs,
-ideally on a less internally-consistent/predictable repo, before deciding
-unconditional vs conditional (open question 1 below) -- but the current
-evidence leans toward **conditional**, not unconditional: an always-on
-discovery step would have made test 2 strictly worse for no benefit.
+### Test 3: deliberately wrong path given in the task itself
+
+Ran a third task that flat-out told the agent a wrong file path (mirroring
+how a real user might misremember a path), to force the worst case rather
+than wait for it to happen organically:
+
+> Task: "In the allocsys/madmcp repo, look at connectors/mem0/notion_sync.js
+> -- explain exactly how the entity_id -> Notion page_id dedup logic works
+> in that file, including the function name that resolves an entity_id to
+> an existing page, and how it avoids creating duplicate pages on repeated
+> syncs."
+
+(Real file: `connectors/sync/mem0_notion.js` -- deliberately different
+directory AND deliberately different filename from what the task claimed.)
+
+Run id `f8d16846-557d-4612-b9d4-688a747a8e58`, **4 steps, correct answer, no fabrication**:
+- Step 1: trusted the task's claimed path, called `github_read_file` on it
+  directly -- got back a clean `Error: File not found in tree:
+  connectors/mem0/notion_sync.js`.
+- Step 2: **self-corrected immediately** -- one `github_search_code` call,
+  found the real file mentioned in `README.md`.
+- Step 3: read the real `connectors/sync/mem0_notion.js` directly.
+- Step 4: forced-final synthesis, correct answer (`findPageByEntityId`,
+  `notionEntityIdFor`, the create-vs-create race handling in `doCreatePage`
+  -- all grounded in the step-3 read, not fabricated).
+
+**This is the strongest evidence against the original premise.** The worry
+behind this whole plan was a blind wrong-path read producing a confidently
+fabricated answer. Here, even when *handed* a wrong path outright, the
+existing mechanism -- a failed `github_read_file` returns a plain error
+string as the tool result, which becomes Gemini's next input -- was enough
+to trigger a correct, cheap (1 extra step) recovery via search. No
+hallucination, no discovery step needed, no wasted budget beyond the one
+step it cost to learn the guess was wrong.
+
+## Revised conclusion after 3 live tests
+
+The original problem statement ("blind batching causes confidently wrong
+answers") is **not supported** by any of the three test runs:
+- Test 1: no wrong guess; the actual cost was late discovery wasting
+  step budget (13 of 17 steps), not a wrong answer.
+- Test 2: wrong-path risk didn't materialize -- Gemini guessed two
+  non-obvious nested paths correctly via naming-convention pattern-matching,
+  and a forced discovery step would have been pure overhead here.
+- Test 3: even a deliberately wrong path, handed to it directly in the
+  task, was caught and corrected in exactly one extra step via the
+  existing error-message-as-next-input mechanism -- no discovery step
+  required for this to work.
+
+So: the accuracy/hallucination justification for a mandatory discovery
+step looks weak on this evidence -- the system already self-corrects wrong
+reads cheaply via ordinary error feedback + search, without needing a
+structural gate. The step-budget-waste justification from test 1 is real,
+but a flat mandatory 1-step gate would have made test 2 strictly worse (+1
+step, no benefit) and would add nothing in test 3's case (which already
+recovers in 1 step on its own).
+
+**Recommendation: deprioritize the mandatory discovery-step gate as
+designed.** If step-budget waste on slow-to-orient tasks (test 1's failure
+mode) is worth addressing at all, a cheaper/more targeted fix is worth
+considering instead -- e.g. a preamble nudge to call `get_file_tree` early
+when a task doesn't already name a concrete symbol/file to search for,
+rather than a hard step-1 tool restriction that taxes every run regardless
+of whether it needs it. Not building the gate as originally scoped unless
+further evidence (a larger sample, or a genuinely unfamiliar/inconsistent
+repo where naming-convention guessing would actually fail) changes this.
 
 ## Still open / not decided
 
