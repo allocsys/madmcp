@@ -42,6 +42,20 @@ MCP's spec-recommended auth model is OAuth 2.1 with the server acting as its own
   - Claude times out discovery/registration/token calls at 10s and refresh calls at 30s — `/token` must not block on slow downstream (Neon) calls.
   - Anthropic's requests originate from `160.79.104.0/21`, relevant only if anything in front of these routes does IP filtering.
 - [ ] Add `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, `/token` routes per the confirmed requirements above.
+
+**Open decision: env vars vs. Neon for OAuth state**
+
+Env vars are immutable at runtime — a request handler can read `process.env.X` but can't write a new value back into it, so anything that must be written mid-flow (a used auth code, a rotated refresh token) can't live there. That rules out env as a full replacement for storage, but it does remove two of the three storage needs:
+- **Client registration**: single-tenant (only Claude.ai will ever call `/register`), so a fixed pre-generated `client_id`/secret in env works — `/register` just echoes it back. No DCR client table needed.
+- **Access tokens**: can be a signed JWT (secret in env) carrying `client_id` + expiry + scope; `/mcp` verifies signature + expiry, no lookup needed.
+
+What still wants a mutable store:
+- **Authorization codes** (~60s TTL, single-use): could be a signed stateless token instead, but then nothing prevents the same code being redeemed twice inside that window — acceptable risk for one trusted org, not zero risk.
+- **Refresh token rotation**: the docs require rotating (or sender-constraining) refresh tokens for public clients — the old token must actually become invalid when a new one issues. A pure signed token has no way to be invalidated early; this is the one piece that genuinely needs a write-able store.
+
+Two viable paths, not yet decided:
+1. Minimal Neon table for refresh tokens only (client registration + access tokens stay in env/JWT); accept single-use replay risk on auth codes, or store those too.
+2. Skip persistence entirely, accept the weaker rotation guarantee, and bound exposure with shorter-lived refresh tokens instead.
 - [ ] Add token persistence (Neon) + `requireMcpBearerToken` middleware.
 - [ ] Dual-run behind `AUTH_MODE` flag, cut over, then delete `requireMcpKey` / `MCP_SHARED_KEY` / `/mcp/:key`.
 - [ ] No manual key-rotation tooling — superseded by this migration.
