@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { GEMINI_API_KEYS, GEMINI_API, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, GEMINI_REQUEST_TIMEOUT_MS } from "../../config.js";
-import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds } from "../shared/cooldown.js";
+import { isModelCoolingDown, setModelCooldown, parseRetryDelaySeconds, isDailyQuotaError, dailyQuotaCooldownSeconds } from "../shared/cooldown.js";
 
 // 503s and network-transient errors (timeout/dropped connection) carry no
 // Retry-After header to parse, unlike a 429 (see parseRetryDelaySeconds), so
@@ -187,7 +187,19 @@ async function callGenerateContent(body, requestedModel) {
           // there still means it's exhausted for the window, and skipping
           // the call in that case would mean a resume walks straight back
           // into this same exhausted (model, key) pair and fails identically.
-          await setModelCooldown(model, parseRetryDelaySeconds(err.message), namespace);
+          //
+          // DAILY vs PER-MINUTE: Google's daily-quota 429s often carry a
+          // short "retry in Ns" hint (~30-60s) even though the real reset is
+          // hours away at midnight Pacific -- trusting that hint here would
+          // mean the very next call walks straight back into the same
+          // daily-exhausted (model, key) pair and repeats all day (see
+          // #189). isDailyQuotaError checks the quota-ID substrings Google
+          // uses to mark a daily bucket; only those get the long cooldown,
+          // per-minute 429s are unaffected.
+          const cooldownSeconds = isDailyQuotaError(err.message)
+            ? dailyQuotaCooldownSeconds()
+            : parseRetryDelaySeconds(err.message);
+          await setModelCooldown(model, cooldownSeconds, namespace);
         }
         if (isOverloaded || isNetworkTransient) {
           // A 503 or timeout/dropped-connection leaves the (model, key) pair

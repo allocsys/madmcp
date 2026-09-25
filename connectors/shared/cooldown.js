@@ -121,6 +121,50 @@ export function parseRetryDelaySeconds(message) {
   return match ? Math.ceil(parseFloat(match[1])) : null;
 }
 
+// True if a 429's message indicates a DAILY free-tier quota bucket (as
+// opposed to a per-minute one). Google's quota IDs embed this distinction
+// (e.g. "...free_tier_requests...PerDay..."), so we match on the substrings
+// observed in practice rather than trying to fully parse the quota ID.
+//
+// WHY THIS MATTERS: a daily-exhausted 429 often still carries a short
+// "retry in Ns" hint (Google's own generic 429 retry-delay convention),
+// even though the real reset is hours away at midnight Pacific -- Gemini's
+// quota window. Trusting that short hint via parseRetryDelaySeconds for a
+// daily bucket means the very next call walks straight back into the same
+// exhausted (model, key) pair and repeats all day. Callers should check
+// this BEFORE calling parseRetryDelaySeconds and use dailyQuotaCooldownSeconds
+// instead when it's true.
+export function isDailyQuotaError(message) {
+  const text = message || "";
+  return /free_tier_requests/i.test(text) || /PerDay/i.test(text);
+}
+
+// Seconds until the next Gemini free-tier quota reset (midnight Pacific,
+// America/Los_Angeles -- accounts for PST/PDT automatically via Intl), plus
+// a small buffer so we don't race the reset itself and re-hit the still-
+// exhausted quota a few seconds early. Used as the cooldown duration for a
+// confirmed daily-quota 429 (see isDailyQuotaError) instead of the short
+// parsed/default cooldown used for per-minute 429s.
+const RESET_BUFFER_SECONDS = 120;
+export function dailyQuotaCooldownSeconds(now = new Date()) {
+  // Get the current wall-clock time in America/Los_Angeles as constituent
+  // fields, then compute how far `now` is from the NEXT midnight in that
+  // zone. Using Intl instead of a fixed UTC offset so this stays correct
+  // across the PST/PDT transition without a manual DST table.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(now).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  const secondsSincePacificMidnight =
+    (parts.hour === "24" ? 0 : Number(parts.hour)) * 3600 +
+    Number(parts.minute) * 60 +
+    Number(parts.second);
+  const secondsUntilPacificMidnight = 24 * 3600 - secondsSincePacificMidnight;
+  return secondsUntilPacificMidnight + RESET_BUFFER_SECONDS;
+}
+
 // True if `model` is currently recorded as rate-limited. Fails open (returns
 // false) if Redis isn't configured or unreachable -- never throws.
 export async function isModelCoolingDown(model, namespace) {
