@@ -46,5 +46,5 @@ MCP's spec-recommended auth model is OAuth 2.1 with the server acting as its own
 
 ## Next steps
 - Findings #1 and #2 are fixed on branch `fix/plan-md-findings` (full 705-test suite + lint pass). Merge once reviewed.
-- Finding #3 has no in-app fix available — revisit once Claude.ai's connector UI supports header-based auth; consider MCP_SHARED_KEY rotation as an interim operational mitigation.
+- Finding #3: OAuth 2.1 migration is the agreed fix (see plan above) — no key-rotation tooling will be built. Next action is the first unchecked item: spike which OAuth flow Claude.ai's connector dashboard expects (auth code + PKCE vs. other), then implement the `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, `/token` routes and token persistence. Manual `MCP_SHARED_KEY` rotation remains the interim mitigation only until that ships.
 - No dependency PRs needed — package.json is fine as-is.
