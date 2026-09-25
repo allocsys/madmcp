@@ -2,7 +2,7 @@
 // connectors/notion/client.js
 // ---------------------------------------------------------------------------
 
-import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID, NOTION_MIN_REQUEST_INTERVAL_MS, NOTION_MAX_RETRIES, NOTION_RETRY_BASE_MS } from "../../config.js";
+import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID, GEMINI_NOTION_ROOT_PAGE_ID, NOTION_MIN_REQUEST_INTERVAL_MS, NOTION_MAX_RETRIES, NOTION_RETRY_BASE_MS } from "../../config.js";
 import { createThrottle, sleep, defaultRetryDelayMs } from "../shared/rate-limit.js";
 
 // --- Throttle + retry (fix #3, 2026-07-27) ----------------------------------
@@ -41,6 +41,22 @@ async function doNotionFetch(path, { method, body }) {
   return { res, data };
 }
 
+export const NOTION_FALLBACK_ID_ALERTS = {
+  NOTION_INDEX_DATABASE_ID: NOTION_INDEX_DATABASE_ID,
+  NOTION_SYNC_PARENT_PAGE_ID: NOTION_SYNC_PARENT_PAGE_ID,
+  GEMINI_NOTION_ROOT_PAGE_ID: GEMINI_NOTION_ROOT_PAGE_ID,
+};
+
+function maybeAlertOnFallbackId404(status, path) {
+  if (status !== 404) return;
+  for (const name of Object.keys(NOTION_FALLBACK_ID_ALERTS)) {
+    const id = NOTION_FALLBACK_ID_ALERTS[name];
+    if (id && path.includes(id)) {
+      console.error('ALERT: Notion 404 on hardcoded fallback ID ' + name + ' (' + id + '), path=' + path + '. The underlying Notion page/database may have been deleted, unshared, or moved -- see config.js for the recovery/override steps.');
+    }
+  }
+}
+
 export async function notionRequest(path, { method = "GET", body } = {}) {
   if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the madmcp server.");
 
@@ -49,6 +65,8 @@ export async function notionRequest(path, { method = "GET", body } = {}) {
     const { res, data } = await scheduleThrottled(() => doNotionFetch(path, { method, body }));
 
     if (res.ok) return data;
+
+    maybeAlertOnFallbackId404(res.status, path);
 
     if (isRetryableNotion(res) && attempt < NOTION_MAX_RETRIES) {
       await sleep(defaultRetryDelayMs(res, attempt, NOTION_RETRY_BASE_MS));
