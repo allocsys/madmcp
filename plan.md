@@ -29,6 +29,6 @@ Necessary today because Claude.ai's custom connector UI doesn't yet support head
 - ~~IP allowlist / proxy header risk~~ — **already handled**: `TRUST_PROXY_HOPS` is configurable and documented.
 
 ## Next steps
-- Decide on a monitoring approach for the Notion fallback IDs (e.g. alert on repeated 404s from Notion connector calls).
-- Fix the eager singleton construction in server.js (finding #2) — next session.
+- Findings #1 and #2 are fixed on branch `fix/plan-md-findings` (full 705-test suite + lint pass). Merge once reviewed.
+- Finding #3 has no in-app fix available — revisit once Claude.ai's connector UI supports header-based auth; consider MCP_SHARED_KEY rotation as an interim operational mitigation.
 - No dependency PRs needed — package.json is fine as-is.
