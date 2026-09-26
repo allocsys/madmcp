@@ -14,12 +14,13 @@ process.env.NODE_ENV = "test";
 import { describe, it, expect, beforeAll } from "vitest";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { mcpServer } from "../server.js";
+import { createMcpServer } from "../server.js";
 
 describe("MCP tool call — real Zod validation path (get_repo)", () => {
   let client;
 
   beforeAll(async () => {
+    const mcpServer = createMcpServer();
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: "mcp-integration-test", version: "1.0.0" });
     await mcpServer.connect(serverTransport);

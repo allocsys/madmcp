@@ -32,9 +32,10 @@ import * as repomap    from "./connectors/repomap/tools.js";
 // On Vercel, serverless functions reuse warm containers across separate requests/invocations.
 // Calling server.connect() a second time on a shared module-level singleton instance throws
 // "Already connected to a transport. Call close() before connecting to a new transport, or use a separate Protocol instance per connection."
-// Therefore, handleMcp calls createMcpServer() per request, while module-load instantiation
-// is retained for single-connect tests (e.g. test/mcp-integration.test.js).
-function createMcpServer() {
+// Therefore, handleMcp calls createMcpServer() per request. There is no module-level
+// singleton -- tests that need a single-connect instance (e.g. test/mcp-integration.test.js)
+// call createMcpServer() themselves.
+export function createMcpServer() {
   const server = new McpServer({
     name: "madmcp-server",
     version: "2.1.0",
@@ -56,9 +57,6 @@ function createMcpServer() {
 
   return server;
 }
-
-// Build the MCP server once at module load time for tests and single-connect use cases.
-const mcpServer = createMcpServer();
 
 // Adding a new connector:
 //   import * as myThing from "./connectors/myThing/tools.js";
@@ -246,6 +244,8 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
 
 // Default export so Vercel's Node runtime can invoke this as a serverless
 // function handler (Express apps are callable as (req, res) => {}). Named
-// exports are kept for tests/other tooling that import { app, mcpServer }.
+// export `app` is kept for tests/other tooling; `createMcpServer` is exported
+// above so tests (e.g. test/mcp-integration.test.js) can build their own
+// single-connect instance instead of relying on a module-level singleton.
 export default app;
-export { app, mcpServer };
+export { app };
