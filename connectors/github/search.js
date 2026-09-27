@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import zlib from "node:zlib";
-import { githubRequest, githubFetchTarball } from "./client.js";
+import { githubRequest, githubFetchTarball, fromBase64 } from "./client.js";
 
 // --- search_code fallback ---------------------------------------------------
 // GitHub's REST /search/code endpoint reliably indexes public repos, but has
@@ -216,6 +216,32 @@ export async function fallbackCodeSearch({ owner, repo, query, per_page, ref }) 
   };
 }
 
+// Bounds extra blob fetches spent resolving line numbers for real
+// GitHub-search-index results (see resolveMatchLine) -- each lookup costs
+// one extra throttled API call, so this is capped independently of per_page.
+const CODE_SEARCH_LINE_CAP = 20;
+
+// GitHub's /search/code response (with the text-match accept header) gives
+// a `fragment` of surrounding text plus a match offset *within that
+// fragment* -- not an absolute line number in the file. Resolve one by
+// fetching the file's blob (item.sha is already the matching blob's SHA, so
+// this is a single direct blob fetch, not a tree walk) and locating the
+// fragment's position in the full content.
+async function resolveMatchLine(item) {
+  const match = item.text_matches?.find((tm) => tm.property === "content") || item.text_matches?.[0];
+  if (!match?.fragment) return null;
+  try {
+    const blob = await githubRequest(`/repos/${item.repository.full_name}/git/blobs/${item.sha}`);
+    const content = fromBase64(blob.content.replace(/\n/g, ""));
+    const fragIdx = content.indexOf(match.fragment);
+    if (fragIdx === -1) return null;
+    const offsetInFragment = match.matches?.[0]?.indices?.[0] ?? 0;
+    return content.slice(0, fragIdx + offsetInFragment).split("\n").length;
+  } catch {
+    return null; // best-effort -- a failed lookup just omits the line number
+  }
+}
+
 export function register(server) {
   server.tool(
     "search_issues",
@@ -286,10 +312,20 @@ export function register(server) {
         };
       }
 
-      const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${per_page}`);
+      const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${per_page}`, {
+        accept: "application/vnd.github.v3.text-match+json",
+      });
       if (data.items?.length) {
-        const lines = data.items.map((item) => `📄 ${item.repository.full_name}/${item.path} (${item.html_url})`);
-        return { content: [{ type: "text", text: `Found ${data.total_count} result(s), showing ${data.items.length}:\n\n${lines.join("\n")}` }] };
+        const toEnrich  = data.items.slice(0, CODE_SEARCH_LINE_CAP);
+        const lineNums  = await Promise.all(toEnrich.map(resolveMatchLine));
+        const lines = data.items.map((item, i) => {
+          const line = i < CODE_SEARCH_LINE_CAP ? lineNums[i] : null;
+          return `📄 ${item.repository.full_name}/${item.path}${line ? `:${line}` : ""} (${item.html_url}${line ? `#L${line}` : ""})`;
+        });
+        const note = data.items.length > CODE_SEARCH_LINE_CAP
+          ? `\n\n(line numbers resolved for the first ${CODE_SEARCH_LINE_CAP} results only)`
+          : "";
+        return { content: [{ type: "text", text: `Found ${data.total_count} result(s), showing ${data.items.length}:\n\n${lines.join("\n")}${note}` }] };
       }
 
       if (scoped) {
