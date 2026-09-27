@@ -92,9 +92,6 @@ app.post('/notion/embed', async (req, res) => {
   }
 });
 
-// Trivial change (2026-09-27) to produce a real commit on main and confirm
-// Render's auto-deploy-on-push is working after the GitHub App repo-access
-// fix -- see plan-madmcp-notion-overhaul's repo-map-worker follow-up notes.
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 const port = process.env.PORT || 8080;
