@@ -15,16 +15,10 @@ import { NOTION_DEDUP_MAX_DISTANCE } from "../../config.js";
 
 // Looks up embeddings for a known set of page ids (e.g. a notion_find
 // keyword-search candidate list), for reranking. Returns a Map of
-// page_id -> { embedding: number[], updatedAt: Date }; ids with no row yet
-// (never embedded) are simply absent from the map -- callers decide how to
-// handle a page missing an embedding (fall back to keyword order, and/or
-// lazily trigger an embed for next time via embed_client.js's
-// triggerNotionEmbed). updatedAt is included alongside the embedding
-// (Finding #5.3, plan-madmcp-notion-overhaul on Notion) so a caller can
-// compare it against Notion's own last_edited_time and detect a page that
-// was edited directly in the Notion UI (out-of-band, no embed-on-write
-// trigger) since it was last embedded -- see notion_find's rerank wiring in
-// tools.js for where that comparison happens.
+// page_id -> { embedding: number[], updatedAt: Date }; ids with no row
+// are simply absent. updatedAt lets a caller detect a page edited directly
+// in Notion since it was last embedded (Finding #5.3) -- see tools.js's
+// notion_find rerank wiring.
 export async function getEmbeddingsForPageIds(pageIds) {
   const ids = [...new Set((pageIds || []).filter(Boolean))];
   if (!ids.length) return new Map();
@@ -41,14 +35,11 @@ export async function getEmbeddingsForPageIds(pageIds) {
 // creating a page with a fresh entity_id, to catch near-duplicates that
 // exact-match entity_id dedup can't see (see plan-madmcp-notion-overhaul on
 // Notion for the confirmed real examples this is meant to catch).
-// maxDistance default (NOTION_DEDUP_MAX_DISTANCE, itself defaulting to 0.15)
-// is deliberately conservative (i.e. requires high similarity) -- a false
-// positive here would incorrectly warn about two genuinely different pages,
-// whereas a false negative just falls back to today's behavior (no fuzzy
-// check at all). Was a hardcoded, never-tuned literal (Finding #5.2,
-// plan-madmcp-notion-overhaul on Notion) -- now reads from config so it can
-// be retuned via env var without a code change, and every hit's distance is
-// logged so real usage builds a distribution to calibrate against.
+// maxDistance defaults to NOTION_DEDUP_MAX_DISTANCE (0.15) -- deliberately
+// conservative, since a false positive wrongly flags two unrelated pages
+// while a false negative just skips the check. Was a hardcoded literal
+// (Finding #5.2) -- now configurable, and every hit's distance is logged
+// for calibration.
 export async function findSimilarPages(text, { maxDistance = NOTION_DEDUP_MAX_DISTANCE, limit = 3 } = {}) {
   if (!text) return [];
   const embedding = await embedQuery(text);
