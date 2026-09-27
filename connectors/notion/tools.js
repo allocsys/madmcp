@@ -720,7 +720,7 @@ export function register(server) {
           const changelogCount = allBlocks.length - blocks.length;
           const content = notionBlocksToText(blocks);
           const hasMore = blocksData.has_more
-            ? `\n\n⚠️ Page has more blocks — call notion_read again or use notion_get_page with cursor: "${blocksData.next_cursor}" to see the next page.`
+            ? `\n\n⚠️ Page has more blocks — call notion_read again with cursor: "${blocksData.next_cursor}" to see the next page.`
             : "";
           const subPages = blocks.filter((b) => b.type === "child_page").length;
           const subDatabases = blocks.filter((b) => b.type === "child_database").length;
@@ -756,7 +756,7 @@ export function register(server) {
               .map((b) => notionRichTextToString(b.paragraph?.rich_text || []))
               .filter(isChangelogEntryText);
             const historyHasMore = blocksData.has_more
-              ? `\n\n⚠️ More blocks exist beyond this page — scan further via notion_get_page_history if older entries are needed.`
+              ? `\n\n⚠️ More blocks exist beyond this page — call notion_read again with include_history: true and cursor: "${blocksData.next_cursor}" if older entries are needed.`
               : "";
             historyBlock = `\n\nHistory:\n` + (historyEntries.length ? historyEntries.join("\n") + historyHasMore : `No changelog entries found on this page (within the blocks scanned).${historyHasMore}`);
           }
@@ -794,7 +794,7 @@ export function register(server) {
                 const props = Object.entries(row.properties || {}).map(([name, val]) => `${name}: ${displayProp(val)}`).join(" | ");
                 return `- ${props}\n  (row id: ${row.id})`;
               });
-              const hasMoreRows = queryData.has_more ? `\n\n⚠️ More rows exist -- call notion_query_database with cursor: "${queryData.next_cursor}" to see the next page.` : "";
+              const hasMoreRows = queryData.has_more ? `\n\n⚠️ More rows exist -- call notion_read again with the same filter and cursor: "${queryData.next_cursor}" to see the next page.` : "";
               text += `\n\nRows:\n` + rowsLines.join("\n") + hasMoreRows;
             }
           }
