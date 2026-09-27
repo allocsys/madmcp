@@ -169,10 +169,10 @@ export function register(server) {
       path:    z.string().describe("File path within the repo"),
       content: z.string().describe("Full content of the new file (plain text)"),
       message: z.string().describe("Commit message"),
-      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to commit to"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, content, message, branch }) => {
-      const query = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+      const query = `?ref=${encodeURIComponent(branch)}`;
       try {
         await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         throw new Error(`${path} already exists in ${owner}/${repo}${branch ? `@${branch}` : ""}. Use edit_file to replace or patch it.`);
@@ -204,7 +204,7 @@ export function register(server) {
         new_str: z.string().describe("String to replace it with"),
       })).min(1).optional().describe("List of str_replace operations to apply sequentially. Mutually exclusive with `content`. The file must already exist."),
       message: z.string().describe("Commit message"),
-      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to commit to"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, content, replacements, message, branch }) => {
       if ((content === undefined) === (replacements === undefined)) {
@@ -230,7 +230,7 @@ export function register(server) {
           return { content: [{ type: "text", text: "No changes — all replacements produced identical content." }] };
         }
 
-        const query    = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+        const query    = `?ref=${encodeURIComponent(branch)}`;
         const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         const result   = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
           method: "PUT",
@@ -284,7 +284,7 @@ export function register(server) {
 
       let sha;
       try {
-        const query    = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+        const query    = `?ref=${encodeURIComponent(branch)}`;
         const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         sha = existing.sha;
       } catch { /* new file */ }
@@ -305,10 +305,10 @@ export function register(server) {
       repo:    z.string().describe("Repository name"),
       path:    z.string().describe("File path within the repo"),
       message: z.string().describe("Commit message"),
-      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to commit to"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, message, branch }) => {
-      const query    = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+      const query    = `?ref=${encodeURIComponent(branch)}`;
       const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
       await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
         method: "DELETE",
@@ -328,14 +328,12 @@ export function register(server) {
       old_path: z.string().describe("Current file path"),
       new_path: z.string().describe("New file path / destination"),
       message:  z.string().optional().describe("Commit message (default: 'rename <old> to <new>')"),
-      branch:   z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:   z.string().describe("Branch to commit to"),
     },
     async ({ owner, repo, old_path, new_path, message, branch }) => {
       const commitMessage = message || `rename ${old_path} to ${new_path}`;
       const content      = await readFileViaBlob(owner, repo, old_path, branch);
-      const repoInfo     = await githubRequest(`/repos/${owner}/${repo}`);
-      const targetBranch = branch || repoInfo.default_branch;
-      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(targetBranch)}`);
+      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
       const newBlob = await githubRequest(`/repos/${owner}/${repo}/git/blobs`, {
         method: "POST",
@@ -355,7 +353,7 @@ export function register(server) {
         method: "POST",
         body: { message: commitMessage, tree: newTree.sha, parents: [refData.object.sha] },
       });
-      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(targetBranch)}`, {
+      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
@@ -370,7 +368,7 @@ export function register(server) {
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
-      branch:  z.string().optional().describe("Branch to push to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to push to"),
       message: z.string().describe("Commit message"),
       files:   z.array(z.object({
         path:    z.string().describe("File path within the repo"),
@@ -378,9 +376,7 @@ export function register(server) {
       })).min(1).describe("Files to include in this commit"),
     },
     async ({ owner = DEFAULT_OWNER, repo, branch, message, files }) => {
-      const repoInfo     = await githubRequest(`/repos/${owner}/${repo}`);
-      const targetBranch = branch || repoInfo.default_branch;
-      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(targetBranch)}`);
+      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
       const blobs        = await Promise.all(files.map((f) =>
         githubRequest(`/repos/${owner}/${repo}/git/blobs`, {
@@ -399,11 +395,11 @@ export function register(server) {
         method: "POST",
         body: { message, tree: newTree.sha, parents: [refData.object.sha] },
       });
-      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(targetBranch)}`, {
+      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
-      return { content: [{ type: "text", text: `Pushed ${files.length} file(s) to ${owner}/${repo}@${targetBranch} (commit ${newCommit.sha.slice(0, 7)}).` }] };
+      return { content: [{ type: "text", text: `Pushed ${files.length} file(s) to ${owner}/${repo}@${branch} (commit ${newCommit.sha.slice(0, 7)}).` }] };
     }
   );
 }
