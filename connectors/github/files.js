@@ -100,9 +100,14 @@ export function register(server) {
       ref:         z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
       char_offset: z.number().optional().describe("Character offset to start reading from. Omit for default behavior (full file, or first chunk of a large one)."),
       char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000 when char_offset/char_limit is used, max: 100000). Ignored if both char_offset and char_limit are omitted."),
+      line_start:  z.number().optional().describe("1-indexed line number to start reading from -- pass this straight from a `map` result's \"L{start}-{end}\" or a `search_code` result's \":{line}\" instead of computing a char_offset. Takes priority over char_offset/char_limit if both are given."),
+      line_end:    z.number().optional().describe("1-indexed line number to stop at, inclusive (default: line_start + 200). Only used when line_start is given."),
     },
-    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit }) => {
+    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit, line_start, line_end }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
+      if (line_start !== undefined) {
+        return sliceFileContentByLine(content, path, { line_start, line_end });
+      }
       return sliceFileContent(content, path, { char_offset, char_limit });
     }
   );
