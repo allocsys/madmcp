@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { doCreatePage } from "../connectors/notion/tools.js";
+import { doCreatePage, register } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
@@ -41,6 +41,19 @@ vi.mock("../connectors/repomap/embed.js", () => ({
 }));
 
 const INDEX_QUERY_RE = /^\/databases\/.*\/query$/;
+
+// Minimal fake MCP server: just captures the handler function for the
+// registered tool name so tests can call it directly -- same pattern as
+// test/repomap-tools.test.js's makeFakeServer().
+function makeFakeServer() {
+  const tools = {};
+  return {
+    tool: (name, _description, _schema, handler) => {
+      tools[name] = handler;
+    },
+    tools,
+  };
+}
 
 describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
   beforeEach(() => {
@@ -141,6 +154,120 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       });
 
       expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-99", content: "New tracked page\nbody content" });
+    });
+  });
+
+  describe("notion_find search-mode semantic rerank", () => {
+    let notionFind;
+
+    beforeEach(() => {
+      const server = makeFakeServer();
+      register(server);
+      notionFind = server.tools["notion_find"];
+    });
+
+    it("reorders page results by ascending cosine distance to the query when embeddings exist for all page candidates", async () => {
+      const { getEmbeddingsForPageIds, cosineDistance } = await import("../connectors/notion/embed_queries.js");
+      const { embedQuery } = await import("../connectors/repomap/embed.js");
+      const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
+
+      embedQuery.mockResolvedValueOnce([1, 0]);
+      getEmbeddingsForPageIds.mockResolvedValueOnce(
+        new Map([
+          ["far-page", [0, 1]],
+          ["close-page", [1, 0]],
+        ])
+      );
+      // Real cosineDistance is mocked out here -- drive it with simple,
+      // predictable values keyed to which embedding was passed in, since the
+      // mock has no access to the real vector math.
+      cosineDistance.mockImplementation((_q, emb) => (emb[0] === 1 ? 0 : 1));
+
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        if (path === "/search" && (opts.method || "GET") === "POST") {
+          return {
+            results: [
+              { object: "page", id: "far-page", url: "https://notion.so/far-page", properties: { title: { type: "title", title: [{ plain_text: "Far Page" }] } } },
+              { object: "page", id: "close-page", url: "https://notion.so/close-page", properties: { title: { type: "title", title: [{ plain_text: "Close Page" }] } } },
+            ],
+          };
+        }
+        throw new Error(`Unexpected notionRequest call: ${opts.method || "GET"} ${path}`);
+      });
+
+      const result = await notionFind({ mode: "search", query: "close match" });
+
+      const text = result.content[0].text;
+      // "Close Page" (distance 0) should be listed before "Far Page" (distance 1).
+      expect(text.indexOf("Close Page")).toBeLessThan(text.indexOf("Far Page"));
+      expect(triggerNotionEmbed).not.toHaveBeenCalled(); // both candidates already had embeddings
+    });
+
+    it("falls back to Notion's original keyword order when no candidates have embeddings yet, and lazily triggers embedding for each", async () => {
+      const { getEmbeddingsForPageIds } = await import("../connectors/notion/embed_queries.js");
+      const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
+      getEmbeddingsForPageIds.mockResolvedValueOnce(new Map()); // nothing embedded yet
+
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        if (path === "/search" && (opts.method || "GET") === "POST") {
+          return {
+            results: [
+              { object: "page", id: "page-a", url: "https://notion.so/page-a", properties: { title: { type: "title", title: [{ plain_text: "Page A" }] } } },
+              { object: "page", id: "page-b", url: "https://notion.so/page-b", properties: { title: { type: "title", title: [{ plain_text: "Page B" }] } } },
+            ],
+          };
+        }
+        throw new Error(`Unexpected notionRequest call: ${opts.method || "GET"} ${path}`);
+      });
+
+      const result = await notionFind({ mode: "search", query: "anything" });
+
+      const text = result.content[0].text;
+      // Keyword order preserved (Page A before Page B), since neither had an embedding to rerank by.
+      expect(text.indexOf("Page A")).toBeLessThan(text.indexOf("Page B"));
+      expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-a", content: "Page A" });
+      expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-b", content: "Page B" });
+    });
+
+    it("falls back to Notion's original order (rather than erroring) when the rerank step throws", async () => {
+      const { getEmbeddingsForPageIds } = await import("../connectors/notion/embed_queries.js");
+      getEmbeddingsForPageIds.mockRejectedValueOnce(new Error("Neon unreachable"));
+
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        if (path === "/search" && (opts.method || "GET") === "POST") {
+          return {
+            results: [
+              { object: "page", id: "page-a", url: "https://notion.so/page-a", properties: { title: { type: "title", title: [{ plain_text: "Page A" }] } } },
+            ],
+          };
+        }
+        throw new Error(`Unexpected notionRequest call: ${opts.method || "GET"} ${path}`);
+      });
+
+      const result = await notionFind({ mode: "search", query: "anything" });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toContain("Page A");
+    });
+
+    it("does not attempt to rerank for mode: recent (no query, not a semantic-search request)", async () => {
+      const { getEmbeddingsForPageIds } = await import("../connectors/notion/embed_queries.js");
+
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        if (path === "/search" && (opts.method || "GET") === "POST") {
+          return {
+            results: [
+              { object: "page", id: "page-a", url: "https://notion.so/page-a", last_edited_time: "2026-09-27T00:00:00.000Z", properties: { title: { type: "title", title: [{ plain_text: "Page A" }] } } },
+            ],
+          };
+        }
+        throw new Error(`Unexpected notionRequest call: ${opts.method || "GET"} ${path}`);
+      });
+
+      const result = await notionFind({ mode: "recent" });
+
+      expect(result.content[0].text).toContain("Page A");
+      expect(getEmbeddingsForPageIds).not.toHaveBeenCalled();
     });
   });
 });
