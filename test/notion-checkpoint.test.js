@@ -45,14 +45,22 @@ import { buildCheckpointStartText, buildCheckpointEndText } from "../connectors/
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
   const actual = await importOriginal();
   const mockedNotionRequest = vi.fn();
+  // MUTATE actual.clientInternals in place -- do NOT build a new object and
+  // return it as a replacement export. findPageByEntityId (defined in
+  // client.js) references the module-local `clientInternals` binding
+  // directly; that binding always resolves to the ORIGINAL object created
+  // when the real client.js loaded, regardless of what this factory returns
+  // as the mocked module's own `clientInternals` export -- returning a new
+  // object here would be invisible to findPageByEntityId, the exact same
+  // intra-module-reference trap this file's header comment describes, one
+  // layer deeper. Mutating the real object's notionRequest property works
+  // because findPageByEntityId does a property lookup (clientInternals.
+  // notionRequest) at call time, and property lookups see mutations to the
+  // object they already hold a reference to.
+  actual.clientInternals.notionRequest = mockedNotionRequest;
   return {
     ...actual,
     notionRequest: mockedNotionRequest,
-    // Keep clientInternals.notionRequest pointing at the SAME mock fn as the
-    // notionRequest export above -- see this file's header comment. Without
-    // this, findPageByEntityId (defined in client.js) would call the real,
-    // unmocked notionRequest via clientInternals and hit the live Notion API.
-    clientInternals: { ...actual.clientInternals, notionRequest: mockedNotionRequest },
   };
 });
 
