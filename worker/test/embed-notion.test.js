@@ -5,56 +5,76 @@
 //
 // Uses node:test's built-in module mocking (--experimental-test-module-mocks,
 // enabled in package.json's test script) to stub db/client.js's `query` and
-// embed/gemini.js's `embedTexts`, same pattern as worker/test/query.test.js,
-// so this runs without a real Postgres connection or a real Gemini call.
+// embed/gemini.js's `embedTexts`.
+//
+// IMPORTANT mocking note (learned the hard way -- see query.test.js for the
+// single-test-per-file case that never hit this): mock.module() only
+// affects a specifier's resolution the FIRST time it's imported -- once
+// '../src/notion/embed_notion.js' has been dynamically imported once, its
+// live bindings to '../src/db/client.js'/'../src/embed/gemini.js' are fixed
+// for the rest of the process; calling mock.module() again in a later test
+// does NOT rebind them. So mock.module() is called exactly ONCE here (in a
+// top-level `before` hook, prior to embedNotionPage's first import), with
+// mock.fn() instances captured once -- each individual test then
+// reconfigures those SAME mock.fn instances via `.mock.mockImplementation`
+// rather than replacing them, which is what actually varies behavior
+// per-test under this constraint.
 
-import { test, describe, mock, beforeEach } from 'node:test';
+import { test, describe, mock, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 describe('embedNotionPage', () => {
+  let embedNotionPage, hashContent;
+  let queryMock, embedTextsMock;
+
+  before(async () => {
+    queryMock = mock.fn();
+    embedTextsMock = mock.fn();
+    mock.module('../src/db/client.js', { namedExports: { query: queryMock } });
+    mock.module('../src/embed/gemini.js', { namedExports: { embedTexts: embedTextsMock } });
+    ({ embedNotionPage } = await import('../src/notion/embed_notion.js'));
+    ({ hashContent } = await import('../src/scan/hash.js'));
+  });
+
   beforeEach(() => {
-    mock.reset();
+    queryMock.mock.resetCalls();
+    embedTextsMock.mock.resetCalls();
+    queryMock.mock.mockImplementation(async () => {
+      throw new Error('queryMock has no implementation configured for this test');
+    });
+    embedTextsMock.mock.mockImplementation(async () => {
+      throw new Error('embedTextsMock has no implementation configured for this test');
+    });
   });
 
   test('throws if pageId is missing', async () => {
-    mock.module('../src/db/client.js', { namedExports: { query: mock.fn() } });
-    mock.module('../src/embed/gemini.js', { namedExports: { embedTexts: mock.fn() } });
-    const { embedNotionPage } = await import('../src/notion/embed_notion.js');
-
     await assert.rejects(
       async () => await embedNotionPage({ pageId: undefined, content: 'hello' }),
       /pageId is required/
     );
+    // Should fail before ever touching the DB or Gemini.
+    assert.equal(queryMock.mock.calls.length, 0);
   });
 
   test('skips the Gemini call and the write when content_hash is unchanged', async () => {
-    const { hashContent } = await import('../src/scan/hash.js');
     const expectedHash = hashContent('same content');
-
-    const queryMock = mock.fn(async (sql) => {
+    queryMock.mock.mockImplementation(async (sql) => {
       if (sql.includes('SELECT content_hash FROM notion_page_embeddings')) {
         return { rows: [{ content_hash: expectedHash }] };
       }
       throw new Error('unexpected query: ' + sql);
     });
-    const embedTextsMock = mock.fn(async () => {
-      throw new Error('embedTexts should not be called on a no-op update');
-    });
-
-    mock.module('../src/db/client.js', { namedExports: { query: queryMock } });
-    mock.module('../src/embed/gemini.js', { namedExports: { embedTexts: embedTextsMock } });
-    const { embedNotionPage } = await import('../src/notion/embed_notion.js');
 
     const result = await embedNotionPage({ pageId: 'page-1', content: 'same content' });
 
     assert.deepEqual(result, { skipped: true, contentHash: expectedHash });
     assert.equal(embedTextsMock.mock.calls.length, 0);
+    assert.equal(queryMock.mock.calls.length, 1); // only the SELECT, no INSERT
   });
 
   test('embeds and upserts when content_hash differs (or the page has never been embedded)', async () => {
-    const { hashContent } = await import('../src/scan/hash.js');
     const calls = [];
-    const queryMock = mock.fn(async (sql, params) => {
+    queryMock.mock.mockImplementation(async (sql, params) => {
       calls.push({ sql, params });
       if (sql.includes('SELECT content_hash FROM notion_page_embeddings')) {
         return { rows: [] }; // never embedded before
@@ -64,14 +84,10 @@ describe('embedNotionPage', () => {
       }
       throw new Error('unexpected query: ' + sql);
     });
-    const embedTextsMock = mock.fn(async (texts) => {
+    embedTextsMock.mock.mockImplementation(async (texts) => {
       assert.deepEqual(texts, ['new content']);
       return [[0.1, 0.2, 0.3]];
     });
-
-    mock.module('../src/db/client.js', { namedExports: { query: queryMock } });
-    mock.module('../src/embed/gemini.js', { namedExports: { embedTexts: embedTextsMock } });
-    const { embedNotionPage } = await import('../src/notion/embed_notion.js');
 
     const result = await embedNotionPage({ pageId: 'page-2', content: 'new content' });
 
@@ -89,19 +105,15 @@ describe('embedNotionPage', () => {
   });
 
   test('treats missing content as an empty string rather than throwing', async () => {
-    const queryMock = mock.fn(async (sql) => {
+    queryMock.mock.mockImplementation(async (sql) => {
       if (sql.includes('SELECT content_hash')) return { rows: [] };
       if (sql.includes('INSERT INTO notion_page_embeddings')) return { rows: [] };
       throw new Error('unexpected query: ' + sql);
     });
-    const embedTextsMock = mock.fn(async (texts) => {
+    embedTextsMock.mock.mockImplementation(async (texts) => {
       assert.deepEqual(texts, ['']);
       return [[0, 0]];
     });
-
-    mock.module('../src/db/client.js', { namedExports: { query: queryMock } });
-    mock.module('../src/embed/gemini.js', { namedExports: { embedTexts: embedTextsMock } });
-    const { embedNotionPage } = await import('../src/notion/embed_notion.js');
 
     const result = await embedNotionPage({ pageId: 'page-3', content: undefined });
     assert.equal(result.skipped, false);
