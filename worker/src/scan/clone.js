@@ -27,7 +27,7 @@ export async function cloneRepo({ owner, repo, ref, cloneToken }) {
       throw new Error(
         `Could not clone ${owner}/${repo}: not found, or not public. ` +
         `If this repo is private, pass a cloneToken (madmcp mints one via ` +
-        `get_repo_clone_token). Otherwise check the owner/repo spelling.`,
+        `gh_token). Otherwise check the owner/repo spelling.`,
         { cause: err }
       );
     }
