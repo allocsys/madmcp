@@ -3,7 +3,7 @@
 // repo_map worker (worker/, deployed separately on Railway) over HTTP,
 // auth'd with a shared-secret bearer token (worker/src/auth.js). Scanning a
 // repo requires a clone token minted via GitHub App auth (same mechanism as
-// the get_repo_clone_token MCP tool), since the worker needs to clone the
+// the gh_token MCP tool), since the worker needs to clone the
 // target repo itself.
 //
 // The query/read path (search/graph) queries Neon directly (queries.js) --
