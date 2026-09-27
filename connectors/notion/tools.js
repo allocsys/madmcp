@@ -680,16 +680,37 @@ export function register(server) {
             orderedResults = reranked.map((c) => c.result);
             // Lazy backfill (2026-09-27 decision): a page touched by a search
             // but still unscored (no embedding on file yet) gets queued for
-            // embedding now (from its title -- full content is embedded
-            // properly next time it's created/updated), so a future search
-            // over it can be reranked. Intentionally NOT awaited here, unlike
-            // the create/update embed calls -- this backfill is for FUTURE
-            // searches, not consumed by this reply, so awaiting it would only
-            // add latency (one Gemini+worker round trip per un-embedded
-            // result) without changing this call's own results.
+            // embedding now, so a future search over it can be reranked.
+            // Fix (Finding #5.1, plan-madmcp-notion-overhaul on Notion): this
+            // used to embed just the page's title (via triggerNotionEmbed
+            // directly), which left a search-only-touched page's embedding
+            // permanently low-quality until someone happened to notion_update
+            // it. Reuses triggerEmbedForPage (the same full title+content
+            // re-read doUpdatePage already uses) so a lazy backfill produces
+            // the same embedding quality as the create/update path. Still
+            // intentionally NOT awaited, same reasoning as before -- this
+            // backfill is for FUTURE searches, not consumed by this reply, so
+            // awaiting it would only add latency (a Notion re-read plus one
+            // Gemini+worker round trip per un-embedded/stale result) without
+            // changing this call's own results.
+            //
+            // Fix (Finding #5.3): a page edited directly in the Notion UI
+            // never runs through doCreatePage/doUpdatePage, so its embedding
+            // has no other way to learn the content changed. getEmbeddingsForPageIds
+            // (via rerankByQuery) now also returns each embedding's stored
+            // updatedAt -- compare it against this search result's own
+            // last_edited_time (Notion always includes this) and, if Notion's
+            // copy is newer, treat it the same as an unscored candidate and
+            // queue a re-embed.
             for (const c of reranked) {
               if (c.pageId && c.distance === undefined) {
-                triggerNotionEmbed({ page_id: c.pageId, content: notionPageTitle(c.result) });
+                triggerEmbedForPage(c.pageId);
+              } else if (c.pageId && c.updatedAt && c.result?.last_edited_time) {
+                const embeddedAt = new Date(c.updatedAt).getTime();
+                const editedAt = new Date(c.result.last_edited_time).getTime();
+                if (Number.isFinite(embeddedAt) && Number.isFinite(editedAt) && editedAt > embeddedAt) {
+                  triggerEmbedForPage(c.pageId);
+                }
               }
             }
           }
