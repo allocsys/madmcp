@@ -44,7 +44,7 @@ async function workerRequest(path, { method = "GET", body } = {}) {
 }
 
 // Kicks off (or enqueues) a scan for a repo. Mints a fresh single-repo clone
-// token so the worker can clone it, same credential the get_repo_clone_token
+// token so the worker can clone it, same credential the gh_token
 // MCP tool hands to the calling model directly -- here it goes straight to
 // the worker over the server-to-server request instead, so it's never
 // exposed to the model/user. Returns { jobId, status } immediately; the scan
