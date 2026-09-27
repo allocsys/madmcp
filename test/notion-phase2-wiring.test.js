@@ -62,7 +62,7 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
 
   describe("doCreatePage fuzzy dedup", () => {
     it("surfaces findSimilarPages results as possibleDuplicates on a successful, non-blocking basis", async () => {
-      const { findSimilarPages } = await import("../connectors/notion/embed_client.js").then(() => import("../connectors/notion/embed_queries.js"));
+      const { findSimilarPages } = await import("../connectors/notion/embed_queries.js");
       findSimilarPages.mockResolvedValueOnce([{ pageId: "dup-1", distance: 0.05 }]);
 
       client.notionRequest.mockImplementation(async (path, opts = {}) => {
