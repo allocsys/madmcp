@@ -876,7 +876,20 @@ export function register(server) {
           const v = r.value;
           if (v.skipped) return `\u23ed [${i}] "${label}" \u2014 skipped, entity_id "${v.entity_id}" already exists (id: ${v.existingId}, title: "${v.existingTitle}").`;
           const idxNote = v.indexError ? ` \u26a0\ufe0f index record failed: ${v.indexError}` : "";
-          return `\u2713 [${i}] "${label}" \u2014 id: ${v.id}, url: ${v.url}${idxNote}`;
+          // Phase 2 fix (2026-09-27, post-merge finding #1): possibleDuplicates
+          // and autoRelations were computed by doCreatePage and returned, but
+          // silently dropped here instead of ever reaching the caller -- the
+          // whole point of the fuzzy-dedup check is defeated if its result
+          // never surfaces. Both are best-effort/non-blocking signals, so
+          // they're appended as extra info lines rather than changing whether
+          // this line counts as a success.
+          const dupNote = v.possibleDuplicates?.length
+            ? `\n    \u26a0\ufe0f possible duplicate(s) (Phase 2 fuzzy dedup -- review before keeping both): ${v.possibleDuplicates.map((d) => `${d.pageId} (distance ${d.distance.toFixed(3)})`).join(", ")}`
+            : "";
+          const relNote = v.autoRelations?.length
+            ? `\n    \ud83d\udd17 auto-linked to ${v.autoRelations.length} related page(s): ${v.autoRelations.map((rel) => `${rel.to_entity_id} (${rel.relation})`).join(", ")}`
+            : "";
+          return `\u2713 [${i}] "${label}" \u2014 id: ${v.id}, url: ${v.url}${idxNote}${dupNote}${relNote}`;
         });
         const created = results.filter((r) => r.status === "fulfilled" && !r.value.skipped).length;
         return { content: [{ type: "text", text: `${created}/${items.length} page(s) created.\n\n${lines.join("\n")}` }] };
