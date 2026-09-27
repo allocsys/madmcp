@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import zlib from "node:zlib";
-import { githubRequest, githubGraphQL, githubFetchTarball, fromBase64 } from "./client.js";
+import { githubRequest, githubGraphQL, githubFetchTarball } from "./client.js";
 
 // --- search_code fallback ---------------------------------------------------
 // GitHub's REST /search/code endpoint reliably indexes public repos, but has
