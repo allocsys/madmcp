@@ -559,13 +559,10 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
 // -- switched off the mem0 sync markers, which wrote confusing/inaccurate
 // "SYNCED FROM MEM0" text on every checkpoint save even though this tool has
 // nothing to do with mem0. See client.js's checkpoint marker convention.
-// REDEPLOY TRIGGER: madmcp.vercel.app's alias got stuck on 554a108 (the
-// client.js-only commit) instead of advancing to this commit -- this no-op
-// comment forces a new deployment so the alias promotion re-runs.)
 // ---------------------------------------------------------------------------
-export async function doCheckpoint({ action, notes }) {
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest" }) {
   if (action === "save") {
-    const existing = await findPageByEntityId("checkpoint-latest");
+    const existing = await findPageByEntityId(key);
     const notesLines = (notes || "").split("\n");
     const updated_at = new Date().toISOString();
 
@@ -579,7 +576,7 @@ export async function doCheckpoint({ action, notes }) {
         parent_id: NOTION_SYNC_PARENT_PAGE_ID,
         parent_type: "page",
         title: "Session Checkpoint",
-        entity_id: "checkpoint-latest",
+        entity_id: key,
         content: contentText,
       });
       return `Checkpoint saved successfully.\nURL: ${created.url}`;
@@ -588,7 +585,7 @@ export async function doCheckpoint({ action, notes }) {
     await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
     return `Checkpoint saved successfully.\nURL: ${existing.url}`;
   } else if (action === "load") {
-    const existing = await findPageByEntityId("checkpoint-latest");
+    const existing = await findPageByEntityId(key);
     if (!existing) {
       return "No checkpoint found.";
     }
