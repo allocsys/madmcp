@@ -176,9 +176,7 @@ describe("connectors/notion/embed_queries.js", () => {
 
       const result = await rerankByQuery("some query", candidates);
 
-      // "close" (distance 0) should sort before "far" (distance 1); the
-      // never-embedded candidate falls back to the end, keeping its relative
-      // position among other unscored candidates (only one here).
+      // "close" (distance 0) sorts before "far" (distance 1); unscored falls to the end.
       expect(result.map((c) => c.pageId)).toEqual(["close", "far", "never-embedded"]);
       expect(result[0].distance).toBeCloseTo(0, 10);
       expect(result[1].distance).toBeCloseTo(1, 10);
