@@ -50,7 +50,7 @@ describe("connectors/github/clone_token.js", () => {
   it("mints via getCloneToken using the explicit owner and repo", async () => {
     getCloneToken.mockResolvedValueOnce({ token: "ghs_abc123", expiresAt: "2026-08-01T00:00:00Z" });
 
-    await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     expect(getCloneToken).toHaveBeenCalledWith("someorg", "widgets");
   });
@@ -58,7 +58,7 @@ describe("connectors/github/clone_token.js", () => {
   it("falls back to DEFAULT_OWNER when owner is omitted", async () => {
     getCloneToken.mockResolvedValueOnce({ token: "ghs_abc123", expiresAt: "2026-08-01T00:00:00Z" });
 
-    await server.tools.get_repo_clone_token({ repo: "widgets" });
+    await server.tools.gh_token({ repo: "widgets" });
 
     expect(getCloneToken).toHaveBeenCalledWith("allocsys", "widgets");
   });
@@ -66,7 +66,7 @@ describe("connectors/github/clone_token.js", () => {
   it("returns a git clone command with the token embedded as x-access-token", async () => {
     getCloneToken.mockResolvedValueOnce({ token: "ghs_abc123", expiresAt: "2026-08-01T00:00:00Z" });
 
-    const result = await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    const result = await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain(
@@ -77,7 +77,7 @@ describe("connectors/github/clone_token.js", () => {
   it("surfaces the GitHub-issued expiry in the response text", async () => {
     getCloneToken.mockResolvedValueOnce({ token: "ghs_abc123", expiresAt: "2026-08-01T12:34:56Z" });
 
-    const result = await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    const result = await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     expect(result.content[0].text).toContain("2026-08-01T12:34:56Z");
   });
@@ -85,7 +85,7 @@ describe("connectors/github/clone_token.js", () => {
   it("does not emit the raw token anywhere outside the embedded clone URL", async () => {
     getCloneToken.mockResolvedValueOnce({ token: "ghs_abc123", expiresAt: "2026-08-01T00:00:00Z" });
 
-    const result = await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    const result = await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     const text = result.content[0].text;
     const occurrences = text.split("ghs_abc123").length - 1;
@@ -97,7 +97,7 @@ describe("connectors/github/clone_token.js", () => {
       new Error("GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY not configured -- private-repo clone tokens are unavailable.")
     );
 
-    const result = await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    const result = await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/not configured/);
@@ -108,7 +108,7 @@ describe("connectors/github/clone_token.js", () => {
       new Error("Failed to mint installation token for someorg/widgets (404): Not Found")
     );
 
-    const result = await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    const result = await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/Failed to mint installation token for someorg\/widgets \(404\)/);
@@ -117,7 +117,7 @@ describe("connectors/github/clone_token.js", () => {
   it("does not call getCloneToken again after a failure (each call is a fresh, independent mint)", async () => {
     getCloneToken.mockRejectedValueOnce(new Error("boom"));
 
-    await server.tools.get_repo_clone_token({ owner: "someorg", repo: "widgets" });
+    await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
     expect(getCloneToken).toHaveBeenCalledTimes(1);
   });
