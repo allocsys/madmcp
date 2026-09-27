@@ -3,6 +3,7 @@ import express from 'express';
 import { requireSharedSecret } from './auth.js';
 import { enqueueScan, getJobStatus, runLoop } from './scan/queue.js';
 import { queryChunks, queryGraph } from './query/index.js';
+import { embedNotionPage } from './notion/embed_notion.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -65,6 +66,27 @@ app.get('/tick', async (_req, res) => {
   try {
     await runLoop();
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Embed-on-write for the Notion connector (Phase 2, plan-madmcp-notion-
+// overhaul on Notion): madmcp (Vercel) only holds a read-only Neon role, so
+// doCreatePage/doUpdatePage there call this route rather than writing to
+// notion_page_embeddings directly -- same worker-does-the-writing split the
+// /scan pipeline already uses for repos/files/chunks. Also used lazily by
+// notion_find's rerank path to backfill a candidate page's embedding the
+// first time it's touched, rather than a one-time batch backfill job (see
+// the Notion plan page's 2026-09-27 Phase 2 decisions).
+app.post('/notion/embed', async (req, res) => {
+  const { page_id, content } = req.body || {};
+  if (!page_id) {
+    return res.status(400).json({ error: 'page_id is required' });
+  }
+  try {
+    const result = await embedNotionPage({ pageId: page_id, content });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
