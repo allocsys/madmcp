@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import zlib from "node:zlib";
-import { githubRequest, githubFetchTarball, fromBase64 } from "./client.js";
+import { githubRequest, githubGraphQL, githubFetchTarball, fromBase64 } from "./client.js";
 
 // --- search_code fallback ---------------------------------------------------
 // GitHub's REST /search/code endpoint reliably indexes public repos, but has
@@ -216,30 +216,65 @@ export async function fallbackCodeSearch({ owner, repo, query, per_page, ref }) 
   };
 }
 
-// Bounds extra blob fetches spent resolving line numbers for real
-// GitHub-search-index results (see resolveMatchLine) -- each lookup costs
-// one extra throttled API call, so this is capped independently of per_page.
+// Bounds how many results get line-number resolution -- not a network-cost
+// concern any more (see resolveMatchLines: batched into one GraphQL call
+// regardless of count), just keeps the query size and output sane.
 const CODE_SEARCH_LINE_CAP = 20;
 
 // GitHub's /search/code response (with the text-match accept header) gives
 // a `fragment` of surrounding text plus a match offset *within that
-// fragment* -- not an absolute line number in the file. Resolve one by
-// fetching the file's blob (item.sha is already the matching blob's SHA, so
-// this is a single direct blob fetch, not a tree walk) and locating the
-// fragment's position in the full content.
-async function resolveMatchLine(item) {
-  const match = item.text_matches?.find((tm) => tm.property === "content") || item.text_matches?.[0];
-  if (!match?.fragment) return null;
+// fragment* -- not an absolute line number in the file. Resolving one needs
+// the file's full content, which means a blob fetch per result -- but
+// GitHub's REST Blobs endpoint has no batch/multi-sha form (one sha per
+// call). Instead of N individual REST calls, this issues ONE GraphQL
+// request that fetches every needed blob via aliased fields (grouped by
+// repo, since a single query can span multiple repos), then locates each
+// match's fragment in its blob text to compute the line number.
+async function resolveMatchLines(items) {
+  const lines = new Array(items.length).fill(null);
+
+  const candidates = items.map((item, idx) => {
+    const match = item.text_matches?.find((tm) => tm.property === "content") || item.text_matches?.[0];
+    return match?.fragment ? { idx, owner: item.repository.owner.login, repo: item.repository.name, sha: item.sha, match } : null;
+  }).filter(Boolean);
+  if (!candidates.length) return lines;
+
+  // Group by repo so each distinct repo gets one `repository(...)` field,
+  // with one aliased `object(oid: ...)` sub-field per blob inside it.
+  const byRepo = new Map();
+  candidates.forEach((c, i) => {
+    const key = `${c.owner}/${c.repo}`;
+    if (!byRepo.has(key)) byRepo.set(key, { owner: c.owner, repo: c.repo, entries: [] });
+    byRepo.get(key).entries.push({ ...c, blobAlias: `b${i}` });
+  });
+
+  const repoGroups = [...byRepo.values()];
+  const query = `query {\n${repoGroups.map((g, ri) =>
+    `r${ri}: repository(owner: ${JSON.stringify(g.owner)}, name: ${JSON.stringify(g.repo)}) {\n` +
+    g.entries.map((e) => `  ${e.blobAlias}: object(oid: ${JSON.stringify(e.sha)}) { ... on Blob { text } }`).join("\n") +
+    `\n}`
+  ).join("\n")}\n}`;
+
+  let data;
   try {
-    const blob = await githubRequest(`/repos/${item.repository.full_name}/git/blobs/${item.sha}`);
-    const content = fromBase64(blob.content.replace(/\n/g, ""));
-    const fragIdx = content.indexOf(match.fragment);
-    if (fragIdx === -1) return null;
-    const offsetInFragment = match.matches?.[0]?.indices?.[0] ?? 0;
-    return content.slice(0, fragIdx + offsetInFragment).split("\n").length;
+    data = await githubGraphQL(query);
   } catch {
-    return null; // best-effort -- a failed lookup just omits the line number
+    return lines; // best-effort -- a failed batch just omits all line numbers
   }
+
+  repoGroups.forEach((g, ri) => {
+    const repoData = data[`r${ri}`];
+    for (const e of g.entries) {
+      const text = repoData?.[e.blobAlias]?.text;
+      if (!text) continue;
+      const fragIdx = text.indexOf(e.match.fragment);
+      if (fragIdx === -1) continue;
+      const offsetInFragment = e.match.matches?.[0]?.indices?.[0] ?? 0;
+      lines[e.idx] = text.slice(0, fragIdx + offsetInFragment).split("\n").length;
+    }
+  });
+
+  return lines;
 }
 
 export function register(server) {
@@ -317,7 +352,7 @@ export function register(server) {
       });
       if (data.items?.length) {
         const toEnrich  = data.items.slice(0, CODE_SEARCH_LINE_CAP);
-        const lineNums  = await Promise.all(toEnrich.map(resolveMatchLine));
+        const lineNums  = await resolveMatchLines(toEnrich);
         const lines = data.items.map((item, i) => {
           const line = i < CODE_SEARCH_LINE_CAP ? lineNums[i] : null;
           return `📄 ${item.repository.full_name}/${item.path}${line ? `:${line}` : ""} (${item.html_url}${line ? `#L${line}` : ""})`;
