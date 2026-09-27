@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { requireSharedSecret } from './auth.js';
-import { enqueueScan, getJobStatus } from './scan/queue.js';
+import { enqueueScan, getJobStatus, runLoop } from './scan/queue.js';
 import { queryChunks, queryGraph } from './query/index.js';
 
 const app = express();
@@ -50,6 +50,21 @@ app.post('/query/graph', async (req, res) => {
   try {
     const results = await queryGraph({ owner, repo, symbol, file, direction, depth: depth || 1 });
     res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Drains the queue: claims and processes any queued jobs, then returns.
+// Intended to be hit by an external cron (e.g. cron-job.org) every few
+// minutes on hosts (like Render's free tier) that sleep the process after
+// a period of no HTTP traffic -- this both counts as traffic that keeps
+// the container awake, and takes over the stuck-job-recovery role the
+// in-process setInterval poll (see queue.js) plays on hosts that stay warm.
+app.get('/tick', async (_req, res) => {
+  try {
+    await runLoop();
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

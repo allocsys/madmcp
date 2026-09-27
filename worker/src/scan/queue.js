@@ -71,7 +71,7 @@ export async function getJobStatus(jobId) {
 // one kicked by enqueueScan, one from the poll timer) just race harmlessly
 // for who gets the next job.
 let looping = false;
-async function runLoop() {
+export async function runLoop() {
   if (looping) return;
   looping = true;
   try {
