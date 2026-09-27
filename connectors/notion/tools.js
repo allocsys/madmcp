@@ -15,8 +15,7 @@ import {
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
 import { triggerNotionEmbed } from "./embed_client.js";
-import { findSimilarPages, getEmbeddingsForPageIds, cosineDistance } from "./embed_queries.js";
-import { embedQuery } from "../repomap/embed.js";
+import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 
 // Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
 // current title+content and fires it at the embed-on-write endpoint.
@@ -671,27 +670,27 @@ export function register(server) {
         try {
           const pageResults = data.results.filter((r) => r.object === "page");
           if (pageResults.length) {
-            const pageIds = pageResults.map((r) => r.id);
-            const embeddings = await getEmbeddingsForPageIds(pageIds);
+            // Fix #4 (2026-09-27 post-merge finding): reuse embed_queries.js's
+            // rerankByQuery instead of reimplementing the same scored/unscored
+            // split inline -- this was previously dead code with its own
+            // duplicated (and untested-in-production) copy of the same logic
+            // living right here.
+            const candidates = data.results.map((r) => ({ pageId: r.object === "page" ? r.id : null, result: r }));
+            const reranked = await rerankByQuery(query, candidates);
+            orderedResults = reranked.map((c) => c.result);
             // Lazy backfill (2026-09-27 decision): a page touched by a search
-            // but missing an embedding gets queued for embedding now (from its
-            // title -- full content is embedded properly next time it's
-            // created/updated), so a future search over it can be reranked.
-            // Fire-and-forget, never blocks this reply.
-            for (const r of pageResults) {
-              if (!embeddings.has(r.id)) triggerNotionEmbed({ page_id: r.id, content: notionPageTitle(r) });
-            }
-            if (embeddings.size) {
-              const queryEmbedding = await embedQuery(query);
-              const scored = [];
-              const unscored = [];
-              for (const r of data.results) {
-                const emb = r.object === "page" ? embeddings.get(r.id) : undefined;
-                if (emb) scored.push({ r, distance: cosineDistance(queryEmbedding, emb) });
-                else unscored.push(r);
+            // but still unscored (no embedding on file yet) gets queued for
+            // embedding now (from its title -- full content is embedded
+            // properly next time it's created/updated), so a future search
+            // over it can be reranked. Intentionally NOT awaited here, unlike
+            // the create/update embed calls -- this backfill is for FUTURE
+            // searches, not consumed by this reply, so awaiting it would only
+            // add latency (one Gemini+worker round trip per un-embedded
+            // result) without changing this call's own results.
+            for (const c of reranked) {
+              if (c.pageId && c.distance === undefined) {
+                triggerNotionEmbed({ page_id: c.pageId, content: notionPageTitle(c.result) });
               }
-              scored.sort((a, b) => a.distance - b.distance);
-              orderedResults = [...scored.map((s) => s.r), ...unscored];
             }
           }
         } catch {
