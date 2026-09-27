@@ -55,12 +55,11 @@ export function register(server) {
     {
       owner:    z.string().describe("Repository owner (user or org)"),
       repo:     z.string().describe("Repository name"),
-      branch:   z.string().optional().describe("Branch name (default: repo default branch)"),
+      branch:   z.string().describe("Branch name"),
       per_page: z.number().optional().describe("Number of commits to return, max 100 (default: 20)"),
     },
     async ({ owner, repo, branch, per_page = 20 }) => {
-      const query = new URLSearchParams({ per_page: String(per_page) });
-      if (branch) query.set("sha", branch);
+      const query = new URLSearchParams({ per_page: String(per_page), sha: branch });
       const data  = await githubRequest(`/repos/${owner}/${repo}/commits?${query}`);
       const lines = data.map((c) =>
         `${c.sha.slice(0, 7)} — ${c.commit.message.split("\n")[0]} (${c.commit.author.name}, ${c.commit.author.date.slice(0, 10)})`

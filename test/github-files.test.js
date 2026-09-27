@@ -218,7 +218,6 @@ describe("connectors/github/files.js", () => {
   describe("overwrite_files — atomic multi-file commit", () => {
     it("writes a blob per file, builds one tree, and commits once for all files", async () => {
       githubRequest
-        .mockResolvedValueOnce({ default_branch: "main" })                       // repo info
         .mockResolvedValueOnce({ object: { sha: "base-ref-sha" } })              // ref lookup
         .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })               // base commit
         .mockResolvedValueOnce({ sha: "blob-sha-1" })                            // blob for file 1
@@ -228,7 +227,7 @@ describe("connectors/github/files.js", () => {
         .mockResolvedValueOnce({});                                             // ref update
 
       const result = await server.tools.overwrite_files({
-        owner: "allocsys", repo: "madmcp", message: "batch update",
+        owner: "allocsys", repo: "madmcp", branch: "main", message: "batch update",
         files: [
           { path: "a.txt", content: "A" },
           { path: "b.txt", content: "B" },
@@ -319,11 +318,13 @@ describe("connectors/github/files.js", () => {
     });
   });
 
+  // NOTE: `branch` is now required (files.js) -- the handler no longer
+  // falls back to a repo-info fetch + repoData.default_branch when it's
+  // omitted, so every call below passes `branch` explicitly.
   describe("rename_file", () => {
     it("moves a file via blob+tree+commit, adding the new path and removing the old one", async () => {
       readFileViaBlob.mockResolvedValue("moved content\n");
       githubRequest
-        .mockResolvedValueOnce({ default_branch: "main" })          // repo info
         .mockResolvedValueOnce({ object: { sha: "ref-sha" } })       // ref lookup
         .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })   // base commit
         .mockResolvedValueOnce({ sha: "new-blob-sha" })              // new blob
@@ -332,7 +333,7 @@ describe("connectors/github/files.js", () => {
         .mockResolvedValueOnce({});                                  // ref update
 
       const result = await server.tools.rename_file({
-        owner: "allocsys", repo: "madmcp", old_path: "old/name.txt", new_path: "new/name.txt",
+        owner: "allocsys", repo: "madmcp", old_path: "old/name.txt", new_path: "new/name.txt", branch: "main",
       });
 
       expect(result.content[0].text).toMatch(/^Renamed old\/name\.txt → new\/name\.txt/);
@@ -354,7 +355,6 @@ describe("connectors/github/files.js", () => {
     it("uses a custom commit message when provided", async () => {
       readFileViaBlob.mockResolvedValue("content\n");
       githubRequest
-        .mockResolvedValueOnce({ default_branch: "main" })
         .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
         .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
         .mockResolvedValueOnce({ sha: "blob-sha" })
@@ -363,7 +363,7 @@ describe("connectors/github/files.js", () => {
         .mockResolvedValueOnce({});
 
       await server.tools.rename_file({
-        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", message: "tidy up naming",
+        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", message: "tidy up naming", branch: "main",
       });
 
       const commitCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/commits") && c[1]?.method === "POST");
@@ -373,7 +373,6 @@ describe("connectors/github/files.js", () => {
     it("targets the given branch instead of the repo default", async () => {
       readFileViaBlob.mockResolvedValue("content\n");
       githubRequest
-        .mockResolvedValueOnce({ default_branch: "main" })
         .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
         .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
         .mockResolvedValueOnce({ sha: "blob-sha" })

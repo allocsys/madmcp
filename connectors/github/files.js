@@ -65,6 +65,22 @@ function sliceFileContent(content, path, { char_offset, char_limit }) {
   return { content: [{ type: "text", text: header + slice }] };
 }
 
+// Slicing logic behind read_file's optional line_start/line_end -- lets a
+// `map` ("L{start}-{end}") or `search_code` (":{line}") result be read
+// directly by line number instead of guessing a char_offset to reach the
+// same spot. Computed fresh from the fetched content every call, so it
+// can't go stale relative to whatever line numbers a prior map/search
+// query returned.
+function sliceFileContentByLine(content, path, { line_start, line_end }) {
+  const lines = content.split("\n");
+  const total = lines.length;
+  const start = Math.max(1, line_start);
+  const end   = Math.min(total, line_end ?? start + 200);
+  const slice = lines.slice(start - 1, end).join("\n");
+  const header = `[File: ${path} | Total lines: ${total} | Showing: L${start}-${end}]\n\n`;
+  return { content: [{ type: "text", text: header + slice }] };
+}
+
 export function register(server) {
 
   server.tool(
@@ -76,17 +92,23 @@ export function register(server) {
     "DOES: reads a file's contents from a GitHub repository. ALWAYS call with no char_offset/char_limit first -- this returns the whole file in one call for anything under ~100,000 chars (the common case, covers most files), and for anything larger returns a clearly marked '\u26a0\ufe0f File too large' notice plus the exact char_offset to continue from.\n" +
     "RULE: do NOT guess or pre-emptively pass char_offset/char_limit on a file whose real size you don't already know -- only pass them once you actually have a reason to: either this SAME tool's own prior response on this SAME file already returned a truncation notice telling you the total size and the offset to continue from, or independent evidence (e.g. a github_search_code hit reporting a specific line deep inside a file you already know is large) tells you exactly where to jump. Guessing an offset on a file that turns out to be small wastes a call and returns a truncated, unhelpful fragment instead of the content you actually needed -- if in doubt, just call with no params.\n" +
     "RULE: already read this exact file earlier in the conversation and its content is already in context -> don't call this again at all, paginated or not; reuse what you already have.\n" +
-    "Equivalent concept to get_file_at_commit's `commit` param (SHA-only, required here; `ref` is branch/tag/SHA, optional).",
+    "RULE: jumping to a specific spot a `map` or `search_code` result pointed at -> pass line_start (and line_end if needed) instead of guessing a char_offset; it takes those tools' line numbers directly.\n" +
+    "Equivalent concept to get_file_at_commit's `commit` param (SHA-only there; `ref` here also takes a branch/tag name, not just a SHA -- both are required).",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
       path:        z.string().describe("File path within the repo, e.g. 'src/server.js'"),
-      ref:         z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      ref:         z.string().describe("Branch, tag, or commit SHA"),
       char_offset: z.number().optional().describe("Character offset to start reading from. Omit for default behavior (full file, or first chunk of a large one)."),
       char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000 when char_offset/char_limit is used, max: 100000). Ignored if both char_offset and char_limit are omitted."),
+      line_start:  z.number().optional().describe("1-indexed line number to start reading from -- pass this straight from a `map` result's \"L{start}-{end}\" or a `search_code` result's \":{line}\" instead of computing a char_offset. Takes priority over char_offset/char_limit if both are given."),
+      line_end:    z.number().optional().describe("1-indexed line number to stop at, inclusive (default: line_start + 200). Only used when line_start is given."),
     },
-    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit }) => {
+    async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit, line_start, line_end }) => {
       const content = await readFileViaBlob(owner, repo, path, ref);
+      if (line_start !== undefined) {
+        return sliceFileContentByLine(content, path, { line_start, line_end });
+      }
       return sliceFileContent(content, path, { char_offset, char_limit });
     }
   );
@@ -100,10 +122,10 @@ export function register(server) {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
       path:  z.string().optional().describe("Directory path within the repo (default: repo root)"),
-      ref:   z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      ref:   z.string().describe("Branch, tag, or commit SHA"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path = "", ref }) => {
-      const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+      const query = `?ref=${encodeURIComponent(ref)}`;
       const data  = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
       const items = Array.isArray(data) ? data : [data];
       const lines = items.map((item) => `${item.type === "dir" ? "📁" : "📄"} ${item.path}`);
@@ -121,20 +143,14 @@ export function register(server) {
     {
       owner: z.string().describe("Repository owner (user or org)"),
       repo:  z.string().describe("Repository name"),
-      ref:   z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      ref:   z.string().describe("Branch, tag, or commit SHA"),
     },
     async ({ owner, repo, ref }) => {
       let treeSha;
-      if (ref) {
-        try {
-          const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
-          treeSha = refData.object.sha;
-        } catch { treeSha = ref; }
-      } else {
-        const repoData   = await githubRequest(`/repos/${owner}/${repo}`);
-        const branchData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${repoData.default_branch}`);
-        treeSha = branchData.object.sha;
-      }
+      try {
+        const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+        treeSha = refData.object.sha;
+      } catch { treeSha = ref; }
       const data  = await githubRequest(`/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`);
       const lines = data.tree.map((item) => `${item.type === "tree" ? "📁" : "📄"} ${item.path}`);
       const note  = data.truncated ? "\n\n⚠️ Tree was truncated (repo too large)." : "";
@@ -153,10 +169,10 @@ export function register(server) {
       path:    z.string().describe("File path within the repo"),
       content: z.string().describe("Full content of the new file (plain text)"),
       message: z.string().describe("Commit message"),
-      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to commit to"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, content, message, branch }) => {
-      const query = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+      const query = `?ref=${encodeURIComponent(branch)}`;
       try {
         await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         throw new Error(`${path} already exists in ${owner}/${repo}${branch ? `@${branch}` : ""}. Use edit_file to replace or patch it.`);
@@ -188,7 +204,7 @@ export function register(server) {
         new_str: z.string().describe("String to replace it with"),
       })).min(1).optional().describe("List of str_replace operations to apply sequentially. Mutually exclusive with `content`. The file must already exist."),
       message: z.string().describe("Commit message"),
-      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to commit to"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, content, replacements, message, branch }) => {
       if ((content === undefined) === (replacements === undefined)) {
@@ -214,7 +230,7 @@ export function register(server) {
           return { content: [{ type: "text", text: "No changes — all replacements produced identical content." }] };
         }
 
-        const query    = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+        const query    = `?ref=${encodeURIComponent(branch)}`;
         const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         const result   = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
           method: "PUT",
@@ -268,7 +284,7 @@ export function register(server) {
 
       let sha;
       try {
-        const query    = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+        const query    = `?ref=${encodeURIComponent(branch)}`;
         const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         sha = existing.sha;
       } catch { /* new file */ }
@@ -289,10 +305,10 @@ export function register(server) {
       repo:    z.string().describe("Repository name"),
       path:    z.string().describe("File path within the repo"),
       message: z.string().describe("Commit message"),
-      branch:  z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to commit to"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, message, branch }) => {
-      const query    = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+      const query    = `?ref=${encodeURIComponent(branch)}`;
       const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
       await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
         method: "DELETE",
@@ -312,14 +328,12 @@ export function register(server) {
       old_path: z.string().describe("Current file path"),
       new_path: z.string().describe("New file path / destination"),
       message:  z.string().optional().describe("Commit message (default: 'rename <old> to <new>')"),
-      branch:   z.string().optional().describe("Branch to commit to (default: repo default branch)"),
+      branch:   z.string().describe("Branch to commit to"),
     },
     async ({ owner, repo, old_path, new_path, message, branch }) => {
       const commitMessage = message || `rename ${old_path} to ${new_path}`;
       const content      = await readFileViaBlob(owner, repo, old_path, branch);
-      const repoInfo     = await githubRequest(`/repos/${owner}/${repo}`);
-      const targetBranch = branch || repoInfo.default_branch;
-      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(targetBranch)}`);
+      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
       const newBlob = await githubRequest(`/repos/${owner}/${repo}/git/blobs`, {
         method: "POST",
@@ -339,7 +353,7 @@ export function register(server) {
         method: "POST",
         body: { message: commitMessage, tree: newTree.sha, parents: [refData.object.sha] },
       });
-      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(targetBranch)}`, {
+      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
@@ -354,7 +368,7 @@ export function register(server) {
     {
       owner:   z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:    z.string().describe("Repository name"),
-      branch:  z.string().optional().describe("Branch to push to (default: repo default branch)"),
+      branch:  z.string().describe("Branch to push to"),
       message: z.string().describe("Commit message"),
       files:   z.array(z.object({
         path:    z.string().describe("File path within the repo"),
@@ -362,9 +376,7 @@ export function register(server) {
       })).min(1).describe("Files to include in this commit"),
     },
     async ({ owner = DEFAULT_OWNER, repo, branch, message, files }) => {
-      const repoInfo     = await githubRequest(`/repos/${owner}/${repo}`);
-      const targetBranch = branch || repoInfo.default_branch;
-      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(targetBranch)}`);
+      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
       const blobs        = await Promise.all(files.map((f) =>
         githubRequest(`/repos/${owner}/${repo}/git/blobs`, {
@@ -383,11 +395,11 @@ export function register(server) {
         method: "POST",
         body: { message, tree: newTree.sha, parents: [refData.object.sha] },
       });
-      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(targetBranch)}`, {
+      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
-      return { content: [{ type: "text", text: `Pushed ${files.length} file(s) to ${owner}/${repo}@${targetBranch} (commit ${newCommit.sha.slice(0, 7)}).` }] };
+      return { content: [{ type: "text", text: `Pushed ${files.length} file(s) to ${owner}/${repo}@${branch} (commit ${newCommit.sha.slice(0, 7)}).` }] };
     }
   );
 }

@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import zlib from "node:zlib";
-import { githubRequest, githubFetchTarball } from "./client.js";
+import { githubRequest, githubGraphQL, githubFetchTarball } from "./client.js";
 
 // --- search_code fallback ---------------------------------------------------
 // GitHub's REST /search/code endpoint reliably indexes public repos, but has
@@ -216,6 +216,67 @@ export async function fallbackCodeSearch({ owner, repo, query, per_page, ref }) 
   };
 }
 
+// Bounds how many results get line-number resolution -- not a network-cost
+// concern any more (see resolveMatchLines: batched into one GraphQL call
+// regardless of count), just keeps the query size and output sane.
+const CODE_SEARCH_LINE_CAP = 20;
+
+// GitHub's /search/code response (with the text-match accept header) gives
+// a `fragment` of surrounding text plus a match offset *within that
+// fragment* -- not an absolute line number in the file. Resolving one needs
+// the file's full content, which means a blob fetch per result -- but
+// GitHub's REST Blobs endpoint has no batch/multi-sha form (one sha per
+// call). Instead of N individual REST calls, this issues ONE GraphQL
+// request that fetches every needed blob via aliased fields (grouped by
+// repo, since a single query can span multiple repos), then locates each
+// match's fragment in its blob text to compute the line number.
+async function resolveMatchLines(items) {
+  const lines = new Array(items.length).fill(null);
+
+  const candidates = items.map((item, idx) => {
+    const match = item.text_matches?.find((tm) => tm.property === "content") || item.text_matches?.[0];
+    return match?.fragment ? { idx, owner: item.repository.owner.login, repo: item.repository.name, sha: item.sha, match } : null;
+  }).filter(Boolean);
+  if (!candidates.length) return lines;
+
+  // Group by repo so each distinct repo gets one `repository(...)` field,
+  // with one aliased `object(oid: ...)` sub-field per blob inside it.
+  const byRepo = new Map();
+  candidates.forEach((c, i) => {
+    const key = `${c.owner}/${c.repo}`;
+    if (!byRepo.has(key)) byRepo.set(key, { owner: c.owner, repo: c.repo, entries: [] });
+    byRepo.get(key).entries.push({ ...c, blobAlias: `b${i}` });
+  });
+
+  const repoGroups = [...byRepo.values()];
+  const query = `query {\n${repoGroups.map((g, ri) =>
+    `r${ri}: repository(owner: ${JSON.stringify(g.owner)}, name: ${JSON.stringify(g.repo)}) {\n` +
+    g.entries.map((e) => `  ${e.blobAlias}: object(oid: ${JSON.stringify(e.sha)}) { ... on Blob { text } }`).join("\n") +
+    `\n}`
+  ).join("\n")}\n}`;
+
+  let data;
+  try {
+    data = await githubGraphQL(query);
+  } catch {
+    return lines; // best-effort -- a failed batch just omits all line numbers
+  }
+
+  repoGroups.forEach((g, ri) => {
+    const repoData = data[`r${ri}`];
+    for (const e of g.entries) {
+      const text = repoData?.[e.blobAlias]?.text;
+      if (!text) continue;
+      const fragIdx = text.indexOf(e.match.fragment);
+      if (fragIdx === -1) continue;
+      const offsetInFragment = e.match.matches?.[0]?.indices?.[0] ?? 0;
+      lines[e.idx] = text.slice(0, fragIdx + offsetInFragment).split("\n").length;
+    }
+  });
+
+  return lines;
+}
+
 export function register(server) {
   server.tool(
     "search_issues",
@@ -246,14 +307,13 @@ export function register(server) {
   server.tool(
     "search_code",
     "DOES: Search code across GitHub repos.\n" +
-    "RULE: query scoped via repo:owner/name AND index returns nothing -> auto-falls back to a direct content search of that repo (handles GitHub's known private-repo search-index gap; fetches the repo as a tarball and greps it locally -- see fallbackCodeSearch).\n" +
-    "RULE: need to search a NON-default branch -> pass `ref` (branch, tag, or commit SHA) alongside a repo:owner/name qualifier in the query. GitHub's real /search/code index only ever covers the default branch, so any `ref` always uses the local content-search fallback directly (skips the real API call entirely) -- requires repo:owner/name in the query since there's no other way to know which repo to fetch.\n" +
+    "RULE: `ref` (branch, tag, or commit SHA) is REQUIRED, alongside a repo:owner/name qualifier in the query -- GitHub's real /search/code index only ever covers a repo's default branch, so every call always uses the local content-search fallback directly instead (fetches the repo as a tarball at `ref` and greps it locally -- see fallbackCodeSearch; also handles GitHub's known private-repo search-index gap along the way).\n" +
     "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually.\n" +
     "RULE: query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map.query (mode: search) instead.",
     {
       query:    z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
       per_page: z.number().optional().describe("Number of results to return, max 100 (default: 20)"),
-      ref:      z.string().optional().describe("Branch, tag, or commit SHA to search instead of the default branch. Requires a repo:owner/name qualifier in `query`. GitHub's search index only covers the default branch, so setting this always uses the local content-search fallback rather than the real API."),
+      ref:      z.string().describe("Branch, tag, or commit SHA to search. Requires a repo:owner/name qualifier in `query`. GitHub's search index only covers the default branch, so this always uses the local content-search fallback rather than the real API."),
     },
     async ({ query, per_page = 20, ref }) => {
       const scoped = extractRepoQualifier(query);
@@ -286,10 +346,20 @@ export function register(server) {
         };
       }
 
-      const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${per_page}`);
+      const data = await githubRequest(`/search/code?q=${encodeURIComponent(query)}&per_page=${per_page}`, {
+        accept: "application/vnd.github.v3.text-match+json",
+      });
       if (data.items?.length) {
-        const lines = data.items.map((item) => `📄 ${item.repository.full_name}/${item.path} (${item.html_url})`);
-        return { content: [{ type: "text", text: `Found ${data.total_count} result(s), showing ${data.items.length}:\n\n${lines.join("\n")}` }] };
+        const toEnrich  = data.items.slice(0, CODE_SEARCH_LINE_CAP);
+        const lineNums  = await resolveMatchLines(toEnrich);
+        const lines = data.items.map((item, i) => {
+          const line = i < CODE_SEARCH_LINE_CAP ? lineNums[i] : null;
+          return `📄 ${item.repository.full_name}/${item.path}${line ? `:${line}` : ""} (${item.html_url}${line ? `#L${line}` : ""})`;
+        });
+        const note = data.items.length > CODE_SEARCH_LINE_CAP
+          ? `\n\n(line numbers resolved for the first ${CODE_SEARCH_LINE_CAP} results only)`
+          : "";
+        return { content: [{ type: "text", text: `Found ${data.total_count} result(s), showing ${data.items.length}:\n\n${lines.join("\n")}${note}` }] };
       }
 
       if (scoped) {
