@@ -87,6 +87,27 @@ export function notionRichTextToString(richText = []) {
   return richText.map((t) => t.plain_text || "").join("");
 }
 
+// ---------------------------------------------------------------------------
+// Intra-module call indirection (2026-09-27, Phase 1C real fix -- see
+// test/notion-checkpoint.test.js's header comment for the full ESM mocking
+// limitation this works around, and this branch's revert commit history for
+// why findPageByEntityId originally couldn't move into this file).
+//
+// vi.mock("./client.js") replaces this module's notionRequest EXPORT for
+// every OTHER module that imports it -- that's how tools.js's calls get
+// mocked in tests today. But a function defined IN THIS FILE that calls the
+// local `notionRequest` declaration directly binds to it at parse time; that
+// reference is never routed through the exported/mocked namespace object, so
+// vi.mock can't intercept it. Any function in this file that calls
+// notionRequest should go through `clientInternals.notionRequest(...)`
+// instead of the bare name -- that's a property lookup resolved at CALL
+// time, which a test's mock factory CAN override (see
+// notion-checkpoint.test.js, which replaces clientInternals.notionRequest
+// with the same vi.fn() used for the notionRequest export, so both stay in
+// sync and existing `client.notionRequest.mockImplementation(...)` calls
+// keep working unchanged).
+export const clientInternals = { notionRequest };
+
 
 // ---------------------------------------------------------------------------
 // Rich-text chunking (2026-07-18, bug found via live sync_mem0_to_notion
@@ -262,7 +283,7 @@ export async function queryAllIndexEntries() {
   for (let page = 0; page < MAX_PAGES; page++) {
     const body = { page_size: PAGE_SIZE };
     if (cursor) body.start_cursor = cursor;
-    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
+    const data = await clientInternals.notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
     for (const row of data.results || []) {
       const entity_id = notionRichTextToString(row.properties?.EntityId?.rich_text || []);
       const page_id   = notionRichTextToString(row.properties?.PageId?.rich_text || []);
