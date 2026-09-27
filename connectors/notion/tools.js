@@ -689,6 +689,124 @@ export function register(server) {
   );
 
   server.tool(
+    "notion_read",
+    "DOES: Read a Notion page or database by ID, consolidating notion_get_page, notion_get_page_history, notion_get_database, and notion_query_database into a single tool. Auto-detects whether the ID refers to a page or a database. For pages, returns properties, content blocks, markers, and resolved relations (and optionally version history if include_history is true). For databases, returns schema information (and matching rows if a filter is provided).\nRULE for the calling model: only call this directly for a single, specifically-named page or database whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_agent instead of looping notion_read across pages.",
+    {
+      id:              z.string().describe("Notion page or database ID (UUID format)"),
+      include_history: z.boolean().optional().describe("Optional boolean (default false): if true and the ID refers to a page, also include the page's version/change history in the response"),
+      filter:          z.record(z.any()).optional().describe("Optional Notion filter object (only meaningful if the ID refers to a database) — if provided, runs the database query and includes matching rows in the response so callers don't need a second call"),
+      cursor:          z.string().optional().describe("Optional pagination cursor for blocks (page) or rows (database)"),
+      page_size:       z.number().optional().describe("Optional page size for blocks (page) or rows (database)"),
+    },
+    async ({ id, include_history = false, filter, cursor, page_size }) => {
+      try {
+        let isPage = false;
+        let page, blocksData, dbData;
+        try {
+          const blocksPath = `/blocks/${id}/children?page_size=${page_size ?? 100}${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`;
+          [page, blocksData] = await Promise.all([
+            notionRequest(`/pages/${id}`),
+            notionRequest(blocksPath),
+          ]);
+          isPage = true;
+        } catch {
+          dbData = await notionRequest(`/databases/${id}`);
+        }
+
+        if (isPage) {
+          const title = notionPageTitle(page);
+          const allBlocks = blocksData.results || [];
+          const blocks = allBlocks.filter((b) => !(b.type === "paragraph" && isChangelogEntryText(notionRichTextToString(b.paragraph?.rich_text || []))));
+          const changelogCount = allBlocks.length - blocks.length;
+          const content = notionBlocksToText(blocks);
+          const hasMore = blocksData.has_more
+            ? `\n\n⚠️ Page has more blocks — call notion_read again or use notion_get_page with cursor: "${blocksData.next_cursor}" to see the next page.`
+            : "";
+          const subPages = blocks.filter((b) => b.type === "child_page").length;
+          const subDatabases = blocks.filter((b) => b.type === "child_database").length;
+          const childSummary = (subPages || subDatabases)
+            ? `\n\n🔗 ${subPages} subpage(s), ${subDatabases} subdatabase(s) found — use notion_read on their IDs above to view them.`
+            : "";
+          const changelogNote = changelogCount ? `\n📜 ${changelogCount} changelog entr${changelogCount === 1 ? "y" : "ies"} on this page (this view) — use include_history: true to see them.` : "";
+          const markers = parseMarkers(allBlocks);
+          const markerLine = (markers.entity_id || markers.status)
+            ? `\n${markers.entity_id ? `Entity ID: ${markers.entity_id}` : ""}${markers.entity_id && markers.status ? " | " : ""}${markers.status ? `Status: ${markers.status}` : ""}`
+            : "";
+          
+          const relations = parseRelationBlocks(allBlocks);
+          let relationsBlock = "";
+          if (relations.length) {
+            const toResolve = relations.slice(0, 5);
+            const resolved = await Promise.all(toResolve.map(async (r) => {
+              try {
+                const target = await findPageByEntityId(r.to_entity_id);
+                return target ? `  🔗 ${r.relation} -> ${r.to_entity_id} ("${target.title}", ${target.url})` : `  🔗 ${r.relation} -> ${r.to_entity_id} (not found -- dangling reference)`;
+              } catch {
+                return `  🔗 ${r.relation} -> ${r.to_entity_id} (couldn't resolve -- index unreachable)`;
+              }
+            }));
+            const remaining = relations.length - toResolve.length;
+            relationsBlock = `\n\nRelations:\n${resolved.join("\n")}${remaining ? `\n  … and ${remaining} more (not resolved, showing first 5)` : ""}`;
+          }
+
+          let historyBlock = "";
+          if (include_history) {
+            const historyEntries = allBlocks
+              .filter((b) => b.type === "paragraph")
+              .map((b) => notionRichTextToString(b.paragraph?.rich_text || []))
+              .filter(isChangelogEntryText);
+            const historyHasMore = blocksData.has_more
+              ? `\n\n⚠️ More blocks exist beyond this page — scan further via notion_get_page_history if older entries are needed.`
+              : "";
+            historyBlock = `\n\nHistory:\n` + (historyEntries.length ? historyEntries.join("\n") + historyHasMore : `No changelog entries found on this page (within the blocks scanned).${historyHasMore}`);
+          }
+
+          const text =
+            `# ${title}\n` +
+            `ID: ${page.id}\n` +
+            `URL: ${page.url}\n` +
+            `Created: ${page.created_time?.slice(0, 10)} | Last edited: ${page.last_edited_time?.slice(0, 10)}${markerLine}${changelogNote}\n\n` +
+            (content || "(no content)") + hasMore + childSummary + relationsBlock + historyBlock;
+          return { content: [{ type: "text", text }] };
+        } else {
+          const title = notionDatabaseTitle(dbData);
+          const propLines = Object.entries(dbData.properties || {}).map(([name, def]) => `  ${name}: ${def.type}`);
+          let text = `# ${title}\nID: ${dbData.id}\nURL: ${dbData.url}\nCreated: ${dbData.created_time?.slice(0, 10)} | Last edited: ${dbData.last_edited_time?.slice(0, 10)}\n\nProperties:\n${propLines.join("\n") || "(none)"}`;
+
+          if (filter !== undefined) {
+            const queryBody = { page_size: page_size ?? 20, filter };
+            if (cursor) queryBody.start_cursor = cursor;
+            const queryData = await notionRequest(`/databases/${id}/query`, { method: "POST", body: queryBody });
+            if (!queryData.results?.length) {
+              text += `\n\nRows:\nNo rows found matching filter.`;
+            } else {
+              const displayProp = (val) => {
+                if (val.type === "title") return notionRichTextToString(val.title);
+                if (val.type === "rich_text") return notionRichTextToString(val.rich_text);
+                if (val.type === "url") return val.url || "";
+                if (val.type === "select") return val.select?.name || "";
+                if (val.type === "multi_select") return (val.multi_select || []).map((s) => s.name).join(",");
+                if (val.type === "checkbox") return val.checkbox ? "true" : "false";
+                if (val.type === "number") return String(val.number ?? "");
+                return JSON.stringify(val[val.type] ?? "");
+              };
+              const rowsLines = queryData.results.map((row) => {
+                const props = Object.entries(row.properties || {}).map(([name, val]) => `${name}: ${displayProp(val)}`).join(" | ");
+                return `- ${props}\n  (row id: ${row.id})`;
+              });
+              const hasMoreRows = queryData.has_more ? `\n\n⚠️ More rows exist -- call notion_query_database with cursor: "${queryData.next_cursor}" to see the next page.` : "";
+              text += `\n\nRows:\n` + rowsLines.join("\n") + hasMoreRows;
+            }
+          }
+          return { content: [{ type: "text", text }] };
+        }
+      } catch (err) {
+        return { content: [{ type: "text", text: err.message }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
     "notion_get_page",
     "DOES: gets a Notion page's properties and content blocks.\nRULE for the calling model: only call this directly for a single, specifically-named page whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_agent instead of looping notion_get_page across pages.",
     {
