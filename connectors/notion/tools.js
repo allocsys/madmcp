@@ -1113,6 +1113,66 @@ export function register(server) {
   );
 
   server.tool(
+    "notion_update",
+    "DOES: Update one or more Notion pages, or one or more Notion databases, consolidating notion_update_page, notion_update_pages_batch, and notion_update_database into a single tool. `type: 'page'` updates page(s) under `items` (page_id/title/append_content/archived/replacements/status/entity_id/relations/properties per item -- same fields and behavior as notion_update_page). `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch -- both go through the same call, so there's no separate 'batch' tool anymore. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
+    {
+      type:  z.enum(["page", "database"]).describe("'page' updates one or more Notion pages. 'database' updates one or more Notion databases."),
+      items: z.array(z.object({
+        page_id:        z.string().optional().describe("type 'page' only: Notion page ID to update"),
+        database_id:    z.string().optional().describe("type 'database' only: Notion database ID to update"),
+        title:          z.string().optional().describe("New title for the page or database"),
+        append_content: z.string().optional().describe("type 'page' only: plain text to append as new paragraph blocks"),
+        archived:       z.boolean().optional().describe("Set true to archive (trash) the page or database, false to restore"),
+        replacements:   z.array(z.object({
+          find:    z.string().describe("Exact plain text of an existing top-level block (paragraph, heading, list item, or to-do) -- must match exactly one block"),
+          replace: z.string().describe("New plain text for that block"),
+        })).optional().describe("type 'page' only: list of find-and-replace operations for targeted in-place block edits -- see notion_update_page for matching rules."),
+        status:         z.enum(STATUS_VALUES).optional().describe("type 'page' only: set this page's lifecycle status (open/resolved/superseded) -- see notion_update_page."),
+        entity_id:      z.string().optional().describe("type 'page' only: correct or set this page's entity_id marker, reindexing it in the Entity Index database -- see notion_update_page."),
+        relations:      z.array(z.object({
+          to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
+          relation:     z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' -- free text"),
+        })).optional().describe("type 'page' only: new outgoing relations for this page -- REPLACES the existing relation set whole (not merged). Pass an empty array to clear all relations."),
+        properties:     z.record(z.any()).optional().describe("type 'page' only: database property VALUES to set/update on this page (only meaningful if the page is a row in a database) -- see notion_update_page."),
+      })).min(1).describe("List of page or database updates to apply (single-element array for a single update)."),
+    },
+    async ({ type, items }) => {
+      if (type === "page") {
+        const results = await runSequentially(items, (item) => doUpdatePage({
+          page_id: item.page_id, title: item.title, append_content: item.append_content, archived: item.archived,
+          replacements: item.replacements, status: item.status, entity_id: item.entity_id, relations: item.relations, properties: item.properties,
+        }));
+        const lines = results.map((r, i) => {
+          const label = items[i].page_id;
+          if (r.status === "rejected") return `\u2717 [${i}] ${label} \u2014 ${r.reason?.message || r.reason}`;
+          return `\u2713 [${i}] ${label} \u2014 ${r.value.join("; ") || "no changes made"}`;
+        });
+        const succeeded = results.filter((r) => r.status === "fulfilled").length;
+        return { content: [{ type: "text", text: `${succeeded}/${items.length} page(s) updated.\n\n${lines.join("\n")}` }] };
+      } else if (type === "database") {
+        const results = await runSequentially(items, async (item) => {
+          const body = {};
+          if (item.archived !== undefined) body.archived = item.archived;
+          if (item.title    !== undefined) body.title    = [{ type: "text", text: { content: item.title } }];
+          if (Object.keys(body).length === 0) return { noChanges: true };
+          const data = await notionRequest(`/databases/${item.database_id}`, { method: "PATCH", body });
+          return { title: notionDatabaseTitle(data), id: data.id };
+        });
+        const lines = results.map((r, i) => {
+          const label = items[i].database_id;
+          if (r.status === "rejected") return `\u2717 [${i}] ${label} \u2014 ${r.reason?.message || r.reason}`;
+          if (r.value.noChanges) return `\u2013 [${i}] ${label} \u2014 no changes made`;
+          return `\u2713 [${i}] ${label} \u2014 updated "${r.value.title}"`;
+        });
+        const succeeded = results.filter((r) => r.status === "fulfilled" && !r.value.noChanges).length;
+        return { content: [{ type: "text", text: `${succeeded}/${items.length} database(s) updated.\n\n${lines.join("\n")}` }] };
+      } else {
+        return { content: [{ type: "text", text: `Error: invalid type "${type}" (expected "page" or "database").` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
     "notion_update_database",
     "Update a Notion database's title, or archive/restore it. Use this instead of notion_update_page for database IDs -- databases live at a separate API endpoint from pages, so notion_update_page returns a 404 if given a database ID.",
     {
