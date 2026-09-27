@@ -278,19 +278,31 @@ const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3"
 // not be found; treated as not-found (append fresh range) rather than a
 // silent corruption risk, same reasoning as findSyncRange's unterminated-
 // range case.
-export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+// Generic marker-range replace -- shared logic behind replaceSyncedRange
+// (below) and replaceCheckpointRange (further down this file). Both
+// maintain a marker-delimited block range (start marker carrying a
+// timestamp / content / end marker) and, on a re-write, only ever touch
+// blocks strictly between the two markers. They differ only in which
+// marker convention they read/write (client.js's sync vs. checkpoint
+// markers) and whether an unchanged timestamp should skip the write
+// entirely (sync: yes, avoids no-op rewrite + changelog spam; checkpoint:
+// no, a save is meant to reflect "now" and has no meaningful "already up
+// to date" case) -- both differences are parameterized here rather than
+// duplicating this whole read/delete/insert/patch sequence twice, which is
+// what this codebase did until 2026-09-27.
+async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged }) {
   const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
   const blocks = blocksData.results || [];
-  const range = findSyncRange(blocks);
+  const range = findRange(blocks);
 
   if (!range) {
-    const children = buildSyncRangeBlocks({ synced_at, contentLines });
+    const children = buildRangeBlocks({ timestamp, contentLines });
     await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
     return { action: "created", blockCount: children.length };
   }
 
-  if (range.synced_at === synced_at) {
-    return { action: "skipped", reason: `already up to date (mem0_synced_at: ${synced_at})` };
+  if (skipIfUnchanged && getTimestamp(range) === timestamp) {
+    return { action: "skipped", reason: `already up to date (timestamp: ${timestamp})` };
   }
 
   // Delete every block strictly between the markers -- never the markers
@@ -314,10 +326,26 @@ export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
   // same single-block PATCH doUpdatePage uses for the status marker.
   await notionRequest(`/blocks/${range.startBlockId}`, {
     method: "PATCH",
-    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildSyncStartText(synced_at) } }] } },
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildStartText(timestamp) } }] } },
   });
 
-  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousSyncedAt: range.synced_at };
+  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousTimestamp: getTimestamp(range) };
+}
+
+// Thin wrapper over replaceMarkerRange above -- see its comment for the
+// shared mechanics; this just supplies the sync-marker functions and the
+// skip-if-unchanged behavior, and maps the generic previousTimestamp field
+// back to previousSyncedAt for existing callers (notion_sync_content).
+export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+  const result = await replaceMarkerRange({
+    page_id, contentLines, timestamp: synced_at,
+    findRange: findSyncRange,
+    getTimestamp: (range) => range.synced_at,
+    buildRangeBlocks: ({ timestamp, contentLines }) => buildSyncRangeBlocks({ synced_at: timestamp, contentLines }),
+    buildStartText: buildSyncStartText,
+    skipIfUnchanged: true,
+  });
+  return result.action === "updated" ? { ...result, previousSyncedAt: result.previousTimestamp } : result;
 }
 
 // Best-effort changelog append (gap #4) -- swallows its own errors rather
@@ -531,13 +559,10 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
 // -- switched off the mem0 sync markers, which wrote confusing/inaccurate
 // "SYNCED FROM MEM0" text on every checkpoint save even though this tool has
 // nothing to do with mem0. See client.js's checkpoint marker convention.
-// REDEPLOY TRIGGER: madmcp.vercel.app's alias got stuck on 554a108 (the
-// client.js-only commit) instead of advancing to this commit -- this no-op
-// comment forces a new deployment so the alias promotion re-runs.)
 // ---------------------------------------------------------------------------
-export async function doCheckpoint({ action, notes }) {
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest" }) {
   if (action === "save") {
-    const existing = await findPageByEntityId("checkpoint-latest");
+    const existing = await findPageByEntityId(key);
     const notesLines = (notes || "").split("\n");
     const updated_at = new Date().toISOString();
 
@@ -551,7 +576,7 @@ export async function doCheckpoint({ action, notes }) {
         parent_id: NOTION_SYNC_PARENT_PAGE_ID,
         parent_type: "page",
         title: "Session Checkpoint",
-        entity_id: "checkpoint-latest",
+        entity_id: key,
         content: contentText,
       });
       return `Checkpoint saved successfully.\nURL: ${created.url}`;
@@ -560,7 +585,7 @@ export async function doCheckpoint({ action, notes }) {
     await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
     return `Checkpoint saved successfully.\nURL: ${existing.url}`;
   } else if (action === "load") {
-    const existing = await findPageByEntityId("checkpoint-latest");
+    const existing = await findPageByEntityId(key);
     if (!existing) {
       return "No checkpoint found.";
     }
@@ -583,14 +608,15 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Uses a fixed global checkpoint entity ('checkpoint-latest'). 'save' fully rewrites the stored note; 'load' retrieves it. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
       action: z.enum(["save", "load"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them"),
       notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
+      key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
-    async ({ action, notes }) => {
+    async ({ action, notes, key }) => {
       try {
-        const text = await doCheckpoint({ action, notes });
+        const text = await doCheckpoint({ action, notes, key });
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
