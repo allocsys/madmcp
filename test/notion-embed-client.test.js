@@ -7,6 +7,13 @@
 //   - fire-and-forget contract: never throws, even on a network error or a non-ok response
 // Mocks ../config.js the same way test/repomap-embed.test.js does, since
 // embed_client.js reads its worker URL/secret from there.
+//
+// Contract note (2026-09-27 fix #2/#3): triggerNotionEmbed now returns its
+// underlying promise so callers that need the embed to have landed before a
+// later same-batch step (e.g. doCreatePage's fuzzy-dedup check) can await
+// it. It still never throws -- awaiting it only ever risks latency, never a
+// rejection -- so callers that don't care (e.g. notion_find's lazy
+// backfill) can still call it without awaiting.
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -68,7 +75,7 @@ describe("connectors/notion/embed_client.js", () => {
     expect(JSON.parse(init.body)).toEqual({ page_id: "page-42", content: "title\nbody text" });
   });
 
-  it("is not awaited by the caller — returns before the fetch promise settles", async () => {
+  it("returns an awaitable promise that only settles once the underlying fetch does", async () => {
     let resolveFetch;
     global.fetch = vi.fn().mockImplementation(() => new Promise((r) => { resolveFetch = r; }));
     vi.doMock("../config.js", () => ({
@@ -79,8 +86,16 @@ describe("connectors/notion/embed_client.js", () => {
     const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
     const returnValue = triggerNotionEmbed({ page_id: "p1", content: "c" });
 
-    expect(returnValue).toBeUndefined();
+    expect(returnValue).toBeInstanceOf(Promise);
+
+    let settled = false;
+    returnValue.then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false); // fetch hasn't resolved yet -- a caller that awaits should still be waiting here
+
     resolveFetch({ ok: true, json: async () => ({}) });
+    await expect(returnValue).resolves.toBeUndefined(); // resolves cleanly, never rejects
+    expect(settled).toBe(true);
   });
 
   it("swallows a network error (fetch rejection) without throwing", async () => {
