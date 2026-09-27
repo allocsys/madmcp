@@ -6,7 +6,7 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { githubRequest } from "./client.js";
-import { DEFAULT_OWNER, GITHUB_TOKEN } from "../../config.js";
+import { DEFAULT_OWNER, GITHUB_TOKEN, CODE_EXEC_ENABLED } from "../../config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,7 +87,7 @@ export function register(server) {
     {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
-      ref:   z.string().optional().describe("Branch, tag, or commit SHA to check machine availability for (default: repo default branch)"),
+      ref:   z.string().describe("Branch, tag, or commit SHA to check machine availability for"),
     },
     async ({ owner = DEFAULT_OWNER, repo, ref }) => {
       let path = `/repos/${owner}/${repo}/codespaces/machines`;
@@ -118,7 +118,7 @@ export function register(server) {
     {
       owner:            z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:             z.string().describe("Repository name"),
-      ref:              z.string().optional().describe("Branch, tag, or commit SHA to create the codespace from (default: repo default branch)"),
+      ref:              z.string().describe("Branch, tag, or commit SHA to create the codespace from"),
       machine:          z.string().optional().describe("Machine type (e.g. 'basicLinux32gb'). Omit to let GitHub pick a default. Use list_codespace_machines to see valid values for a repo."),
       devcontainer_path: z.string().optional().describe("Path to a devcontainer.json to use, relative to repo root"),
     },
@@ -190,6 +190,10 @@ export function register(server) {
   );
 
   // ── Execute command in codespace ─────────────────────────────────────────
+  // Gated behind CODE_EXEC_ENABLED (default off) -- broken/unsafe, not
+  // registered at all unless a human flips the flag on deliberately. Same
+  // posture as editor_tools.js's EDITOR_AGENT_ENABLED gate.
+  if (!CODE_EXEC_ENABLED) return;
 
   server.tool(
     "exec_in_codespace",
