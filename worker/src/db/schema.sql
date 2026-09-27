@@ -107,3 +107,40 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_repo ON chunks (repo_id);
 -- ivfflat requires ANALYZE after bulk load; fine to add once table has data
 -- CREATE INDEX idx_chunks_embedding ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- ---------------------------------------------------------------------------
+-- notion_page_embeddings -- Phase 2 of the Notion connector overhaul
+-- (plan-madmcp-notion-overhaul on Notion). One row per embedded Notion page,
+-- keyed by Notion's own page_id (a UUID string, not a FK into repos/files --
+-- this table is intentionally independent of the repo_map scan tables
+-- above, it just reuses the same Neon database and the same Gemini
+-- embedding pipeline shape).
+--
+-- WRITE PATH: this server (worker/, on Render) is the only writer, via the
+-- /notion/embed route (worker/src/server.js) -- madmcp's Vercel deployment
+-- only holds a read-only Neon role (REPO_MAP_DATABASE_URL), so
+-- doCreatePage/doUpdatePage (connectors/notion/tools.js) call that route
+-- rather than writing here directly, same split as repos/files/chunks above.
+--
+-- READ PATH: madmcp reads this directly from Vercel via its read-only role
+-- for (a) notion_find's semantic rerank of keyword-search candidates and
+-- (b) the fuzzy-dedup check in doCreatePage, before a new entity_id page is
+-- created. Both are plain SELECTs, no write-restriction concern.
+--
+-- BACKFILL: lazy, not batch (2026-09-27 decision) -- a page only gets a row
+-- here once it's actually touched (created, updated, or seen as a
+-- notion_find search candidate) after this table existed. Years of
+-- pre-existing unembedded pages are not backfilled up front; dedup/rerank
+-- quality for those ramps up as they're naturally touched.
+CREATE TABLE IF NOT EXISTS notion_page_embeddings (
+  page_id       TEXT PRIMARY KEY,      -- Notion page UUID (as returned by the Notion API, dashes included)
+  content_hash  TEXT NOT NULL,         -- sha256 of the text that was embedded (title + body) -- skip re-embedding on a no-op update, same pattern as files.content_hash
+  embedding     vector(1536),          -- gemini-embedding-001, Matryoshka-truncated to 1536 dims -- same model/dimension as chunks.embedding above, see worker/src/embed/gemini.js
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- ivfflat needs ANALYZE after bulk load; skip until this table has
+-- meaningful volume, same reasoning as idx_chunks_embedding above. Lookups
+-- today are always scoped by page_id (dedup/rerank check a small candidate
+-- set from a keyword search), not an unfiltered top-K scan of every
+-- embedded Notion page, so a full index isn't urgent even at moderate scale.
+-- CREATE INDEX idx_notion_page_embeddings_embedding ON notion_page_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
