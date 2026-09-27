@@ -31,6 +31,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // module and is unrelated to the earlier bug in this file, which was
 // require("vitest") -- Vitest specifically rejects requiring its own
 // package under require(), not built-ins.)
+// exec_in_codespace is gated behind CODE_EXEC_ENABLED (default off, see
+// config.js) -- this needs to be "true" BEFORE codespaces.js is imported
+// below, since config.js reads it once at module-eval time. vi.hoisted()
+// runs earlier than even the top-level imports (see the note on it further
+// down), so setting it here is what makes the static `import { register }
+// from "../connectors/github/codespaces.js"` below see the flag as on. The
+// gate itself (both states) is covered separately, via dynamic import, in
+// the "CODE_EXEC_ENABLED gate" describe block at the bottom of this file.
+vi.hoisted(() => {
+  process.env.CODE_EXEC_ENABLED = "true";
+});
+
 const mockExecFile = vi.hoisted(() => {
   // `vi` is safe to reference directly inside vi.hoisted() -- Vitest's
   // transform hoists that binding specifically to support this pattern.
@@ -249,5 +261,58 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     expect(fullCommandArg).toBe(
       `cd 'a'\\''; touch /tmp/pwned; echo '\\''`+ "`whoami`" + `' && ls`
     );
+  });
+});
+
+describe("register() -- CODE_EXEC_ENABLED gate", () => {
+  const ORIGINAL_ENV = process.env.CODE_EXEC_ENABLED;
+
+  afterEach(() => {
+    if (ORIGINAL_ENV === undefined) delete process.env.CODE_EXEC_ENABLED;
+    else process.env.CODE_EXEC_ENABLED = ORIGINAL_ENV;
+    vi.resetModules();
+  });
+
+  function fakeServerWithTools() {
+    const tools = {};
+    return {
+      tool: (name, _description, _schema, handler) => { tools[name] = handler; },
+      tools,
+    };
+  }
+
+  it("does not register exec_in_codespace when the flag is unset (default off), but still registers the other codespace tools", async () => {
+    delete process.env.CODE_EXEC_ENABLED;
+    vi.resetModules();
+    const { register } = await import("../connectors/github/codespaces.js");
+
+    const server = fakeServerWithTools();
+    register(server);
+
+    expect(server.tools.exec_in_codespace).toBeUndefined();
+    expect(server.tools.list_codespaces).toBeDefined();
+    expect(server.tools.create_codespace).toBeDefined();
+  });
+
+  it("registers exec_in_codespace when the flag is the literal string \"true\"", async () => {
+    process.env.CODE_EXEC_ENABLED = "true";
+    vi.resetModules();
+    const { register } = await import("../connectors/github/codespaces.js");
+
+    const server = fakeServerWithTools();
+    register(server);
+
+    expect(server.tools.exec_in_codespace).toBeDefined();
+  });
+
+  it("does not register exec_in_codespace when the flag is any value other than the literal string \"true\" (e.g. a truthy-looking typo)", async () => {
+    process.env.CODE_EXEC_ENABLED = "1";
+    vi.resetModules();
+    const { register } = await import("../connectors/github/codespaces.js");
+
+    const server = fakeServerWithTools();
+    register(server);
+
+    expect(server.tools.exec_in_codespace).toBeUndefined();
   });
 });
