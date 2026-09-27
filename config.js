@@ -75,6 +75,12 @@ export const NOTION_INDEX_DATABASE_ID = process.env.NOTION_INDEX_DATABASE_ID || 
 // as NOTION_INDEX_PAGE_ID above.
 export const NOTION_SYNC_PARENT_PAGE_ID = process.env.NOTION_SYNC_PARENT_PAGE_ID || "3a045572-b580-8007-b622-c120958557bf";
 
+// Fuzzy-dedup threshold for findSimilarPages (Finding #5.2) -- was
+// hardcoded and never tuned. Override via env var; findSimilarPages logs
+// every hit's distance with a [notion-dedup] prefix so real usage can
+// calibrate it.
+export const NOTION_DEDUP_MAX_DISTANCE = Number(process.env.NOTION_DEDUP_MAX_DISTANCE) || 0.15;
+
 export const MEM0_API_KEY   = process.env.MEM0_API_KEY;
 export const MEM0_API       = "https://api.mem0.ai";
 export const MEM0_USER_ID   = process.env.MEM0_USER_ID || "default";

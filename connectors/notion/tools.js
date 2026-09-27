@@ -678,18 +678,22 @@ export function register(server) {
             const candidates = data.results.map((r) => ({ pageId: r.object === "page" ? r.id : null, result: r }));
             const reranked = await rerankByQuery(query, candidates);
             orderedResults = reranked.map((c) => c.result);
-            // Lazy backfill (2026-09-27 decision): a page touched by a search
-            // but still unscored (no embedding on file yet) gets queued for
-            // embedding now (from its title -- full content is embedded
-            // properly next time it's created/updated), so a future search
-            // over it can be reranked. Intentionally NOT awaited here, unlike
-            // the create/update embed calls -- this backfill is for FUTURE
-            // searches, not consumed by this reply, so awaiting it would only
-            // add latency (one Gemini+worker round trip per un-embedded
-            // result) without changing this call's own results.
+            // Lazy backfill: an unscored page gets queued for embedding now
+            // (not awaited -- this is for future searches, not this reply).
+            // Fix #5.1: reuses triggerEmbedForPage (full title+content,
+            // same as doUpdatePage) instead of embedding just the title.
+            // Fix #5.3: a page edited directly in Notion never re-triggers
+            // embed-on-write, so also re-embed a SCORED candidate whose
+            // stored updatedAt is older than Notion's own last_edited_time.
             for (const c of reranked) {
               if (c.pageId && c.distance === undefined) {
-                triggerNotionEmbed({ page_id: c.pageId, content: notionPageTitle(c.result) });
+                triggerEmbedForPage(c.pageId);
+              } else if (c.pageId && c.updatedAt && c.result?.last_edited_time) {
+                const embeddedAt = new Date(c.updatedAt).getTime();
+                const editedAt = new Date(c.result.last_edited_time).getTime();
+                if (Number.isFinite(embeddedAt) && Number.isFinite(editedAt) && editedAt > embeddedAt) {
+                  triggerEmbedForPage(c.pageId);
+                }
               }
             }
           }

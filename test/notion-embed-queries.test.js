@@ -3,10 +3,11 @@
 // connectors/notion/embed_queries.js, the read-side of Phase 2's Notion
 // semantic layer (reranking + fuzzy dedup).
 // Covers:
-//   - getEmbeddingsForPageIds: dedupes/filters input ids, parses pgvector rows into a Map, empty-input short-circuit
+//   - getEmbeddingsForPageIds: dedupes/filters input ids, parses pgvector rows
+//     into a Map of {embedding, updatedAt}, empty-input short-circuit
 //   - findSimilarPages: embeds the query text, passes maxDistance/limit through, empty-text short-circuit
 //   - cosineDistance: identical/orthogonal/opposite vectors, degenerate zero-vector guard
-//   - rerankByQuery: scores candidates with embeddings, leaves unscored candidates in original order at the end
+//   - rerankByQuery: scores candidates with embeddings, carries updatedAt through, leaves unscored candidates in original order at the end
 // Mocks connectors/repomap/db.js and connectors/repomap/embed.js, same
 // pattern as test/repomap-queries.test.js (embed_queries.js reuses both
 // directly rather than duplicating the read-only Neon connection or the
@@ -38,13 +39,13 @@ describe("connectors/notion/embed_queries.js", () => {
       expect(query).not.toHaveBeenCalled();
     });
 
-    it("dedupes and filters falsy ids before querying, and parses pgvector rows into a Map", async () => {
+    it("dedupes and filters falsy ids before querying, and parses pgvector rows into a Map of {embedding, updatedAt}", async () => {
       const { query } = await import("../connectors/repomap/db.js");
       // pgvector.fromSql parses the Postgres vector text form '[1,2,3]'
       query.mockResolvedValueOnce({
         rows: [
-          { page_id: "a", embedding: "[1,2,3]" },
-          { page_id: "b", embedding: "[4,5,6]" },
+          { page_id: "a", embedding: "[1,2,3]", updated_at: "2026-09-01T00:00:00.000Z" },
+          { page_id: "b", embedding: "[4,5,6]", updated_at: "2026-09-02T00:00:00.000Z" },
         ],
       });
 
@@ -52,8 +53,8 @@ describe("connectors/notion/embed_queries.js", () => {
       const result = await getEmbeddingsForPageIds(["a", "a", null, "b", undefined]);
 
       expect(query.mock.calls[0][1]).toEqual([["a", "b"]]);
-      expect(result.get("a")).toEqual([1, 2, 3]);
-      expect(result.get("b")).toEqual([4, 5, 6]);
+      expect(result.get("a")).toEqual({ embedding: [1, 2, 3], updatedAt: "2026-09-01T00:00:00.000Z" });
+      expect(result.get("b")).toEqual({ embedding: [4, 5, 6], updatedAt: "2026-09-02T00:00:00.000Z" });
       expect(result.size).toBe(2);
     });
 
@@ -66,6 +67,7 @@ describe("connectors/notion/embed_queries.js", () => {
 
       expect(result.has("a")).toBe(true);
       expect(result.has("never-embedded")).toBe(false);
+      expect(result.get("a").embedding).toEqual([1, 1]);
     });
   });
 
@@ -174,13 +176,25 @@ describe("connectors/notion/embed_queries.js", () => {
 
       const result = await rerankByQuery("some query", candidates);
 
-      // "close" (distance 0) should sort before "far" (distance 1); the
-      // never-embedded candidate falls back to the end, keeping its relative
-      // position among other unscored candidates (only one here).
+      // "close" (distance 0) sorts before "far" (distance 1); unscored falls to the end.
       expect(result.map((c) => c.pageId)).toEqual(["close", "far", "never-embedded"]);
       expect(result[0].distance).toBeCloseTo(0, 10);
       expect(result[1].distance).toBeCloseTo(1, 10);
       expect(result[2].distance).toBeUndefined();
+    });
+
+    it("carries each scored candidate's stored updatedAt through onto the result (Finding #5.3 staleness check)", async () => {
+      const { query } = await import("../connectors/repomap/db.js");
+      const { embedQuery } = await import("../connectors/repomap/embed.js");
+      embedQuery.mockResolvedValueOnce([1, 0]);
+      query.mockResolvedValueOnce({
+        rows: [{ page_id: "p1", embedding: "[1,0]", updated_at: "2026-09-01T00:00:00.000Z" }],
+      });
+
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
+      const result = await rerankByQuery("q", [{ pageId: "p1" }]);
+
+      expect(result[0].updatedAt).toBe("2026-09-01T00:00:00.000Z");
     });
   });
 });

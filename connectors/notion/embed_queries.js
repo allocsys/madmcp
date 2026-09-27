@@ -11,21 +11,22 @@
 import pgvector from "pgvector";
 import { query } from "../repomap/db.js";
 import { embedQuery } from "../repomap/embed.js";
+import { NOTION_DEDUP_MAX_DISTANCE } from "../../config.js";
 
 // Looks up embeddings for a known set of page ids (e.g. a notion_find
 // keyword-search candidate list), for reranking. Returns a Map of
-// page_id -> embedding (number[]); ids with no row yet (never embedded) are
-// simply absent from the map -- callers decide how to handle a page missing
-// an embedding (fall back to keyword order, and/or lazily trigger an embed
-// for next time via embed_client.js's triggerNotionEmbed).
+// page_id -> { embedding: number[], updatedAt: Date }; ids with no row
+// are simply absent. updatedAt lets a caller detect a page edited directly
+// in Notion since it was last embedded (Finding #5.3) -- see tools.js's
+// notion_find rerank wiring.
 export async function getEmbeddingsForPageIds(pageIds) {
   const ids = [...new Set((pageIds || []).filter(Boolean))];
   if (!ids.length) return new Map();
   const { rows } = await query(
-    `SELECT page_id, embedding FROM notion_page_embeddings WHERE page_id = ANY($1::text[])`,
+    `SELECT page_id, embedding, updated_at FROM notion_page_embeddings WHERE page_id = ANY($1::text[])`,
     [ids]
   );
-  return new Map(rows.map((r) => [r.page_id, pgvector.fromSql(r.embedding)]));
+  return new Map(rows.map((r) => [r.page_id, { embedding: pgvector.fromSql(r.embedding), updatedAt: r.updated_at }]));
 }
 
 // Embeds `text` (title + content of a NEW page about to be created) and
@@ -34,11 +35,12 @@ export async function getEmbeddingsForPageIds(pageIds) {
 // creating a page with a fresh entity_id, to catch near-duplicates that
 // exact-match entity_id dedup can't see (see plan-madmcp-notion-overhaul on
 // Notion for the confirmed real examples this is meant to catch).
-// maxDistance default (0.15) is deliberately conservative (i.e. requires
-// high similarity) -- a false positive here would incorrectly warn about
-// two genuinely different pages, whereas a false negative just falls back
-// to today's behavior (no fuzzy check at all). Tune based on real usage.
-export async function findSimilarPages(text, { maxDistance = 0.15, limit = 3 } = {}) {
+// maxDistance defaults to NOTION_DEDUP_MAX_DISTANCE (0.15) -- deliberately
+// conservative, since a false positive wrongly flags two unrelated pages
+// while a false negative just skips the check. Was a hardcoded literal
+// (Finding #5.2) -- now configurable, and every hit's distance is logged
+// for calibration.
+export async function findSimilarPages(text, { maxDistance = NOTION_DEDUP_MAX_DISTANCE, limit = 3 } = {}) {
   if (!text) return [];
   const embedding = await embedQuery(text);
   const vec = pgvector.toSql(embedding);
@@ -50,6 +52,9 @@ export async function findSimilarPages(text, { maxDistance = 0.15, limit = 3 } =
      LIMIT $3`,
     [vec, maxDistance, limit]
   );
+  for (const r of rows) {
+    console.log(`[notion-dedup] page ${r.page_id} distance=${r.distance} (maxDistance=${maxDistance})`);
+  }
   return rows.map((r) => ({ pageId: r.page_id, distance: r.distance }));
 }
 
@@ -85,7 +90,7 @@ export async function rerankByQuery(text, candidates) {
   const unscored = [];
   for (const c of candidates) {
     const emb = embeddings.get(c.pageId);
-    if (emb) scored.push({ ...c, distance: cosineDistance(queryEmbedding, emb) });
+    if (emb) scored.push({ ...c, distance: cosineDistance(queryEmbedding, emb.embedding), updatedAt: emb.updatedAt });
     else unscored.push(c);
   }
   scored.sort((a, b) => a.distance - b.distance);

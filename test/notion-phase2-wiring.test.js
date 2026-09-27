@@ -205,7 +205,7 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       expect(triggerNotionEmbed).not.toHaveBeenCalled(); // both candidates already had embeddings (distance defined on both)
     });
 
-    it("falls back to Notion's original keyword order when no candidates have embeddings yet, and lazily triggers embedding for each", async () => {
+    it("falls back to Notion's original keyword order when no candidates have embeddings yet, and lazily backfills full title+content for each (Finding #5.1)", async () => {
       const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
       const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
       // Nothing embedded yet -- real rerankByQuery leaves every candidate
@@ -213,7 +213,8 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       rerankByQuery.mockImplementationOnce(async (_query, candidates) => candidates);
 
       client.notionRequest.mockImplementation(async (path, opts = {}) => {
-        if (path === "/search" && (opts.method || "GET") === "POST") {
+        const method = opts.method || "GET";
+        if (path === "/search" && method === "POST") {
           return {
             results: [
               { object: "page", id: "page-a", url: "https://notion.so/page-a", properties: { title: { type: "title", title: [{ plain_text: "Page A" }] } } },
@@ -221,16 +222,81 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
             ],
           };
         }
-        throw new Error(`Unexpected notionRequest call: ${opts.method || "GET"} ${path}`);
+        // Backfill now re-reads each unscored page (Fix #5.1) instead of
+        // embedding just the title -- simulate those re-reads so we can
+        // prove full title+content reaches triggerNotionEmbed.
+
+        if (path === "/pages/page-a") return { id: "page-a", properties: { title: { type: "title", title: [{ plain_text: "Page A" }] } } };
+        if (path === "/pages/page-b") return { id: "page-b", properties: { title: { type: "title", title: [{ plain_text: "Page B" }] } } };
+        if (path.startsWith("/blocks/page-a/children")) return { results: [{ object: "block", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Body A" }] } }] };
+        if (path.startsWith("/blocks/page-b/children")) return { results: [{ object: "block", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Body B" }] } }] };
+        throw new Error(`Unexpected notionRequest call: ${method} ${path}`);
       });
 
       const result = await notionFind({ mode: "search", query: "anything" });
 
       const text = result.content[0].text;
-      // Keyword order preserved (Page A before Page B), since neither had an embedding to rerank by.
       expect(text.indexOf("Page A")).toBeLessThan(text.indexOf("Page B"));
-      expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-a", content: "Page A" });
-      expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-b", content: "Page B" });
+      // Backfill is fire-and-forget, so wait for it to land.
+      await vi.waitFor(() => {
+        expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-a", content: "Page A\nBody A" });
+        expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-b", content: "Page B\nBody B" });
+      });
+    });
+
+    it("re-embeds a page whose Notion last_edited_time is newer than its stored embedding updatedAt (Finding #5.3, out-of-band UI edit)", async () => {
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
+      const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
+      // Scored, but the embedding predates last_edited_time -- simulates a
+      // direct Notion UI edit that skipped doUpdatePage/triggerEmbedForPage.
+      rerankByQuery.mockImplementationOnce(async (_query, candidates) =>
+        candidates.map((c) => ({ ...c, distance: 0.5, updatedAt: "2026-09-01T00:00:00.000Z" }))
+      );
+
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        const method = opts.method || "GET";
+        if (path === "/search" && method === "POST") {
+          return {
+            results: [
+              { object: "page", id: "stale-page", url: "https://notion.so/stale-page", last_edited_time: "2026-09-27T00:00:00.000Z", properties: { title: { type: "title", title: [{ plain_text: "Stale Page" }] } } },
+            ],
+          };
+        }
+        if (path === "/pages/stale-page") return { id: "stale-page", properties: { title: { type: "title", title: [{ plain_text: "Stale Page" }] } } };
+        if (path.startsWith("/blocks/stale-page/children")) return { results: [] };
+        throw new Error(`Unexpected notionRequest call: ${method} ${path}`);
+      });
+
+      await notionFind({ mode: "search", query: "anything" });
+
+      await vi.waitFor(() => {
+        expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "stale-page", content: "Stale Page" });
+      });
+    });
+
+    it("does NOT re-embed a scored page whose embedding is already newer than (or equal to) its last_edited_time", async () => {
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
+      const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
+      rerankByQuery.mockImplementationOnce(async (_query, candidates) =>
+        candidates.map((c) => ({ ...c, distance: 0.5, updatedAt: "2026-09-27T00:00:00.000Z" }))
+      );
+
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        const method = opts.method || "GET";
+        if (path === "/search" && method === "POST") {
+          return {
+            results: [
+              { object: "page", id: "fresh-page", url: "https://notion.so/fresh-page", last_edited_time: "2026-09-01T00:00:00.000Z", properties: { title: { type: "title", title: [{ plain_text: "Fresh Page" }] } } },
+            ],
+          };
+        }
+        throw new Error(`Unexpected notionRequest call: ${method} ${path}`);
+      });
+
+      await notionFind({ mode: "search", query: "anything" });
+
+      await new Promise((r) => setTimeout(r, 0)); // let any wrongly-fired backfill happen first
+      expect(triggerNotionEmbed).not.toHaveBeenCalled();
     });
 
     it("falls back to Notion's original order (rather than erroring) when the rerank step throws", async () => {
