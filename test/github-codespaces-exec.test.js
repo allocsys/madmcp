@@ -15,7 +15,7 @@
 //      either locally or remotely.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // vi.mock() factories are hoisted above all other top-level code (including
 // imports and const declarations), and vi.hoisted() runs even earlier than
