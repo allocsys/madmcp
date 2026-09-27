@@ -14,6 +14,32 @@ import {
   findPageByEntityId,
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
+import { triggerNotionEmbed } from "./embed_client.js";
+import { findSimilarPages, getEmbeddingsForPageIds, cosineDistance } from "./embed_queries.js";
+import { embedQuery } from "../repomap/embed.js";
+
+// Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
+// current title+content and fires it at the embed-on-write endpoint. Not
+// awaited by callers (doCreatePage has the text already in hand and embeds
+// it directly without this helper; doUpdatePage only ever sees partial
+// diffs -- append_content, a replacement, a title change -- so it re-reads
+// the full page here rather than embedding a partial/stale view of it).
+// Swallows every failure, same fire-and-forget contract as
+// triggerNotionEmbed itself -- a failed re-embed just leaves the page
+// un-reranked/un-deduped-by-similarity until its next successful touch.
+async function triggerEmbedForPage(page_id) {
+  try {
+    const [page, blocksData] = await Promise.all([
+      notionRequest(`/pages/${page_id}`),
+      notionRequest(`/blocks/${page_id}/children?page_size=100`),
+    ]);
+    const title = notionPageTitle(page);
+    const text = notionBlocksToText(blocksData.results || []);
+    triggerNotionEmbed({ page_id, content: [title, text].filter(Boolean).join("\n") });
+  } catch {
+    // best-effort -- see comment above
+  }
+}
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
 
@@ -111,6 +137,25 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
     }
   }
 
+  // Phase 2 fuzzy-dedup check (2026-09-27 decision) -- catches near-
+  // duplicate pages that exact-match entity_id dedup can't see (see the
+  // Notion plan page for the confirmed real examples this targets: two
+  // "Job Requirement: ... Liliana Model" pages, two "plan-madmcp-code-
+  // graph-tool" pages). Best-effort and non-blocking: a hit is surfaced as
+  // `possibleDuplicates` on the result for the caller to review, not a hard
+  // block -- a false positive here would otherwise prevent creating a
+  // legitimately new page over an unrelated semantic near-match. Only runs
+  // for entity_id-tracked pages, matching exact-match dedup's own scope --
+  // one_off pages have explicitly opted out of dedup entirely.
+  let possibleDuplicates = [];
+  if (entity_id) {
+    try {
+      possibleDuplicates = await findSimilarPages([title, content].filter(Boolean).join("\n"));
+    } catch {
+      // best-effort -- see comment above
+    }
+  }
+
   // Deterministic (no-LLM, no-mem0) related-page detection -- see
   // linking.js header comment and Notion plan page (entity_id:
   // plan-notion-autolink-heuristic). Best-effort: a failure here (e.g.
@@ -190,7 +235,12 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
     );
   }
 
-  return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError, linkCandidates, autoRelations };
+  // Embed-on-write (Phase 2) -- fire-and-forget, never awaited: this text
+  // is already fully in hand here (unlike doUpdatePage, which has to
+  // re-read the page), so no extra Notion round trip is needed to embed it.
+  triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") });
+
+  return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError, linkCandidates, autoRelations, possibleDuplicates };
 }
 
 // Sequential batch runner, mimicking Promise.allSettled's per-item
@@ -460,6 +510,12 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     const changelogError = await appendChangelogEntry(page_id, results.join("; "));
     if (changelogError) results.push(`(\u26a0\ufe0f changelog entry not recorded: ${changelogError})`);
   }
+  // Embed-on-write (Phase 2) -- fire-and-forget, never awaited. Skipped when
+  // archiving (the page is no longer relevant to search/dedup) or when
+  // nothing actually changed (results is empty).
+  if (results.length && archived !== true) {
+    triggerEmbedForPage(page_id);
+  }
   return results;
 }
 
@@ -577,7 +633,7 @@ export function register(server) {
 
   server.tool(
     "notion_find",
-    "DOES: Find pages or databases in your Notion workspace by keyword search or recent edit history, consolidating notion_search and notion_list into one tool. Mode 'search' looks up pages/databases by keyword query; mode 'recent' lists pages/databases sorted by most recently edited first. Use this instead of calling notion_search or notion_list separately.\nRULE for the calling model: use this only for a single, targeted lookup. If you'll need to find and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_find and notion_read manually.",
+    "DOES: Find pages or databases in your Notion workspace by keyword search or recent edit history, consolidating notion_search and notion_list into one tool. Mode 'search' looks up pages/databases by keyword query, then reranks page results by semantic similarity to the query (best-effort -- falls back to Notion's own keyword order for any page not yet embedded). Mode 'recent' lists pages/databases sorted by most recently edited first. Use this instead of calling notion_search or notion_list separately.\nRULE for the calling model: use this only for a single, targeted lookup. If you'll need to find and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_find and notion_read manually.",
     {
       mode:        z.enum(["search", "recent"]).describe("'search' looks up pages/databases by keyword query. 'recent' lists pages/databases sorted by most recently edited, no query needed — use this for 'what's new' / 'get the latest entry' asks."),
       query:       z.string().optional().describe("Search query string. Required when mode is 'search', ignored for 'recent'."),
@@ -594,7 +650,47 @@ export function register(server) {
         if (filter_type) body.filter = { value: filter_type, property: "object" };
         const data = await notionRequest("/search", { method: "POST", body });
         if (!data.results?.length) return { content: [{ type: "text", text: "No results found." }] };
-        const lines = data.results.map((r) => {
+
+        // Phase 2 semantic rerank (2026-09-27 decision) -- reorders the page
+        // results by cosine similarity to the query, on top of Notion's own
+        // keyword match. Best-effort and additive: falls back silently to
+        // Notion's original order if embeddings aren't configured or a page
+        // hasn't been embedded yet (see notion_page_embeddings' lazy-backfill
+        // contract). Slots into this existing mode rather than a new tool,
+        // per the Phase 2 decision to keep the Phase 1 13->5 consolidation intact.
+        let orderedResults = data.results;
+        try {
+          const pageResults = data.results.filter((r) => r.object === "page");
+          if (pageResults.length) {
+            const pageIds = pageResults.map((r) => r.id);
+            const embeddings = await getEmbeddingsForPageIds(pageIds);
+            // Lazy backfill (2026-09-27 decision): a page touched by a search
+            // but missing an embedding gets queued for embedding now (from its
+            // title -- full content is embedded properly next time it's
+            // created/updated), so a future search over it can be reranked.
+            // Fire-and-forget, never blocks this reply.
+            for (const r of pageResults) {
+              if (!embeddings.has(r.id)) triggerNotionEmbed({ page_id: r.id, content: notionPageTitle(r) });
+            }
+            if (embeddings.size) {
+              const queryEmbedding = await embedQuery(query);
+              const scored = [];
+              const unscored = [];
+              for (const r of data.results) {
+                const emb = r.object === "page" ? embeddings.get(r.id) : undefined;
+                if (emb) scored.push({ r, distance: cosineDistance(queryEmbedding, emb) });
+                else unscored.push(r);
+              }
+              scored.sort((a, b) => a.distance - b.distance);
+              orderedResults = [...scored.map((s) => s.r), ...unscored];
+            }
+          }
+        } catch {
+          // best-effort -- fall back to Notion's own order (orderedResults
+          // already defaulted to data.results above)
+        }
+
+        const lines = orderedResults.map((r) => {
           const title = r.object === "page"
             ? notionPageTitle(r)
             : (notionRichTextToString(r.title) || "(untitled)");
