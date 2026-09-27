@@ -5,8 +5,8 @@
 
 import { z } from "zod";
 import { mem0Request } from "../mem/client.js";
-import { notionRequest, parseRelationBlocks, queryAllIndexEntries } from "../notion/client.js";
-import { findPageByEntityId, doCreatePage, doUpdatePage, replaceSyncedRange } from "../notion/tools.js";
+import { notionRequest, parseRelationBlocks, queryAllIndexEntries, findPageByEntityId } from "../notion/client.js";
+import { doCreatePage, doUpdatePage, replaceSyncedRange } from "../notion/tools.js";
 import { MEM0_USER_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 
 const MEM0_ENTITY_PREFIX = "mem0:";
