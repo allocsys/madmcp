@@ -75,16 +75,10 @@ export const NOTION_INDEX_DATABASE_ID = process.env.NOTION_INDEX_DATABASE_ID || 
 // as NOTION_INDEX_PAGE_ID above.
 export const NOTION_SYNC_PARENT_PAGE_ID = process.env.NOTION_SYNC_PARENT_PAGE_ID || "3a045572-b580-8007-b622-c120958557bf";
 
-// Fuzzy-dedup similarity threshold for connectors/notion/embed_queries.js's
-// findSimilarPages (Phase 2 decision -- see plan-madmcp-notion-overhaul's
-// Finding #5 on Notion). 0.15 was a deliberately conservative starting guess
-// at launch, never tuned against real duplicate/non-duplicate distances.
-// Override via env var to retune without a code change -- findSimilarPages
-// also logs every hit's distance with a [notion-dedup] prefix, so real usage
-// builds up a distribution to calibrate this against over time (cross-check
-// against the two known real-duplicate pairs recorded on the plan page:
-// the "Job Requirement: ... Liliana Model" pages and the
-// "plan-madmcp-code-graph-tool" pages).
+// Fuzzy-dedup threshold for findSimilarPages (Finding #5.2) -- was
+// hardcoded and never tuned. Override via env var; findSimilarPages logs
+// every hit's distance with a [notion-dedup] prefix so real usage can
+// calibrate it.
 export const NOTION_DEDUP_MAX_DISTANCE = Number(process.env.NOTION_DEDUP_MAX_DISTANCE) || 0.15;
 
 export const MEM0_API_KEY   = process.env.MEM0_API_KEY;
