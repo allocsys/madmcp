@@ -608,14 +608,15 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Uses a fixed global checkpoint entity ('checkpoint-latest'). 'save' fully rewrites the stored note; 'load' retrieves it. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
       action: z.enum(["save", "load"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them"),
       notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
+      key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
-    async ({ action, notes }) => {
+    async ({ action, notes, key }) => {
       try {
-        const text = await doCheckpoint({ action, notes });
+        const text = await doCheckpoint({ action, notes, key });
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
