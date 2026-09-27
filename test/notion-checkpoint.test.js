@@ -17,6 +17,19 @@
 // for real -- driving them purely through canned notionRequest responses, the
 // same way the real Notion API would.
 //
+// 2026-09-27 update: findPageByEntityId moved from tools.js INTO client.js
+// (Phase 1C layering fix). That reintroduces the exact intra-module hazard
+// described above, but scoped to client.js itself this time --
+// findPageByEntityId's own call to notionRequest is now a same-file
+// reference, which plain `notionRequest: vi.fn()` below does NOT intercept.
+// Fixed via clientInternals (see client.js's own comment on it): the mock
+// factory below also overrides clientInternals.notionRequest with the SAME
+// vi.fn() used for the notionRequest export, so any client.js-internal
+// caller going through clientInternals.notionRequest hits the same mock as
+// everything else, and every existing
+// `client.notionRequest.mockImplementation(...)` call in this file keeps
+// configuring both at once.
+//
 // 2026-09-04: updated to the dedicated checkpoint marker convention
 // (buildCheckpointStartText/buildCheckpointEndText/findCheckpointRange) --
 // doCheckpoint no longer touches the mem0 sync markers at all (see
@@ -31,9 +44,23 @@ import { buildCheckpointStartText, buildCheckpointEndText } from "../connectors/
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
   const actual = await importOriginal();
+  const mockedNotionRequest = vi.fn();
+  // MUTATE actual.clientInternals in place -- do NOT build a new object and
+  // return it as a replacement export. findPageByEntityId (defined in
+  // client.js) references the module-local `clientInternals` binding
+  // directly; that binding always resolves to the ORIGINAL object created
+  // when the real client.js loaded, regardless of what this factory returns
+  // as the mocked module's own `clientInternals` export -- returning a new
+  // object here would be invisible to findPageByEntityId, the exact same
+  // intra-module-reference trap this file's header comment describes, one
+  // layer deeper. Mutating the real object's notionRequest property works
+  // because findPageByEntityId does a property lookup (clientInternals.
+  // notionRequest) at call time, and property lookups see mutations to the
+  // object they already hold a reference to.
+  actual.clientInternals.notionRequest = mockedNotionRequest;
   return {
     ...actual,
-    notionRequest: vi.fn(),
+    notionRequest: mockedNotionRequest,
   };
 });
 
