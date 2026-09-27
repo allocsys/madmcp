@@ -824,7 +824,7 @@ export function register(server) {
       // Changelog entries (gap #4) are kept out of the normal content view --
       // they're an operational log, not page content -- surfaced instead via
       // notion_get_page_history. Filtered only from what's *shown* here, not
-      | // from the raw block count, since they still occupy real block slots.
+      // from the raw block count, since they still occupy real block slots.
       const blocks = allBlocks.filter((b) => !(b.type === "paragraph" && isChangelogEntryText(notionRichTextToString(b.paragraph?.rich_text || []))));
       const changelogCount = allBlocks.length - blocks.length;
       const content  = notionBlocksToText(blocks);
