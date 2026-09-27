@@ -65,6 +65,22 @@ function sliceFileContent(content, path, { char_offset, char_limit }) {
   return { content: [{ type: "text", text: header + slice }] };
 }
 
+// Slicing logic behind read_file's optional line_start/line_end -- lets a
+// `map` ("L{start}-{end}") or `search_code` (":{line}") result be read
+// directly by line number instead of guessing a char_offset to reach the
+// same spot. Computed fresh from the fetched content every call, so it
+// can't go stale relative to whatever line numbers a prior map/search
+// query returned.
+function sliceFileContentByLine(content, path, { line_start, line_end }) {
+  const lines = content.split("\n");
+  const total = lines.length;
+  const start = Math.max(1, line_start);
+  const end   = Math.min(total, line_end ?? start + 200);
+  const slice = lines.slice(start - 1, end).join("\n");
+  const header = `[File: ${path} | Total lines: ${total} | Showing: L${start}-${end}]\n\n`;
+  return { content: [{ type: "text", text: header + slice }] };
+}
+
 export function register(server) {
 
   server.tool(
