@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// connectors/github/clone_token.js — get_repo_clone_token tool.
+// connectors/github/clone_token.js — gh_token tool.
 // See app_auth.js's file header for the full design rationale (why this
 // exists, why the token has to pass through the calling model, why it's
 // NOT cached server-side -- every call mints a fresh one-time token).
@@ -11,7 +11,7 @@ import { getCloneToken } from "./app_auth.js";
 
 export function register(server) {
   server.tool(
-    "get_repo_clone_token",
+    "gh_token",
     "DOES: Mint a fresh, single-use, single-repo, READ-AND-WRITE GitHub token (upgraded 2026-09-01 from read-only, at the repo owner's explicit request) for cloning AND pushing to a PRIVATE repo, plus the exact `git clone` command to run with it.\n" +
     "RULE: PUBLIC repo -> plain `git clone https://github.com/{owner}/{repo}.git` still works with no token for read access -- github.com/codeload.github.com/raw.githubusercontent.com are already on the sandbox's network allowlist. Use this tool instead when you need a credential that can PUSH, even to a public repo, since the sandbox has none by default.\n" +
     "RULE: every call mints a brand-new token -- there is no server-side reuse, so calling this again for the same repo costs a fresh mint each time.\n" +

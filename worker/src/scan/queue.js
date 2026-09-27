@@ -42,7 +42,7 @@ const POLL_INTERVAL_MS = 5000;
 const RESOLVE_EXTENSIONS = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rb'];
 
 // clone tokens are short-lived and per-request (minted by madmcp via
-// get_repo_clone_token) and are NOT persisted to scan_jobs. They're stashed
+// gh_token) and are NOT persisted to scan_jobs. They're stashed
 // here keyed by job id so the worker loop can pick them up when it processes
 // the job it was just asked to run. If the process restarts before that
 // happens, a recovered queued job falls back to a public (unauthenticated)
