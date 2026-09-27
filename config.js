@@ -438,10 +438,10 @@ export const EDITOR_RISK_FLAG_THRESHOLD = Number.isNaN(_editorRiskFlagThresholdP
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
-// repo_map worker (worker/ subfolder, deployed separately on Railway) --
+// repo_map worker (worker/ subfolder, deployed separately on Render) --
 // madmcp talks to it as a client over HTTP, authenticated with a shared
 // secret (worker/src/auth.js expects "Authorization: Bearer <secret>").
-// Not set until the Railway service is actually deployed (see checkpoint TODO);
+// Not set until the Render service is actually deployed (see checkpoint TODO);
 // map.query/map.index tools fail with a clear config error until both
 // of these are set, same pattern as every other optional connector above.
 export const REPO_MAP_WORKER_URL = process.env.REPO_MAP_WORKER_URL;
