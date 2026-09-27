@@ -98,7 +98,7 @@ export function register(server) {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
       path:        z.string().describe("File path within the repo, e.g. 'src/server.js'"),
-      ref:         z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      ref:         z.string().describe("Branch, tag, or commit SHA"),
       char_offset: z.number().optional().describe("Character offset to start reading from. Omit for default behavior (full file, or first chunk of a large one)."),
       char_limit:  z.number().optional().describe("Maximum number of characters to return (default: 20000 when char_offset/char_limit is used, max: 100000). Ignored if both char_offset and char_limit are omitted."),
       line_start:  z.number().optional().describe("1-indexed line number to start reading from -- pass this straight from a `map` result's \"L{start}-{end}\" or a `search_code` result's \":{line}\" instead of computing a char_offset. Takes priority over char_offset/char_limit if both are given."),
@@ -122,10 +122,10 @@ export function register(server) {
       owner: z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:  z.string().describe("Repository name"),
       path:  z.string().optional().describe("Directory path within the repo (default: repo root)"),
-      ref:   z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      ref:   z.string().describe("Branch, tag, or commit SHA"),
     },
     async ({ owner = DEFAULT_OWNER, repo, path = "", ref }) => {
-      const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+      const query = `?ref=${encodeURIComponent(ref)}`;
       const data  = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
       const items = Array.isArray(data) ? data : [data];
       const lines = items.map((item) => `${item.type === "dir" ? "📁" : "📄"} ${item.path}`);
@@ -143,20 +143,14 @@ export function register(server) {
     {
       owner: z.string().describe("Repository owner (user or org)"),
       repo:  z.string().describe("Repository name"),
-      ref:   z.string().optional().describe("Branch, tag, or commit SHA (default: repo default branch)"),
+      ref:   z.string().describe("Branch, tag, or commit SHA"),
     },
     async ({ owner, repo, ref }) => {
       let treeSha;
-      if (ref) {
-        try {
-          const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
-          treeSha = refData.object.sha;
-        } catch { treeSha = ref; }
-      } else {
-        const repoData   = await githubRequest(`/repos/${owner}/${repo}`);
-        const branchData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${repoData.default_branch}`);
-        treeSha = branchData.object.sha;
-      }
+      try {
+        const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+        treeSha = refData.object.sha;
+      } catch { treeSha = ref; }
       const data  = await githubRequest(`/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`);
       const lines = data.tree.map((item) => `${item.type === "tree" ? "📁" : "📄"} ${item.path}`);
       const note  = data.truncated ? "\n\n⚠️ Tree was truncated (repo too large)." : "";
