@@ -278,19 +278,31 @@ const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3"
 // not be found; treated as not-found (append fresh range) rather than a
 // silent corruption risk, same reasoning as findSyncRange's unterminated-
 // range case.
-export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+// Generic marker-range replace -- shared logic behind replaceSyncedRange
+// (below) and replaceCheckpointRange (further down this file). Both
+// maintain a marker-delimited block range (start marker carrying a
+// timestamp / content / end marker) and, on a re-write, only ever touch
+// blocks strictly between the two markers. They differ only in which
+// marker convention they read/write (client.js's sync vs. checkpoint
+// markers) and whether an unchanged timestamp should skip the write
+// entirely (sync: yes, avoids no-op rewrite + changelog spam; checkpoint:
+// no, a save is meant to reflect "now" and has no meaningful "already up
+// to date" case) -- both differences are parameterized here rather than
+// duplicating this whole read/delete/insert/patch sequence twice, which is
+// what this codebase did until 2026-09-27.
+async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged }) {
   const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
   const blocks = blocksData.results || [];
-  const range = findSyncRange(blocks);
+  const range = findRange(blocks);
 
   if (!range) {
-    const children = buildSyncRangeBlocks({ synced_at, contentLines });
+    const children = buildRangeBlocks({ timestamp, contentLines });
     await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
     return { action: "created", blockCount: children.length };
   }
 
-  if (range.synced_at === synced_at) {
-    return { action: "skipped", reason: `already up to date (mem0_synced_at: ${synced_at})` };
+  if (skipIfUnchanged && getTimestamp(range) === timestamp) {
+    return { action: "skipped", reason: `already up to date (timestamp: ${timestamp})` };
   }
 
   // Delete every block strictly between the markers -- never the markers
@@ -314,10 +326,26 @@ export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
   // same single-block PATCH doUpdatePage uses for the status marker.
   await notionRequest(`/blocks/${range.startBlockId}`, {
     method: "PATCH",
-    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildSyncStartText(synced_at) } }] } },
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildStartText(timestamp) } }] } },
   });
 
-  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousSyncedAt: range.synced_at };
+  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousTimestamp: getTimestamp(range) };
+}
+
+// Thin wrapper over replaceMarkerRange above -- see its comment for the
+// shared mechanics; this just supplies the sync-marker functions and the
+// skip-if-unchanged behavior, and maps the generic previousTimestamp field
+// back to previousSyncedAt for existing callers (notion_sync_content).
+export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+  const result = await replaceMarkerRange({
+    page_id, contentLines, timestamp: synced_at,
+    findRange: findSyncRange,
+    getTimestamp: (range) => range.synced_at,
+    buildRangeBlocks: ({ timestamp, contentLines }) => buildSyncRangeBlocks({ synced_at: timestamp, contentLines }),
+    buildStartText: buildSyncStartText,
+    skipIfUnchanged: true,
+  });
+  return result.action === "updated" ? { ...result, previousSyncedAt: result.previousTimestamp } : result;
 }
 
 // Best-effort changelog append (gap #4) -- swallows its own errors rather
