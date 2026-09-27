@@ -2,7 +2,7 @@
 // test/github-clone-token.test.js
 //
 // Direct unit coverage for connectors/github/clone_token.js (the
-// get_repo_clone_token tool), previously untested. Covers:
+// gh_token tool), previously untested. Covers:
 //   - default owner substitution (DEFAULT_OWNER from config.js)
 //   - the exact git-clone URL / command format returned to the caller
 //   - error passthrough when getCloneToken() rejects (e.g. App not
