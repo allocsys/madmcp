@@ -15,18 +15,18 @@ import {
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
 import { triggerNotionEmbed } from "./embed_client.js";
-import { findSimilarPages, getEmbeddingsForPageIds, cosineDistance } from "./embed_queries.js";
-import { embedQuery } from "../repomap/embed.js";
+import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 
 // Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
-// current title+content and fires it at the embed-on-write endpoint. Not
-// awaited by callers (doCreatePage has the text already in hand and embeds
-// it directly without this helper; doUpdatePage only ever sees partial
-// diffs -- append_content, a replacement, a title change -- so it re-reads
-// the full page here rather than embedding a partial/stale view of it).
-// Swallows every failure, same fire-and-forget contract as
-// triggerNotionEmbed itself -- a failed re-embed just leaves the page
-// un-reranked/un-deduped-by-similarity until its next successful touch.
+// current title+content and fires it at the embed-on-write endpoint.
+// Awaited by its caller (doUpdatePage) -- see the 2026-09-27 post-merge
+// finding #2 (race condition) on the plan-madmcp-notion-overhaul Notion
+// page: within a single batch call, an unawaited embed could still be in
+// flight when a later item's fuzzy-dedup check queries Neon, missing a
+// duplicate it should have caught. Awaiting here closes that window for
+// same-batch update-then-create/update sequences. triggerNotionEmbed
+// itself never throws (see embed_client.js), so awaiting it adds latency
+// but never risk of failing the update this is attached to.
 async function triggerEmbedForPage(page_id) {
   try {
     const [page, blocksData] = await Promise.all([
@@ -35,9 +35,10 @@ async function triggerEmbedForPage(page_id) {
     ]);
     const title = notionPageTitle(page);
     const text = notionBlocksToText(blocksData.results || []);
-    triggerNotionEmbed({ page_id, content: [title, text].filter(Boolean).join("\n") });
+    await triggerNotionEmbed({ page_id, content: [title, text].filter(Boolean).join("\n") });
   } catch {
-    // best-effort -- see comment above
+    // best-effort -- see comment above (covers the re-read failing; the
+    // embed call itself already swallows its own failures internally)
   }
 }
 
@@ -235,10 +236,14 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
     );
   }
 
-  // Embed-on-write (Phase 2) -- fire-and-forget, never awaited: this text
-  // is already fully in hand here (unlike doUpdatePage, which has to
-  // re-read the page), so no extra Notion round trip is needed to embed it.
-  triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") });
+  // Embed-on-write (Phase 2) -- awaited (2026-09-27 race-condition fix,
+  // see triggerEmbedForPage's header comment): closes the window where a
+  // later item in the same notion_create batch runs its fuzzy-dedup check
+  // before this page's embedding has landed in Neon. This text is already
+  // fully in hand here (unlike doUpdatePage, which has to re-read the
+  // page), so no extra Notion round trip is needed to embed it -- the only
+  // added cost is waiting on the worker+Gemini call itself.
+  await triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") });
 
   return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError, linkCandidates, autoRelations, possibleDuplicates };
 }
@@ -510,11 +515,14 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     const changelogError = await appendChangelogEntry(page_id, results.join("; "));
     if (changelogError) results.push(`(\u26a0\ufe0f changelog entry not recorded: ${changelogError})`);
   }
-  // Embed-on-write (Phase 2) -- fire-and-forget, never awaited. Skipped when
-  // archiving (the page is no longer relevant to search/dedup) or when
-  // nothing actually changed (results is empty).
+  // Embed-on-write (Phase 2) -- awaited (see triggerEmbedForPage's header
+  // comment re: the 2026-09-27 race-condition fix), so callers that chain
+  // an update immediately before a dedup-sensitive create in the same
+  // batch see this embedding already landed. Skipped when archiving (the
+  // page is no longer relevant to search/dedup) or when nothing actually
+  // changed (results is empty).
   if (results.length && archived !== true) {
-    triggerEmbedForPage(page_id);
+    await triggerEmbedForPage(page_id);
   }
   return results;
 }
@@ -662,27 +670,27 @@ export function register(server) {
         try {
           const pageResults = data.results.filter((r) => r.object === "page");
           if (pageResults.length) {
-            const pageIds = pageResults.map((r) => r.id);
-            const embeddings = await getEmbeddingsForPageIds(pageIds);
+            // Fix #4 (2026-09-27 post-merge finding): reuse embed_queries.js's
+            // rerankByQuery instead of reimplementing the same scored/unscored
+            // split inline -- this was previously dead code with its own
+            // duplicated (and untested-in-production) copy of the same logic
+            // living right here.
+            const candidates = data.results.map((r) => ({ pageId: r.object === "page" ? r.id : null, result: r }));
+            const reranked = await rerankByQuery(query, candidates);
+            orderedResults = reranked.map((c) => c.result);
             // Lazy backfill (2026-09-27 decision): a page touched by a search
-            // but missing an embedding gets queued for embedding now (from its
-            // title -- full content is embedded properly next time it's
-            // created/updated), so a future search over it can be reranked.
-            // Fire-and-forget, never blocks this reply.
-            for (const r of pageResults) {
-              if (!embeddings.has(r.id)) triggerNotionEmbed({ page_id: r.id, content: notionPageTitle(r) });
-            }
-            if (embeddings.size) {
-              const queryEmbedding = await embedQuery(query);
-              const scored = [];
-              const unscored = [];
-              for (const r of data.results) {
-                const emb = r.object === "page" ? embeddings.get(r.id) : undefined;
-                if (emb) scored.push({ r, distance: cosineDistance(queryEmbedding, emb) });
-                else unscored.push(r);
+            // but still unscored (no embedding on file yet) gets queued for
+            // embedding now (from its title -- full content is embedded
+            // properly next time it's created/updated), so a future search
+            // over it can be reranked. Intentionally NOT awaited here, unlike
+            // the create/update embed calls -- this backfill is for FUTURE
+            // searches, not consumed by this reply, so awaiting it would only
+            // add latency (one Gemini+worker round trip per un-embedded
+            // result) without changing this call's own results.
+            for (const c of reranked) {
+              if (c.pageId && c.distance === undefined) {
+                triggerNotionEmbed({ page_id: c.pageId, content: notionPageTitle(c.result) });
               }
-              scored.sort((a, b) => a.distance - b.distance);
-              orderedResults = [...scored.map((s) => s.r), ...unscored];
             }
           }
         } catch {
@@ -867,7 +875,20 @@ export function register(server) {
           const v = r.value;
           if (v.skipped) return `\u23ed [${i}] "${label}" \u2014 skipped, entity_id "${v.entity_id}" already exists (id: ${v.existingId}, title: "${v.existingTitle}").`;
           const idxNote = v.indexError ? ` \u26a0\ufe0f index record failed: ${v.indexError}` : "";
-          return `\u2713 [${i}] "${label}" \u2014 id: ${v.id}, url: ${v.url}${idxNote}`;
+          // Phase 2 fix (2026-09-27, post-merge finding #1): possibleDuplicates
+          // and autoRelations were computed by doCreatePage and returned, but
+          // silently dropped here instead of ever reaching the caller -- the
+          // whole point of the fuzzy-dedup check is defeated if its result
+          // never surfaces. Both are best-effort/non-blocking signals, so
+          // they're appended as extra info lines rather than changing whether
+          // this line counts as a success.
+          const dupNote = v.possibleDuplicates?.length
+            ? `\n    \u26a0\ufe0f possible duplicate(s) (Phase 2 fuzzy dedup -- review before keeping both): ${v.possibleDuplicates.map((d) => `${d.pageId} (distance ${d.distance.toFixed(3)})`).join(", ")}`
+            : "";
+          const relNote = v.autoRelations?.length
+            ? `\n    \ud83d\udd17 auto-linked to ${v.autoRelations.length} related page(s): ${v.autoRelations.map((rel) => `${rel.to_entity_id} (${rel.relation})`).join(", ")}`
+            : "";
+          return `\u2713 [${i}] "${label}" \u2014 id: ${v.id}, url: ${v.url}${idxNote}${dupNote}${relNote}`;
         });
         const created = results.filter((r) => r.status === "fulfilled" && !r.value.skipped).length;
         return { content: [{ type: "text", text: `${created}/${items.length} page(s) created.\n\n${lines.join("\n")}` }] };
