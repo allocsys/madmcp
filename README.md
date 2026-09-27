@@ -260,9 +260,15 @@ Workers: `cf_workers_list`, `cf_workers_get_worker`, `cf_workers_get_worker_code
 Observability: `cf_workers_observability_query/keys/values/compare`
 
 ### Notion
-`notion_search`, `notion_list`, `notion_get_page`, `notion_get_page_history`, `notion_create_page`,
-`notion_create_pages_batch`, `notion_create_database`, `notion_get_database`, `notion_query_database`,
-`notion_update_page`, `notion_update_pages_batch`, `notion_update_database`, `notion_sync_content`
+`notion_find`, `notion_read`, `notion_create`, `notion_update`, `notion_sync_content`,
+`notion_index_entries_add_batch` — consolidated from a former 12-tool surface
+(`notion_search`/`notion_list` → `notion_find`; `notion_get_page`/`notion_get_page_history`/
+`notion_get_database`/`notion_query_database` → `notion_read`; `notion_create_page`/
+`notion_create_pages_batch`/`notion_create_database` → `notion_create`; `notion_update_page`/
+`notion_update_pages_batch`/`notion_update_database` → `notion_update`), each now taking a
+`type`/`mode` arg to select page vs. database behavior. `notion_index_entries_add_batch` is a
+separate backfill/repair tool for the entity_id → page_id dedup index, not part of the
+consolidation.
 
 ### Mem0
 `mem0_add`, `mem0_add_batch`, `mem0_get`, `mem0_get_history`, `mem0_list`, `mem0_search`,
