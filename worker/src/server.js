@@ -92,6 +92,9 @@ app.post('/notion/embed', async (req, res) => {
   }
 });
 
+// Trivial change (2026-09-27, attempt 2) to confirm Render auto-deploy
+// after deleting and recreating the repo-map-worker Blueprint pointed at
+// worker/render.yaml.
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 const port = process.env.PORT || 8080;
