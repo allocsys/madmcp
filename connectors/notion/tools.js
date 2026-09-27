@@ -807,6 +807,64 @@ export function register(server) {
   );
 
   server.tool(
+    "notion_create",
+    "DOES: Create one or more Notion pages, or one or more Notion databases, consolidating notion_create_page, notion_create_pages_batch, and notion_create_database into a single tool. `type: 'page'` creates page(s) under `items` (parent_id/parent_type/title/content/entity_id/status/relations/one_off/properties per item -- same fields and dedup behavior as notion_create_page). `type: 'database'` creates database(s) under `items` (parent_page_id/title/properties per item). Pass a single-element `items` array for a single create, or multiple for a batch -- both go through the same call, so there's no separate 'batch' tool anymore. Each item is created independently; one item failing does not block the others.\nRULE for the calling model: for `type: 'page'`, pass entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable) -- omitting both is refused, same as notion_create_page.",
+    {
+      type:  z.enum(["page", "database"]).describe("'page' creates one or more Notion pages. 'database' creates one or more Notion databases."),
+      items: z.array(z.object({
+        parent_id:      z.string().optional().describe("type 'page' only: ID of the parent page or database"),
+        parent_type:    z.enum(["page", "database"]).optional().describe("type 'page' only: whether the parent is a page or a database"),
+        parent_page_id: z.string().optional().describe("type 'database' only: ID of the parent page to create the database under"),
+        title:          z.string().describe("Title of the new page or database"),
+        content:        z.string().optional().describe("type 'page' only: plain text content to add as paragraph blocks"),
+        entity_id:      z.string().optional().describe("type 'page' only: optional stable identifier for the thing this page represents (e.g. 'pr-workers-sdk-14714'). BEFORE inventing a new one, use notion_find for an existing page on the same topic -- entity_id dedup only catches an EXACT marker match. If a page already exists with this entity_id, this will NOT create a duplicate -- it reports the existing page's id/url instead, so you can call notion_update_page on it. Stored as a visible '\ud83d\udd11 entity_id: ...' marker paragraph."),
+        status:         z.enum(STATUS_VALUES).optional().describe("type 'page' only: optional lifecycle status (open/resolved/superseded), stored as a visible '\ud83c\udff7\ufe0f status: ...' marker paragraph."),
+        relations:      z.array(z.object({
+          to_entity_id: z.string().describe("The entity_id of the other tracked page this one relates to"),
+          relation:     z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' -- free text"),
+        })).optional().describe("type 'page' only: optional list of outgoing relations from this page's entity to others."),
+        one_off:        z.boolean().optional().describe("type 'page' only: set true to explicitly opt this page OUT of entity_id tracking -- required if entity_id is omitted."),
+        properties:     z.record(z.any()).optional().describe("For type 'page' with parent_type 'database': database column VALUES to set (see notion_get_database/notion_read for schema). For type 'database': the property SCHEMA to create it with, e.g. { \"Name\": { \"title\": {} }, \"Status\": { \"select\": { \"options\": [{ \"name\": \"open\" }] } } }."),
+      })).min(1).describe("List of pages or databases to create (single-element array for a single create)."),
+    },
+    async ({ type, items }) => {
+      if (type === "page") {
+        const results = await runSequentially(items, (item) => doCreatePage({
+          parent_id: item.parent_id, parent_type: item.parent_type, title: item.title, content: item.content,
+          entity_id: item.entity_id, status: item.status, relations: item.relations, one_off: item.one_off, properties: item.properties,
+        }));
+        const lines = results.map((r, i) => {
+          const label = items[i].title;
+          if (r.status === "rejected") return `\u2717 [${i}] "${label}" \u2014 error: ${r.reason?.message || r.reason}`;
+          const v = r.value;
+          if (v.skipped) return `\u23ed [${i}] "${label}" \u2014 skipped, entity_id "${v.entity_id}" already exists (id: ${v.existingId}, title: "${v.existingTitle}").`;
+          const idxNote = v.indexError ? ` \u26a0\ufe0f index record failed: ${v.indexError}` : "";
+          return `\u2713 [${i}] "${label}" \u2014 id: ${v.id}, url: ${v.url}${idxNote}`;
+        });
+        const created = results.filter((r) => r.status === "fulfilled" && !r.value.skipped).length;
+        return { content: [{ type: "text", text: `${created}/${items.length} page(s) created.\n\n${lines.join("\n")}` }] };
+      } else if (type === "database") {
+        const results = await runSequentially(items, async (item) => {
+          const data = await notionRequest("/databases", {
+            method: "POST",
+            body: { parent: { type: "page_id", page_id: item.parent_page_id }, title: [{ type: "text", text: { content: item.title } }], properties: item.properties },
+          });
+          return { id: data.id, url: data.url };
+        });
+        const lines = results.map((r, i) => {
+          const label = items[i].title;
+          if (r.status === "rejected") return `\u2717 [${i}] "${label}" \u2014 error: ${r.reason?.message || r.reason}`;
+          return `\u2713 [${i}] "${label}" \u2014 id: ${r.value.id}, url: ${r.value.url}`;
+        });
+        const created = results.filter((r) => r.status === "fulfilled").length;
+        return { content: [{ type: "text", text: `${created}/${items.length} database(s) created.\n\n${lines.join("\n")}` }] };
+      } else {
+        return { content: [{ type: "text", text: `Error: invalid type "${type}" (expected "page" or "database").` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
     "notion_get_page",
     "DOES: gets a Notion page's properties and content blocks.\nRULE for the calling model: only call this directly for a single, specifically-named page whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_agent instead of looping notion_get_page across pages.",
     {
