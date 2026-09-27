@@ -318,16 +318,10 @@ describe("connectors/github/files.js", () => {
     });
   });
 
+  // NOTE: `branch` is now required (files.js) -- the handler no longer
+  // falls back to a repo-info fetch + repoData.default_branch when it's
+  // omitted, so every call below passes `branch` explicitly.
   describe("rename_file", () => {
-    it("branch is now required (no more implicit repo-default-branch fallback)", () => {
-      // Documents the behavior change: previously an omitted `branch` fell
-      // back to a repo-info fetch + repoData.default_branch. `branch` is now
-      // mandatory at the schema level (files.js), and the handler no longer
-      // performs that fallback fetch at all -- every call below passes
-      // `branch` explicitly.
-      expect(true).toBe(true);
-    });
-
     it("moves a file via blob+tree+commit, adding the new path and removing the old one", async () => {
       readFileViaBlob.mockResolvedValue("moved content\n");
       githubRequest
