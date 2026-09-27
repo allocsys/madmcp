@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { NOTION_TOKEN, NOTION_API, NOTION_VERSION, NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID, GEMINI_NOTION_ROOT_PAGE_ID, NOTION_MIN_REQUEST_INTERVAL_MS, NOTION_MAX_RETRIES, NOTION_RETRY_BASE_MS } from "../../config.js";
+
 import { createThrottle, sleep, defaultRetryDelayMs } from "../shared/rate-limit.js";
 
 // --- Throttle + retry (fix #3, 2026-07-27) ----------------------------------
@@ -87,6 +88,27 @@ export function notionRichTextToString(richText = []) {
 }
 
 // ---------------------------------------------------------------------------
+// Intra-module call indirection (2026-09-27, Phase 1C -- see
+// test/notion-checkpoint.test.js's header comment for the full ESM mocking
+// limitation this works around).
+//
+// vi.mock("./client.js") replaces this module's notionRequest EXPORT for
+// every OTHER module that imports it -- that's how tools.js's calls get
+// mocked in tests today. But a function defined IN THIS FILE that calls the
+// local `notionRequest` declaration directly binds to it at parse time; that
+// reference is never routed through the exported/mocked namespace object, so
+// vi.mock can't intercept it. Any function in this file that calls
+// notionRequest should go through `clientInternals.notionRequest(...)`
+// instead of the bare name -- that's a property lookup resolved at CALL
+// time, which a test's mock factory CAN override (see
+// notion-checkpoint.test.js, which replaces clientInternals.notionRequest
+// with the same vi.fn() used for the notionRequest export, so both stay in
+// sync and existing `client.notionRequest.mockImplementation(...)` calls
+// keep working unchanged).
+export const clientInternals = { notionRequest };
+
+
+// ---------------------------------------------------------------------------
 // Rich-text chunking (2026-07-18, bug found via live sync_mem0_to_notion
 // test -- a 2217-char mem0 memory line was sent as a single rich_text
 // segment and rejected outright by Notion's API, which caps
@@ -149,7 +171,7 @@ export function notionDatabaseTitle(database) {
 // browsing the page (unlike hiding it in a code block), and searchable via
 // notion_search's normal query mechanism, though (same caveat mem0's own
 // tags/entity_id-in-metadata carries) that search is best-effort, not a
-// guaranteed exact-match index -- see findPageByEntityId in tools.js.
+// guaranteed exact-match index -- see findPageByEntityId below.
 const ENTITY_MARKER_PREFIX = "🔑 entity_id:";
 const STATUS_MARKER_PREFIX = "🏷️ status:";
 
@@ -229,37 +251,69 @@ export function parseMarkers(blocks = []) {
   return result;
 }
 
-// Index-entry marker format -- legacy, from when the dedup index lived on a
-// single page (see NOTION_INDEX_DATABASE_ID's comment in config.js for the
-// 2026-07-24 move to a real database). One paragraph block per tracked
-// entity_id: "📇 entity_id | page_id | url". No longer written anywhere in
-// this codebase (queryAllIndexEntries reads the database instead), but left
-// defined in case any external content still uses this format.
-const INDEX_ENTRY_PREFIX = "📇 ";
-const INDEX_TAGS_PREFIX  = "tags:";
+// ---------------------------------------------------------------------------
+// (2026-09-27, Phase 1C cleanup: the old page-based index's marker-format
+// reader/writer -- buildIndexEntryText/parseIndexEntryText, prefix "📇 " --
+// was removed here. It was superseded by the Entity Index DATABASE on
+// 2026-07-24 (see NOTION_INDEX_DATABASE_ID's comment in config.js) and
+// confirmed to have zero remaining call sites anywhere in the repo via
+// search_code before deletion -- nothing writes or reads that text format
+// anymore, so there was no live data left to stay backward-compatible with.
 
-// tags param is optional -- omitted entirely (no 4th segment) for entries
-// that have no tags, rather than writing an empty "tags:" segment, so old
-// entries and untagged entries look identical on the page.
-export function buildIndexEntryText({ entity_id, page_id, url, tags }) {
-  const base = `${INDEX_ENTRY_PREFIX}${entity_id} | ${page_id} | ${url || ""}`;
-  if (!tags || !tags.length) return base;
-  return `${base} | ${INDEX_TAGS_PREFIX}${tags.join(",")}`;
-}
-
-// Backward compatible with the original 3-field format (entity_id | page_id
-// | url) -- a 4th "tags:..." segment is read if present, otherwise tags
-// comes back as an empty array rather than the parse failing.
-export function parseIndexEntryText(text) {
-  if (!text || !text.startsWith(INDEX_ENTRY_PREFIX)) return null;
-  const rest = text.slice(INDEX_ENTRY_PREFIX.length);
-  const parts = rest.split("|").map((s) => (s || "").trim());
-  const [entity_id, page_id, url, tagsField] = parts;
-  if (!entity_id || !page_id) return null;
-  const tags = (tagsField || "").startsWith(INDEX_TAGS_PREFIX)
-    ? tagsField.slice(INDEX_TAGS_PREFIX.length).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
-    : [];
-  return { entity_id, page_id, url, tags };
+// ---------------------------------------------------------------------------
+// Dedup/upsert lookup (2026-07-17, gap #1; database rewrite 2026-07-24 --
+// see mem0 entity_id: madmcp-notion-connector-gaps-roadmap).
+//
+// Lives here rather than in tools.js because it's pure client-layer logic --
+// it only ever calls notionRequest against the index database, nothing
+// tool-specific. Calls go through clientInternals.notionRequest (see that
+// object's own comment above), not the bare notionRequest name, so this
+// stays mockable the same way every other client.js function above it is.
+//
+// FIRST FIX 2026-07-17: the original implementation leaned on notion_search
+// to find candidate pages by entity_id text. Live testing confirmed that's
+// fundamentally broken -- Notion's search index has real lag, and searching
+// for an entity_id string immediately after creating that page (the most
+// common dedup scenario) reliably returns zero results. Fixed by reading a
+// dedicated index page's own blocks directly (uncached, no search lag).
+//
+// SECOND FIX 2026-07-24: the page-based index inherited a new gap it
+// documented at the time -- /blocks/{id}/children pagination caps a single
+// page's readable blocks at 100, so an index page with more than ~100
+// tracked entities would silently stop finding older entries. A real Notion
+// database queried via /databases/{id}/query with a filter on EntityId is
+// just as immediately-consistent (no search-index lag either way, since
+// this never goes through notion_search) but isn't bound by that 100-block
+// limit -- database queries paginate independently of page block counts.
+export async function findPageByEntityId(entity_id) {
+  let rows;
+  try {
+    const data = await clientInternals.notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+      method: "POST",
+      body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
+    });
+    rows = data.results || [];
+  } catch (err) {
+    // Fail loudly rather than silently falling back to nothing found --
+    // silently treating "index unreachable" as "no duplicate exists" would
+    // just reintroduce the exact bug this fix is for.
+    throw new Error(`Notion entity index database (${NOTION_INDEX_DATABASE_ID}) is unreachable, so entity_id dedup can't be verified: ${err.message}. Fix NOTION_INDEX_DATABASE_ID / the database's sharing settings before creating entity-tracked pages.`, { cause: err });
+  }
+  if (!rows.length) return null;
+  const row = rows[0];
+  const page_id = notionRichTextToString(row.properties?.PageId?.rich_text || []);
+  if (!page_id) return null;
+  try {
+    const page = await clientInternals.notionRequest(`/pages/${page_id}`);
+    const blocksData = await clientInternals.notionRequest(`/blocks/${page_id}/children?page_size=20`);
+    const markers = parseMarkers(blocksData.results || []);
+    return { pageId: page_id, title: notionPageTitle(page), url: page.url, markers };
+  } catch {
+    // Stale index row (target page deleted/archived outside these tools) --
+    // treat as not-found so a fresh page can be created, rather than
+    // erroring out on a dangling reference.
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,8 +321,8 @@ export function parseIndexEntryText(text) {
 // paginated. Added 2026-07-24 alongside the page->database dedup-index
 // migration (see config.js's NOTION_INDEX_DATABASE_ID comment) to give
 // callers that need the FULL set of tracked entities -- not a single
-// entity_id lookup (that's findPageByEntityId in tools.js) -- a supported
-// way to read it. Before this, linking.js's findTagOverlapCandidates and
+// entity_id lookup (that's findPageByEntityId above) -- a supported way to
+// read it. Before this, linking.js's findTagOverlapCandidates and
 // sync/mem0_notion.js's readSyncedIndexEntries both kept reading raw blocks
 // off the old page-based index directly instead, which silently stopped
 // reflecting reality the moment writes moved to the database: new entries
@@ -276,6 +330,7 @@ export function parseIndexEntryText(text) {
 // index that could only shrink (relative to ground truth) over time, and
 // broke outright once that old page was archived. Same 10-page/100-row-
 // per-page ceiling as listAllMemories in mem0_notion.js.
+// ---------------------------------------------------------------------------
 export async function queryAllIndexEntries() {
   const PAGE_SIZE = 100;
   const MAX_PAGES = 10;
@@ -284,7 +339,7 @@ export async function queryAllIndexEntries() {
   for (let page = 0; page < MAX_PAGES; page++) {
     const body = { page_size: PAGE_SIZE };
     if (cursor) body.start_cursor = cursor;
-    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
+    const data = await clientInternals.notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
     for (const row of data.results || []) {
       const entity_id = notionRichTextToString(row.properties?.EntityId?.rich_text || []);
       const page_id   = notionRichTextToString(row.properties?.PageId?.rich_text || []);
@@ -367,89 +422,75 @@ export function parseRelationBlocks(blocks = []) {
 }
 
 // ---------------------------------------------------------------------------
-// Synced-range marker convention (2026-07-18, mem0->Notion Sync Tool spec --
-// see mem0 entity_id: mem0-notion-sync-tool-spec, "PROTECTING MANUAL EDITS"
-// section, the one piece this spec flagged as needing real design work
-// since nothing else in this file solves "replace this whole block range"
-// -- doUpdatePage's `replacements` only does single-block exact-text swaps).
+// Marker-range convention, generic (2026-09-27, Phase 1C dedup -- see plan
+// page entity_id: plan-madmcp-notion-overhaul, "PHASE 1C" section).
 //
-// Content written by the sync tool lives between two literal marker blocks:
-//   ⬇️ SYNCED FROM MEM0 (mem0_synced_at: <ISO timestamp>) — DO NOT EDIT BELOW, WILL BE OVERWRITTEN ⬇️
-//   ...synced content blocks...
-//   ⬆️ END SYNCED CONTENT ⬆️
-// Sync logic (replaceSyncedRange, notion/tools.js) only ever touches blocks
-// strictly BETWEEN these two markers -- anything a person adds above the
-// start marker, below the end marker, or as a genuinely separate block
-// elsewhere on the page, is never read or written by the sync tool and
-// survives every future run. The timestamp lives ON the start marker itself
-// (not a separate block) so a re-sync can read the current value and skip
-// the write entirely when the source memory's updated_at hasn't changed --
-// avoiding the no-op rewrite + changelog spam the spec calls out.
-const SYNC_START_PREFIX = "⬇️ SYNCED FROM MEM0 (mem0_synced_at: ";
-const SYNC_START_SUFFIX = ") — DO NOT EDIT BELOW, WILL BE OVERWRITTEN ⬇️";
-const SYNC_END_TEXT     = "⬆️ END SYNCED CONTENT ⬆️";
-
-export function buildSyncStartText(synced_at) {
-  return `${SYNC_START_PREFIX}${synced_at}${SYNC_START_SUFFIX}`;
+// Two callers use the exact same "content lives between a start marker and
+// an end marker, only that inner range is ever deleted/replaced on a
+// re-write" mechanism, differing only in their marker TEXT:
+//   - mem0->Notion sync (2026-07-18, mem0-notion-sync-tool-spec): protects
+//     manual page edits from being clobbered by a re-sync (see original
+//     header comment below, now folded into this one).
+//   - Session checkpoint (2026-09-04 bug fix): originally reused the sync
+//     markers above wholesale, which hardcoded "SYNCED FROM MEM0" text that
+//     was simply wrong for a tool with nothing to do with mem0. Got its own
+//     copy of every marker function instead of a parameterized one -- this
+//     section is that fix, finished: one generic implementation, two call
+//     sites supplying their own marker text.
+//
+// The generic functions below take {startPrefix, startSuffix, endText} to
+// identify which convention they're reading/writing, and use "value" as the
+// generic name for what previously appeared as synced_at (sync) or
+// updated_at (checkpoint) -- both are just "the timestamp/version string
+// embedded in the start marker", read back out on the next call so a caller
+// can compare against what's already there.
+export function buildRangeStartText({ startPrefix, startSuffix, value }) {
+  return `${startPrefix}${value}${startSuffix}`;
 }
 
-function parseSyncStartText(text) {
-  if (!text || !text.startsWith(SYNC_START_PREFIX) || !text.endsWith(SYNC_START_SUFFIX)) return null;
-  return text.slice(SYNC_START_PREFIX.length, text.length - SYNC_START_SUFFIX.length);
-}
-
-export function isSyncEndText(text) {
-  return text === SYNC_END_TEXT;
-}
-
-// Lets a caller build a complete synced range (start marker + content +
-// end marker) as one plain-text blob up front -- e.g. seeding a brand-new
-// page's initial content directly, instead of creating the page empty and
-// then PATCHing the range in via a separate replaceSyncedRange call (which
-// also re-reads the page's blocks first, pointlessly, since a page that
-// was just created can't already have a range on it).
-export function buildSyncEndText() {
-  return SYNC_END_TEXT;
+export function parseRangeStartText(text, { startPrefix, startSuffix }) {
+  if (!text || !text.startsWith(startPrefix) || !text.endsWith(startSuffix)) return null;
+  return text.slice(startPrefix.length, text.length - startSuffix.length);
 }
 
 // Builds the full [start marker, ...content blocks, end marker] block list
-// for a brand-new synced range (page has none yet). contentLines is split
-// into one paragraph block per non-empty line, same convention as every
-// other plain-text content writer in this file.
-export function buildSyncRangeBlocks({ synced_at, contentLines }) {
+// for a brand-new range (page has none yet). contentLines is split into one
+// paragraph block per non-empty line, same convention as every other
+// plain-text content writer in this file.
+export function buildRangeBlocks({ startPrefix, startSuffix, endText, value, contentLines }) {
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  return [textBlock(buildSyncStartText(synced_at)), ...contentBlocks, textBlock(SYNC_END_TEXT)];
+  return [textBlock(buildRangeStartText({ startPrefix, startSuffix, value })), ...contentBlocks, textBlock(endText)];
 }
 
 // Scans a page's top-level blocks (same 100-block-page caveat as
-// parseMarkers/parseRelationBlocks above) for an existing synced range.
-// Returns null if no start marker is found, or a match with block IDs so
-// callers can delete/insert around the range without re-searching by text.
-// A start marker with no matching end marker (page edited unexpectedly, or
-// truncated by the 100-block read) is treated as not-found -- safer to
-// append a fresh range than to guess where an unterminated one ends and
-// risk deleting content past it.
-export function findSyncRange(blocks = []) {
+// parseMarkers/parseRelationBlocks above) for an existing range matching
+// this marker convention. Returns null if no start marker is found, or a
+// match with block IDs so callers can delete/insert around the range
+// without re-searching by text. A start marker with no matching end marker
+// (page edited unexpectedly, or truncated by the 100-block read) is treated
+// as not-found -- safer to append a fresh range than to guess where an
+// unterminated one ends and risk deleting content past it.
+export function findRange(blocks = [], { startPrefix, startSuffix, endText }) {
   let startIdx = -1;
-  let synced_at = null;
+  let value = null;
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     if (b.type !== "paragraph") continue;
     const text = notionRichTextToString(b.paragraph?.rich_text || []);
-    const parsed = parseSyncStartText(text);
-    if (parsed !== null) { startIdx = i; synced_at = parsed; break; }
+    const parsed = parseRangeStartText(text, { startPrefix, startSuffix });
+    if (parsed !== null) { startIdx = i; value = parsed; break; }
   }
   if (startIdx === -1) return null;
   for (let i = startIdx + 1; i < blocks.length; i++) {
     const b = blocks[i];
     if (b.type !== "paragraph") continue;
     const text = notionRichTextToString(b.paragraph?.rich_text || []);
-    if (isSyncEndText(text)) {
+    if (text === endText) {
       return {
-        synced_at,
+        value,
         startBlockId: blocks[startIdx].id,
         endBlockId: blocks[i].id,
-        // Blocks strictly between start and end -- exactly what a re-sync
+        // Blocks strictly between start and end -- exactly what a re-write
         // is allowed to delete/replace.
         innerBlockIds: blocks.slice(startIdx + 1, i).map((bb) => bb.id),
       };
@@ -459,25 +500,55 @@ export function findSyncRange(blocks = []) {
 }
 
 // ---------------------------------------------------------------------------
+// Sync marker convention (2026-07-18, mem0->Notion Sync Tool spec -- see
+// mem0 entity_id: mem0-notion-sync-tool-spec, "PROTECTING MANUAL EDITS"
+// section). Content written by the sync tool lives between:
+//   ⬇️ SYNCED FROM MEM0 (mem0_synced_at: <ISO timestamp>) — DO NOT EDIT BELOW, WILL BE OVERWRITTEN ⬇️
+//   ...synced content blocks...
+//   ⬆️ END SYNCED CONTENT ⬆️
+// Thin wrappers over the generic functions above, supplying this
+// convention's own marker text -- see replaceSyncedRange (tools.js) for the
+// caller that reads/writes this via replaceMarkerRange.
+const SYNC_START_PREFIX = "⬇️ SYNCED FROM MEM0 (mem0_synced_at: ";
+const SYNC_START_SUFFIX = ") — DO NOT EDIT BELOW, WILL BE OVERWRITTEN ⬇️";
+const SYNC_END_TEXT     = "⬆️ END SYNCED CONTENT ⬆️";
+
+export function buildSyncStartText(synced_at) {
+  return buildRangeStartText({ startPrefix: SYNC_START_PREFIX, startSuffix: SYNC_START_SUFFIX, value: synced_at });
+}
+
+export function isSyncEndText(text) {
+  return text === SYNC_END_TEXT;
+}
+
+export function buildSyncEndText() {
+  return SYNC_END_TEXT;
+}
+
+export function buildSyncRangeBlocks({ synced_at, contentLines }) {
+  return buildRangeBlocks({ startPrefix: SYNC_START_PREFIX, startSuffix: SYNC_START_SUFFIX, endText: SYNC_END_TEXT, value: synced_at, contentLines });
+}
+
+export function findSyncRange(blocks = []) {
+  const range = findRange(blocks, { startPrefix: SYNC_START_PREFIX, startSuffix: SYNC_START_SUFFIX, endText: SYNC_END_TEXT });
+  return range ? { synced_at: range.value, startBlockId: range.startBlockId, endBlockId: range.endBlockId, innerBlockIds: range.innerBlockIds } : null;
+}
+
+// ---------------------------------------------------------------------------
 // Checkpoint marker convention (2026-09-04 bug fix -- the checkpoint tool
 // was reusing the mem0 sync markers above, which hardcode "SYNCED FROM
 // MEM0" text that's simply wrong for a tool that has nothing to do with
-// mem0. Same block-range-protection mechanism as the sync markers (start
-// marker / content / end marker, only content strictly between the two is
-// ever deleted/replaced on a re-save) -- that part of the design is sound
-// and worth keeping -- just with wording that describes what actually wrote
-// the content instead of a copy-pasted mem0 label.
+// mem0. Same block-range-protection mechanism as the sync markers -- that
+// part of the design is sound and worth keeping -- just with wording that
+// describes what actually wrote the content instead of a copy-pasted mem0
+// label. Thin wrappers over the generic functions above, same pattern as
+// the sync convention.
 const CHECKPOINT_START_PREFIX = "\u2705 Checkpoint saved with MCP tool call, don't edit manually (updated: ";
 const CHECKPOINT_START_SUFFIX = ")";
 const CHECKPOINT_END_TEXT     = "\u2705 End synced checkpoint";
 
 export function buildCheckpointStartText(updated_at) {
-  return `${CHECKPOINT_START_PREFIX}${updated_at}${CHECKPOINT_START_SUFFIX}`;
-}
-
-function parseCheckpointStartText(text) {
-  if (!text || !text.startsWith(CHECKPOINT_START_PREFIX) || !text.endsWith(CHECKPOINT_START_SUFFIX)) return null;
-  return text.slice(CHECKPOINT_START_PREFIX.length, text.length - CHECKPOINT_START_SUFFIX.length);
+  return buildRangeStartText({ startPrefix: CHECKPOINT_START_PREFIX, startSuffix: CHECKPOINT_START_SUFFIX, value: updated_at });
 }
 
 export function buildCheckpointEndText() {
@@ -488,42 +559,13 @@ export function isCheckpointEndText(text) {
   return text === CHECKPOINT_END_TEXT;
 }
 
-// Mirrors buildSyncRangeBlocks above -- builds a complete checkpoint range
-// (start marker + content + end marker) as one block list, for seeding a
-// brand-new page's initial content in one shot.
 export function buildCheckpointRangeBlocks({ updated_at, contentLines }) {
-  const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  return [textBlock(buildCheckpointStartText(updated_at)), ...contentBlocks, textBlock(CHECKPOINT_END_TEXT)];
+  return buildRangeBlocks({ startPrefix: CHECKPOINT_START_PREFIX, startSuffix: CHECKPOINT_START_SUFFIX, endText: CHECKPOINT_END_TEXT, value: updated_at, contentLines });
 }
 
-// Mirrors findSyncRange above, scanning for the checkpoint markers instead
-// of the mem0 sync markers. Same not-found-on-unterminated-range safety
-// reasoning applies.
 export function findCheckpointRange(blocks = []) {
-  let startIdx = -1;
-  let updated_at = null;
-  for (let i = 0; i < blocks.length; i++) {
-    const b = blocks[i];
-    if (b.type !== "paragraph") continue;
-    const text = notionRichTextToString(b.paragraph?.rich_text || []);
-    const parsed = parseCheckpointStartText(text);
-    if (parsed !== null) { startIdx = i; updated_at = parsed; break; }
-  }
-  if (startIdx === -1) return null;
-  for (let i = startIdx + 1; i < blocks.length; i++) {
-    const b = blocks[i];
-    if (b.type !== "paragraph") continue;
-    const text = notionRichTextToString(b.paragraph?.rich_text || []);
-    if (isCheckpointEndText(text)) {
-      return {
-        updated_at,
-        startBlockId: blocks[startIdx].id,
-        endBlockId: blocks[i].id,
-        innerBlockIds: blocks.slice(startIdx + 1, i).map((bb) => bb.id),
-      };
-    }
-  }
-  return null;
+  const range = findRange(blocks, { startPrefix: CHECKPOINT_START_PREFIX, startSuffix: CHECKPOINT_START_SUFFIX, endText: CHECKPOINT_END_TEXT });
+  return range ? { updated_at: range.value, startBlockId: range.startBlockId, endBlockId: range.endBlockId, innerBlockIds: range.innerBlockIds } : null;
 }
 
 export function notionBlocksToText(blocks = []) {
