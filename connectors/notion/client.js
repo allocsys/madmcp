@@ -275,6 +275,65 @@ export function parseMarkers(blocks = []) {
 // index that could only shrink (relative to ground truth) over time, and
 // broke outright once that old page was archived. Same 10-page/100-row-
 // per-page ceiling as listAllMemories in mem0_notion.js.
+// ---------------------------------------------------------------------------
+// Dedup/upsert lookup (2026-07-17, gap #1; database rewrite 2026-07-24 --
+// see mem0 entity_id: madmcp-notion-connector-gaps-roadmap).
+//
+// MOVED HERE FROM tools.js (2026-09-27, Phase 1C real fix): this is pure
+// client-layer logic by what it DOES (only calls notionRequest against the
+// index database) and was originally left in tools.js because moving it
+// broke test/notion-checkpoint.test.js's mocking (its intra-module call to
+// notionRequest wasn't interceptable by vi.mock -- see this branch's revert
+// commit history). Fixed properly this time by routing the call through
+// clientInternals.notionRequest (see that object's own comment above)
+// instead of leaving the layering nit in place.
+//
+// FIRST FIX 2026-07-17: the original implementation leaned on notion_search
+// to find candidate pages by entity_id text. Live testing confirmed that's
+// fundamentally broken -- Notion's search index has real lag, and searching
+// for an entity_id string immediately after creating that page (the most
+// common dedup scenario) reliably returns zero results. Fixed by reading a
+// dedicated index page's own blocks directly (uncached, no search lag).
+//
+// SECOND FIX 2026-07-24: the page-based index inherited a new gap it
+// documented at the time -- /blocks/{id}/children pagination caps a single
+// page's readable blocks at 100, so an index page with more than ~100
+// tracked entities would silently stop finding older entries. A real Notion
+// database queried via /databases/{id}/query with a filter on EntityId is
+// just as immediately-consistent (no search-index lag either way, since
+// this never goes through notion_search) but isn't bound by that 100-block
+// limit -- database queries paginate independently of page block counts.
+export async function findPageByEntityId(entity_id) {
+  let rows;
+  try {
+    const data = await clientInternals.notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+      method: "POST",
+      body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
+    });
+    rows = data.results || [];
+  } catch (err) {
+    // Fail loudly rather than silently falling back to nothing found --
+    // silently treating "index unreachable" as "no duplicate exists" would
+    // just reintroduce the exact bug this fix is for.
+    throw new Error(`Notion entity index database (${NOTION_INDEX_DATABASE_ID}) is unreachable, so entity_id dedup can't be verified: ${err.message}. Fix NOTION_INDEX_DATABASE_ID / the database's sharing settings before creating entity-tracked pages.`, { cause: err });
+  }
+  if (!rows.length) return null;
+  const row = rows[0];
+  const page_id = notionRichTextToString(row.properties?.PageId?.rich_text || []);
+  if (!page_id) return null;
+  try {
+    const page = await clientInternals.notionRequest(`/pages/${page_id}`);
+    const blocksData = await clientInternals.notionRequest(`/blocks/${page_id}/children?page_size=20`);
+    const markers = parseMarkers(blocksData.results || []);
+    return { pageId: page_id, title: notionPageTitle(page), url: page.url, markers };
+  } catch {
+    // Stale index row (target page deleted/archived outside these tools) --
+    // treat as not-found so a fresh page can be created, rather than
+    // erroring out on a dangling reference.
+    return null;
+  }
+}
+
 export async function queryAllIndexEntries() {
   const PAGE_SIZE = 100;
   const MAX_PAGES = 10;
