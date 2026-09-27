@@ -38,45 +38,8 @@ services:
       # Claude's published connector range) — correct out of the box for
       # the target use case (connecting from Claude.ai).
 
-  # repo_map worker -- separate deployable from madmcp-server above, same
-  # monorepo. Was on Railway (see worker/railway.toml, kept for now as a
-  # record of the previous setup / fallback reference); moved here because
-  # Railway's free trial is running out and Fly.io was ruled out (requires
-  # card verification). See worker/src/server.js's new GET /tick endpoint
-  # and the external cron note below for how this worker stays alive on a
-  # host that sleeps idle containers, which Railway didn't do but Render's
-  # free tier does.
-  - type: web
-    name: repo-map-worker
-    runtime: docker
-    plan: free
-    rootDir: worker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    healthCheckPath: /health
-    envVars:
-      # Neon Postgres connection string (pgvector enabled).
-      - key: DATABASE_URL
-        sync: false
-      # For embeddings (gemini-embedding-001, see src/embed/gemini.js).
-      - key: GEMINI_API_KEY
-        sync: false
-      # Shared-secret header value madmcp must send: worker/src/auth.js
-      # expects "Authorization: Bearer <this value>" on every route except
-      # /health. The external cron hitting /tick (see below) must send the
-      # same header.
-      - key: REPO_MAP_SHARED_SECRET
-        sync: false
-      # GITHUB_APP_* intentionally omitted -- unused by current design,
-      # madmcp mints and passes clone tokens itself (see
-      # connectors/repomap/client.js). Add here only if that changes.
-
-    # MANUAL STEP (not expressible in this file): once this service is live
-    # on Render, point a free external cron (e.g. cron-job.org, no card
-    # required) at GET https://<this-service>.onrender.com/tick, every few
-    # minutes, with header "Authorization: Bearer <REPO_MAP_SHARED_SECRET>".
-    # This both counts as HTTP traffic (prevents Render's free-tier 15-min
-    # idle sleep from pausing the worker mid-scan) and drains any jobs left
-    # 'queued' by a restart -- the same recovery role
-    # worker/src/scan/queue.js's setInterval poll plays today, just
-    # externally triggered instead of an always-on in-process timer.
+  # repo_map worker used to be defined here as a second service in this
+  # same Blueprint file. Split out (2026-09-27) into its own dedicated
+  # worker/render.yaml so it gets its own Blueprint instance in Render
+  # instead of sharing this one with madmcp-server -- see that file for
+  # the service definition and history.
