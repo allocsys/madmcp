@@ -222,11 +222,10 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
             ],
           };
         }
-        // Backfill (Finding #5.1 fix) now re-reads each unscored page via
-        // triggerEmbedForPage instead of embedding just the title inline --
-        // simulate those re-reads returning the same title, plus a bit of
-        // body content, to prove the FULL text (not just the title) reaches
-        // triggerNotionEmbed.
+        // Backfill now re-reads each unscored page (Fix #5.1) instead of
+        // embedding just the title -- simulate those re-reads so we can
+        // prove full title+content reaches triggerNotionEmbed.
+
         if (path === "/pages/page-a") return { id: "page-a", properties: { title: { type: "title", title: [{ plain_text: "Page A" }] } } };
         if (path === "/pages/page-b") return { id: "page-b", properties: { title: { type: "title", title: [{ plain_text: "Page B" }] } } };
         if (path.startsWith("/blocks/page-a/children")) return { results: [{ object: "block", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Body A" }] } }] };
@@ -237,11 +236,8 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       const result = await notionFind({ mode: "search", query: "anything" });
 
       const text = result.content[0].text;
-      // Keyword order preserved (Page A before Page B), since neither had an embedding to rerank by.
       expect(text.indexOf("Page A")).toBeLessThan(text.indexOf("Page B"));
-      // Backfill is fire-and-forget (not awaited, same as before the fix), so
-      // wait for the re-read + embed chain to land instead of asserting
-      // immediately after notionFind resolves.
+      // Backfill is fire-and-forget, so wait for it to land.
       await vi.waitFor(() => {
         expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-a", content: "Page A\nBody A" });
         expect(triggerNotionEmbed).toHaveBeenCalledWith({ page_id: "page-b", content: "Page B\nBody B" });
@@ -251,9 +247,8 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
     it("re-embeds a page whose Notion last_edited_time is newer than its stored embedding updatedAt (Finding #5.3, out-of-band UI edit)", async () => {
       const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
       const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
-      // Scored (has an embedding), but that embedding predates the page's
-      // last_edited_time -- simulates a direct Notion UI edit that never went
-      // through doUpdatePage/triggerEmbedForPage.
+      // Scored, but the embedding predates last_edited_time -- simulates a
+      // direct Notion UI edit that skipped doUpdatePage/triggerEmbedForPage.
       rerankByQuery.mockImplementationOnce(async (_query, candidates) =>
         candidates.map((c) => ({ ...c, distance: 0.5, updatedAt: "2026-09-01T00:00:00.000Z" }))
       );
@@ -300,8 +295,7 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
 
       await notionFind({ mode: "search", query: "anything" });
 
-      // Give any wrongly-fired backfill a tick to happen before asserting its absence.
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0)); // let any wrongly-fired backfill happen first
       expect(triggerNotionEmbed).not.toHaveBeenCalled();
     });
 
