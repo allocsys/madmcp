@@ -35,6 +35,7 @@ vi.mock("../connectors/notion/embed_queries.js", () => ({
   findSimilarPages: vi.fn(),
   getEmbeddingsForPageIds: vi.fn(),
   cosineDistance: vi.fn(),
+  rerankByQuery: vi.fn(),
 }));
 vi.mock("../connectors/repomap/embed.js", () => ({
   embedQuery: vi.fn(),
@@ -167,21 +168,18 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
     });
 
     it("reorders page results by ascending cosine distance to the query when embeddings exist for all page candidates", async () => {
-      const { getEmbeddingsForPageIds, cosineDistance } = await import("../connectors/notion/embed_queries.js");
-      const { embedQuery } = await import("../connectors/repomap/embed.js");
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
       const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
 
-      embedQuery.mockResolvedValueOnce([1, 0]);
-      getEmbeddingsForPageIds.mockResolvedValueOnce(
-        new Map([
-          ["far-page", [0, 1]],
-          ["close-page", [1, 0]],
-        ])
-      );
-      // Real cosineDistance is mocked out here -- drive it with simple,
-      // predictable values keyed to which embedding was passed in, since the
-      // mock has no access to the real vector math.
-      cosineDistance.mockImplementation((_q, emb) => (emb[0] === 1 ? 0 : 1));
+      // tools.js delegates the scored/unscored split entirely to
+      // rerankByQuery now (fix #4) -- simulate it having found embeddings for
+      // both candidates and reordering them by ascending distance, the same
+      // shape the real embed_queries.js implementation returns (original
+      // candidate fields spread, plus a `distance` field on scored entries).
+      rerankByQuery.mockImplementationOnce(async (_query, candidates) => {
+        const withDistance = candidates.map((c) => ({ ...c, distance: c.pageId === "close-page" ? 0 : 1 }));
+        return withDistance.sort((a, b) => a.distance - b.distance);
+      });
 
       client.notionRequest.mockImplementation(async (path, opts = {}) => {
         if (path === "/search" && (opts.method || "GET") === "POST") {
@@ -200,13 +198,19 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       const text = result.content[0].text;
       // "Close Page" (distance 0) should be listed before "Far Page" (distance 1).
       expect(text.indexOf("Close Page")).toBeLessThan(text.indexOf("Far Page"));
-      expect(triggerNotionEmbed).not.toHaveBeenCalled(); // both candidates already had embeddings
+      expect(rerankByQuery).toHaveBeenCalledWith("close match", [
+        { pageId: "far-page", result: expect.objectContaining({ id: "far-page" }) },
+        { pageId: "close-page", result: expect.objectContaining({ id: "close-page" }) },
+      ]);
+      expect(triggerNotionEmbed).not.toHaveBeenCalled(); // both candidates already had embeddings (distance defined on both)
     });
 
     it("falls back to Notion's original keyword order when no candidates have embeddings yet, and lazily triggers embedding for each", async () => {
-      const { getEmbeddingsForPageIds } = await import("../connectors/notion/embed_queries.js");
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
       const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
-      getEmbeddingsForPageIds.mockResolvedValueOnce(new Map()); // nothing embedded yet
+      // Nothing embedded yet -- real rerankByQuery leaves every candidate
+      // unscored (no `distance` field) and keeps original order in that case.
+      rerankByQuery.mockImplementationOnce(async (_query, candidates) => candidates);
 
       client.notionRequest.mockImplementation(async (path, opts = {}) => {
         if (path === "/search" && (opts.method || "GET") === "POST") {
@@ -230,8 +234,8 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
     });
 
     it("falls back to Notion's original order (rather than erroring) when the rerank step throws", async () => {
-      const { getEmbeddingsForPageIds } = await import("../connectors/notion/embed_queries.js");
-      getEmbeddingsForPageIds.mockRejectedValueOnce(new Error("Neon unreachable"));
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
+      rerankByQuery.mockRejectedValueOnce(new Error("Neon unreachable"));
 
       client.notionRequest.mockImplementation(async (path, opts = {}) => {
         if (path === "/search" && (opts.method || "GET") === "POST") {
@@ -251,7 +255,7 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
     });
 
     it("does not attempt to rerank for mode: recent (no query, not a semantic-search request)", async () => {
-      const { getEmbeddingsForPageIds } = await import("../connectors/notion/embed_queries.js");
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
 
       client.notionRequest.mockImplementation(async (path, opts = {}) => {
         if (path === "/search" && (opts.method || "GET") === "POST") {
@@ -267,7 +271,7 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       const result = await notionFind({ mode: "recent" });
 
       expect(result.content[0].text).toContain("Page A");
-      expect(getEmbeddingsForPageIds).not.toHaveBeenCalled();
+      expect(rerankByQuery).not.toHaveBeenCalled();
     });
   });
 });
