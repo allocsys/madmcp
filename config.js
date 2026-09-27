@@ -350,6 +350,16 @@ export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) ||
 export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 30;
 export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
 
+// exec_in_codespace is currently broken -- gated behind an explicit opt-in
+// flag (default OFF) so it's not registered at all unless a human flips it
+// on deliberately, same register()-is-a-no-op-unless-the-flag-is-on pattern
+// as EDITOR_AGENT_ENABLED above (see connectors/delegate/editor/editor_tools.js's
+// comment for the full reasoning). Unlike EDITOR_AGENT_ENABLED this defaults
+// to off ("true" required to enable), matching BAI_ENABLED/TYPESAFE_ENABLED's
+// opt-in-only posture elsewhere in this file, since this tool is known-broken
+// rather than merely mid-rollout.
+export const CODE_EXEC_ENABLED = process.env.CODE_EXEC_ENABLED === "true";
+
 // Async delegate_editor -- mirrors the AGENT_WORKER_URL/
 // DELEGATE_AGENT_ASYNC/AGENT_ASYNC_*_SECONDS/AGENT_WORKER_MAX_CONSECUTIVE_FAILURES
 // block above almost exactly, but kept as its own set of flags rather than
