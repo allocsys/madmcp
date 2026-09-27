@@ -645,6 +645,51 @@ export function register(server) {
 
   server.tool(
     "notion_find",
+    "DOES: Find pages or databases in your Notion workspace by keyword search or recent edit history, consolidating notion_search and notion_list into one mode-based tool.\nRULE for the calling model: Use mode 'search' for keyword lookups, and mode 'recent' for 'what's new' / 'get the latest entry' asks. If you'll need to search/find and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_find and notion_get_page manually.",
+    {
+      mode:        z.enum(["search", "recent"]).describe("'search' looks up pages/databases by keyword query. 'recent' lists pages/databases sorted by most recently edited, no query needed — use this for 'what's new' / 'get the latest entry' asks."),
+      query:       z.string().optional().describe("Search query string. Required when mode is 'search', ignored for 'recent'."),
+      filter_type: z.enum(["page", "database"]).optional().describe("Restrict results to only pages or only databases (default: both)"),
+      page_size:   z.number().optional().describe("Number of results to return (default 10 for search, 20 for recent; max 100)"),
+    },
+    async ({ mode, query, filter_type, page_size }) => {
+      if (mode === "search") {
+        if (!query || !query.trim()) {
+          return { content: [{ type: "text", text: "Error: query is required and cannot be empty when mode is 'search'." }], isError: true };
+        }
+        const resolvedPageSize = page_size ?? 10;
+        const body = { query, page_size: resolvedPageSize };
+        if (filter_type) body.filter = { value: filter_type, property: "object" };
+        const data = await notionRequest("/search", { method: "POST", body });
+        if (!data.results?.length) return { content: [{ type: "text", text: "No results found." }] };
+        const lines = data.results.map((r) => {
+          const title = r.object === "page"
+            ? notionPageTitle(r)
+            : (notionRichTextToString(r.title) || "(untitled)");
+          return `[${r.object}] ${title}\n  ID: ${r.id}\n  URL: ${r.url || ""}`;
+        });
+        return { content: [{ type: "text", text: lines.join("\n\n") }] };
+      } else if (mode === "recent") {
+        const resolvedPageSize = page_size ?? 20;
+        const body = { query: "", sort: { direction: "descending", timestamp: "last_edited_time" }, page_size: resolvedPageSize };
+        if (filter_type) body.filter = { value: filter_type, property: "object" };
+        const data = await notionRequest("/search", { method: "POST", body });
+        if (!data.results?.length) return { content: [{ type: "text", text: "No pages or databases found." }] };
+        const lines = data.results.map((r) => {
+          const title = r.object === "page"
+            ? notionPageTitle(r)
+            : (notionRichTextToString(r.title) || "(untitled)");
+          return `[${r.object}] ${title}\n  ID: ${r.id}\n  URL: ${r.url || ""}\n  Last edited: ${r.last_edited_time?.slice(0, 16)}`;
+        });
+        return { content: [{ type: "text", text: lines.join("\n\n") }] };
+      } else {
+        return { content: [{ type: "text", text: `Error: invalid mode "${mode}" (expected "search" or "recent").` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "notion_find",
     "DOES: Find pages or databases in your Notion workspace by keyword search or recent edit history, consolidating notion_search and notion_list into one tool. Mode 'search' looks up pages/databases by keyword query; mode 'recent' lists pages/databases sorted by most recently edited first. Use this instead of calling notion_search or notion_list separately.\nRULE for the calling model: use this only for a single, targeted lookup. If you'll need to find and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_find and notion_get_page manually.",
     {
       mode:        z.enum(["search", "recent"]).describe("'search' looks up pages/databases by keyword query. 'recent' lists pages/databases sorted by most recently edited, no query needed — use this for 'what's new' / 'get the latest entry' asks."),
