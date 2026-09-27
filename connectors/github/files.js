@@ -93,7 +93,7 @@ export function register(server) {
     "RULE: do NOT guess or pre-emptively pass char_offset/char_limit on a file whose real size you don't already know -- only pass them once you actually have a reason to: either this SAME tool's own prior response on this SAME file already returned a truncation notice telling you the total size and the offset to continue from, or independent evidence (e.g. a github_search_code hit reporting a specific line deep inside a file you already know is large) tells you exactly where to jump. Guessing an offset on a file that turns out to be small wastes a call and returns a truncated, unhelpful fragment instead of the content you actually needed -- if in doubt, just call with no params.\n" +
     "RULE: already read this exact file earlier in the conversation and its content is already in context -> don't call this again at all, paginated or not; reuse what you already have.\n" +
     "RULE: jumping to a specific spot a `map` or `search_code` result pointed at -> pass line_start (and line_end if needed) instead of guessing a char_offset; it takes those tools' line numbers directly.\n" +
-    "Equivalent concept to get_file_at_commit's `commit` param (SHA-only, required here; `ref` is branch/tag/SHA, optional).",
+    "Equivalent concept to get_file_at_commit's `commit` param (SHA-only there; `ref` here also takes a branch/tag name, not just a SHA -- both are required).",
     {
       owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:        z.string().describe("Repository name"),
