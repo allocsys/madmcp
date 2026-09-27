@@ -74,22 +74,17 @@ export function register(server) {
     {
       owner:  z.string().optional().describe(`Repository owner (the fork). Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:   z.string().describe("Repository name (the fork)"),
-      branch: z.string().optional().describe("Branch to sync (default: repo default branch)"),
+      branch: z.string().describe("Branch to sync"),
     },
     async ({ owner = DEFAULT_OWNER, repo, branch }) => {
-      let targetBranch = branch;
-      if (!targetBranch) {
-        const repoData = await githubRequest(`/repos/${owner}/${repo}`);
-        targetBranch = repoData.default_branch;
-      }
       const data = await githubRequest(`/repos/${owner}/${repo}/merge-upstream`, {
         method: "POST",
-        body: { branch: targetBranch },
+        body: { branch },
       });
       return {
         content: [{
           type: "text",
-          text: `${data.merge_type === "fast-forward" ? "✅" : "ℹ️"} ${owner}/${repo}:${targetBranch} — ${data.message}\nMerge type: ${data.merge_type}\nNow at: ${data.base_branch}`,
+          text: `${data.merge_type === "fast-forward" ? "✅" : "ℹ️"} ${owner}/${repo}:${branch} — ${data.message}\nMerge type: ${data.merge_type}\nNow at: ${data.base_branch}`,
         }],
       };
     }
