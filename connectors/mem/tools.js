@@ -647,7 +647,7 @@ export function register(server) {
     "RULE: memory_id applies to 'get' and 'history' only; entity_id/user_id/agent_id/run_id apply to 'relations' only.",
     {
       action:    z.enum(["get", "history", "relations"]).describe("Which operation to perform"),
-      memory_id: z.string().optional().describe("The memory ID (from mem0_find or mem0_inspect). Required for actions 'get' and 'history'."),
+      memory_id: z.string().optional().describe("The memory ID (from mem0_find). Required for actions 'get' and 'history'."),
       entity_id: z.string().optional().describe("The entity_id to resolve relations for. Required for action 'relations'."),
       user_id:   z.string().optional().describe(`Mem0 user ID scoping (default: ${MEM0_USER_ID}). Used by 'relations' only.`),
       agent_id:  z.string().optional().describe("Optional agent ID scoping. Used by 'relations' only."),
