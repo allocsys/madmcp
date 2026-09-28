@@ -205,7 +205,7 @@ describe("ci_manage", () => {
       githubRequest.mockResolvedValue({ workflow_runs: [] });
       githubRequest.mockResolvedValueOnce(undefined);
       const p = call({ action: "trigger", repo: "r", workflow_id: "ci.yml", ref: "main" });
-      await vi.advanceTimersByTimeAsync(1500 * 3);
+      await vi.advanceTimersByTimeAsync(1500 * 4);
       const r = await p;
       // 1 dispatch + 4 polls
       expect(githubRequest).toHaveBeenCalledTimes(5);
