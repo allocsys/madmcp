@@ -51,15 +51,15 @@ export function register(server) {
   );
 
   // Replaces the former cf_kv_namespace_create and cf_kv_namespace_update.
-  // Deletion is intentionally not part of this tool (it will move to a
-  // separate guarded delete tool).
+  // Deletion is intentionally not part of this tool (it lives in the
+  // separate guarded cf_delete tool).
   server.tool(
     "cf_kv_manage",
     "DOES: Create or rename KV namespaces in your Cloudflare account. MUTATES Cloudflare state. Use `action` to pick.\n" +
     "RULE: action 'create' requires title and creates a new namespace.\n" +
     "RULE: action 'update' requires namespace_id and title and renames that namespace.\n" +
     "RULE: namespace_id applies to 'update' only.\n" +
-    "NOT: deleting a namespace -> cf_kv_namespace_delete.",
+    "NOT: deleting a namespace -> cf_delete.",
     {
       action: z.enum(["create", "update"]).describe("Which operation to perform"),
       namespace_id: z.string().optional().describe("The namespace ID. Required for action 'update'."),
@@ -83,14 +83,5 @@ export function register(server) {
 
       return errorResult(`Unknown action '${action}'.`);
     }
-  );
-
-  // Kept until the guarded delete tool lands (last group of the overhaul).
-  server.tool(
-    "cf_kv_namespace_delete",
-    "Delete a kv namespace in your Cloudflare account",
-    { namespace_id: z.string() },
-    async ({ namespace_id }) =>
-      textResult(await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`, { method: "DELETE" }))
   );
 }
