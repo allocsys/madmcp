@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // test/mcp-integration.test.js
-// Exercises a real tool (get_repo) through the actual mcpServer instance and
+// Exercises a real tool (repo_metadata) through the actual mcpServer instance and
 // real Zod schema validation, over an InMemoryTransport pair -- not a mock
 // of server.tool() or a hand-rolled call to the handler function directly.
 // This is the thing that would actually catch a zod 3->4 regression: a
@@ -16,7 +16,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createMcpServer } from "../server.js";
 
-describe("MCP tool call — real Zod validation path (get_repo)", () => {
+describe("MCP tool call — real Zod validation path (repo_metadata)", () => {
   let client;
 
   beforeAll(async () => {
@@ -30,11 +30,11 @@ describe("MCP tool call — real Zod validation path (get_repo)", () => {
   it("VALID args pass Zod and reach the handler (fails downstream on missing GITHUB_TOKEN, not on validation)", async () => {
     // No GITHUB_TOKEN is set in this test run (it's a CI secret, not assumed
     // available here), so the handler itself throws once it tries to call
-    // out. That's the point: reaching that error at all proves { owner,
+    // out. That's the point: reaching that error at all proves { action, owner,
     // repo } passed Zod parsing/coercion and were handed to the handler.
     const result = await client.callTool({
-      name: "get_repo",
-      arguments: { owner: "allocsys", repo: "madmcp" },
+      name: "repo_metadata",
+      arguments: { action: "get", owner: "allocsys", repo: "madmcp" },
     });
 
     expect(result.isError).toBe(true);
@@ -45,10 +45,10 @@ describe("MCP tool call — real Zod validation path (get_repo)", () => {
     expect(text).not.toMatch(/-32602/);
   });
 
-  it("INVALID args (missing required `repo`) are rejected at the validation layer, never reaching the handler", async () => {
+  it("INVALID args (missing required `action`) are rejected at the validation layer, never reaching the handler", async () => {
     const result = await client.callTool({
-      name: "get_repo",
-      arguments: { owner: "allocsys" }, // `repo` omitted -- required by the schema
+      name: "repo_metadata",
+      arguments: { owner: "allocsys", repo: "madmcp" }, // `action` omitted -- required by the schema
     });
 
     expect(result.isError).toBe(true);
