@@ -6,6 +6,8 @@
 
 import { register as registerFiles     } from "./files.js";
 import { register as registerRepoInspect } from "./repo_inspect.js";
+import { register as registerSearchCode } from "./search_code.js";
+import { register as registerCreateBranch } from "./create_branch.js";
 import { register as registerPRRead     } from "./pr_read.js";
 import { register as registerPRWrite    } from "./pr_write.js";
 import { register as registerIssueManage } from "./issue_manage.js";
@@ -22,6 +24,8 @@ import { register as registerEditor     } from "../delegate/editor/editor_tools.
 export function register(server) {
   registerFiles(server);
   registerRepoInspect(server);
+  registerSearchCode(server);
+  registerCreateBranch(server);
   registerPRRead(server);
   registerPRWrite(server);
   registerIssueManage(server);
