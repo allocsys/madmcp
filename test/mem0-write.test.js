@@ -160,8 +160,17 @@ describe("Mem0 connector - write tools (add / add_batch / update)", () => {
       const result = await run(() => addMemory({ content: "hello", skip_duplicate_check: true }));
       const text = result.content[0].text;
       expect(text).toContain("Memory extraction started (event_id: ev1).");
-      expect(text).toContain("Could not confirm this memory landed after several verification attempts");
+      expect(text).toContain("Could not confirm this memory landed after a single verification check");
       expect(text).not.toContain("Confirmed landed");
+    });
+
+    it("skips the unverifiable landing check for infer:true without an entity_id (M4)", async () => {
+      mem0Request.mockResolvedValueOnce({ event_id: "ev1" });
+      const result = await run(() => addMemory({ content: "hello", infer: true, skip_duplicate_check: true }));
+      expect(mem0Request).toHaveBeenCalledTimes(1);
+      const text = result.content[0].text;
+      expect(text).toContain("Landing not verified");
+      expect(text).not.toContain("Could not confirm");
     });
 
     it("falls back to 'Memory added: <json>' when the API returns no event id", async () => {
@@ -327,6 +336,37 @@ describe("Mem0 connector - write tools (add / add_batch / update)", () => {
       expect(result.content[0].text).toBe(
         '✓ [0] "x" — event_id: ev1 ⚠ flagged as possible duplicate of s1 — ⚠ could not confirm this landed, check manually'
       );
+    });
+
+    it("skips later items that repeat an entity_id or identical content earlier in the same batch (M5)", async () => {
+      mem0Request.mockImplementation(async (path, opts) => {
+        if (path === "/v3/memories/" && opts?.body?.page_size === 20) return { results: [{ id: "m1", memory: "one" }] };
+        if (path === "/v3/memories/") return { results: [] }; // findByEntityId: nothing yet
+        if (path === "/v3/memories/add/") return { event_id: "ev" };
+        throw new Error(`unexpected path ${path}`);
+      });
+      const result = await run(() =>
+        addBatch({
+          items: [
+            { content: "one", entity_id: "e1", skip_duplicate_check: true },
+            { content: "different", entity_id: "e1", skip_duplicate_check: true },
+            { content: "Two" },
+            { content: " two " },
+          ],
+        })
+      );
+      const addCalls = mem0Request.mock.calls.filter(([p]) => p === "/v3/memories/add/");
+      expect(addCalls).toHaveLength(1 + 1);
+      const lines = result.content[0].text.split("\n");
+      expect(lines[1]).toContain("skipped, duplicate of item [0] in this same batch");
+      expect(lines[3]).toContain("skipped, duplicate of item [2] in this same batch");
+    });
+
+    it("notes unverifiable landing for infer:true items without an entity_id (M4)", async () => {
+      mem0Request.mockResolvedValueOnce({ event_id: "ev1" });
+      const result = await run(() => addBatch({ items: [{ content: "x", infer: true, skip_duplicate_check: true }] }));
+      expect(mem0Request).toHaveBeenCalledTimes(1);
+      expect(result.content[0].text).toContain("landing not verified");
     });
 
     it("falls back to event id 'ok' when the API returns none", async () => {
