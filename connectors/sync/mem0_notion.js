@@ -11,6 +11,13 @@ import { MEM0_USER_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 
 const MEM0_ENTITY_PREFIX = "mem0:";
 
+// Time budget for one sync call. The loop below is sequential, so a large
+// workspace could otherwise run into the function's maxDuration (60s, see
+// vercel.json) and be killed mid-write. Stopping at ~45s leaves headroom for
+// the item in flight plus the response. Keep this comfortably below
+// vercel.json's functions["server.js"].maxDuration.
+const SYNC_TIME_BUDGET_MS = 45_000;
+
 // Notion rejects edits to an already-archived page with one of these
 // messages; for an archive request that's the desired end state, not a failure.
 const ALREADY_ARCHIVED_RE = /already archived|Can't edit block that is archived/i;
@@ -203,12 +210,16 @@ export function register(server) {
     async ({ dry_run = false, entity_ids }) => {
       const { memories, truncated } = await listAllMemories({ user_id: MEM0_USER_ID, entity_ids });
       const results = [];
+      const startedAt = Date.now();
+      let budgetHit = false;
       // Sequential, not Promise.all -- every item's dedup check reads the
       // same shared index page, so concurrent items can race the same way
       // notion_create_pages_batch's items did before that was fixed
       // 2026-07-17 (see runSequentially in notion/tools.js). Trades
       // throughput for correctness at this tool's expected scale.
       for (const memory of memories) {
+        // Checked BEFORE starting an item, so an item is never cut off midway.
+        if (Date.now() - startedAt >= SYNC_TIME_BUDGET_MS) { budgetHit = true; break; }
         try {
           results.push(await syncOneMemory(memory, { dry_run }));
         } catch (err) {
@@ -226,10 +237,16 @@ export function register(server) {
         // came back empty while synced pages exist (bad MEM0_USER_ID / outage).
         let skipReason = null;
         if (truncated) skipReason = "mem0 listing hit the page cap, so it may be incomplete";
+        else if (budgetHit) skipReason = "the time budget ran out before every memory was processed";
         else if (memories.length === 0 && indexEntries.length > 0) skipReason = "mem0 returned no memories although synced Notion pages exist (wrong MEM0_USER_ID or an outage?)";
         const orphaned = skipReason ? [] : indexEntries.filter((e) => !currentEntityIds.has(e.entity_id));
         if (skipReason) deletionLines.push(`  ⚠ hard-deletion pass skipped: ${skipReason}. Nothing was archived on that basis.`);
         for (const entry of orphaned) {
+          if (Date.now() - startedAt >= SYNC_TIME_BUDGET_MS) {
+            budgetHit = true;
+            deletionLines.push("  ⚠ stopped archiving: time budget reached. Rerun to continue.");
+            break;
+          }
           if (dry_run) {
             deletionLines.push(`  would-archive (source deleted from mem0): ${entry.entity_id} — ${entry.url}`);
             continue;
@@ -262,10 +279,15 @@ export function register(server) {
           ? `  ✗ ${r.entity_id} — ${r.error}`
           : `  ${r.action} — ${r.entity_id}${r.pageUrl ? ` (${r.pageUrl})` : ""}${r.statusChanged ? " [status changed]" : ""}${r.relationsChanged ? " [relations changed]" : ""}`
       );
-      const header = `${dry_run ? "[DRY RUN] " : ""}Synced ${memories.length} memor${memories.length === 1 ? "y" : "ies"}. ${summary || "nothing to do"}.`;
+      const header = budgetHit && results.length < memories.length
+        ? `${dry_run ? "[DRY RUN] " : ""}Processed ${results.length} of ${memories.length} memories (stopped at the ${SYNC_TIME_BUDGET_MS / 1000}s time budget). ${summary || "nothing done yet"}.`
+        : `${dry_run ? "[DRY RUN] " : ""}Synced ${memories.length} memor${memories.length === 1 ? "y" : "ies"}. ${summary || "nothing to do"}.`;
+      const budgetNote = budgetHit
+        ? "\n\n⚠ Time budget reached: rerun to continue (memories already synced are skipped cheaply). For a large workspace you can also batch with entity_ids."
+        : "";
       const truncationNote = truncated && entity_ids?.length ? "\n\n⚠ mem0 listing hit the page cap; some requested memories may not have been found." : "";
       const deletionHeader = truncationNote + (deletionLines.length ? `\n\nHard-deletion check:\n${deletionLines.join("\n")}` : (entity_ids?.length ? "\n\n(Hard-deletion check skipped — entity_ids filter was used.)" : ""));
-      return { content: [{ type: "text", text: `${header}\n\n${lines.join("\n")}${deletionHeader}` }] };
+      return { content: [{ type: "text", text: `${header}\n\n${lines.join("\n")}${deletionHeader}${budgetNote}` }] };
     }
   );
 }

@@ -5,6 +5,9 @@
   "main": "server.js",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
+  "engines": {
+    "node": ">=22.19"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "vitest run",
