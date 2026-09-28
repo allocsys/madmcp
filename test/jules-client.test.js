@@ -86,6 +86,10 @@ describe("Jules Connector - tools", () => {
     vi.stubGlobal("fetch", vi.fn());
     server = makeFakeServer();
     register(server);
+    // Thin wrappers: pre-consolidation tests keep their names and call shapes,
+    // but exercise the consolidated jules_inspect tool.
+    server.tools.jules_get_session = ({ session }) => server.tools.jules_inspect({ action: "session", session });
+    server.tools.jules_get_activities = (args) => server.tools.jules_inspect({ action: "activities", ...args });
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -268,5 +272,91 @@ describe("Jules Connector - tools", () => {
     const result = await server.tools.jules_get_activities({ session: "42" });
     expect(result.content[0].text).toContain("Diff (Add hello)");
     expect(result.content[0].text).toContain("diff --git a/x b/x");
+  });
+
+  it("jules_inspect session falls back to the prompt, omits PRs when none, and passes qualified names through", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ name: "sessions/7", prompt: "Fix it", state: "RUNNING", url: "https://jules.google.com/session/7" }),
+    });
+
+    const result = await server.tools.jules_inspect({ action: "session", session: "sessions/7" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions/7");
+    expect(result.content[0].text).toBe('sessions/7 — "Fix it"\nState: RUNNING\nView in Jules: https://jules.google.com/session/7');
+    expect(result.content[0].text).not.toContain("Pull request");
+  });
+
+  it("jules_inspect activities reports an empty timeline and hits the activities endpoint", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({}) });
+
+    const result = await server.tools.jules_inspect({ action: "activities", session: "42" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions/42/activities");
+    expect(result.content[0].text).toBe("No activities recorded yet for this session.");
+  });
+
+  it("jules_inspect activities renders message/approval/completion/fallback events, passes pagination params and shows the footer", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [
+          { createTime: "t1", originator: "user", userMessaged: { userMessage: "Please add tests" } },
+          { createTime: "t2", originator: "agent", agentMessaged: { agentMessage: "On it" } },
+          { createTime: "t3", originator: "user", planApproved: { planId: "p1" } },
+          { createTime: "t4", originator: "agent", sessionCompleted: {} },
+          { createTime: "t5", originator: "system", description: "Something new" },
+          { createTime: "t6", originator: "system" },
+        ],
+        nextPageToken: "more",
+      }),
+    });
+
+    const result = await server.tools.jules_inspect({ action: "activities", session: "42", page_size: 3, page_token: "tokA" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.searchParams.get("pageSize")).toBe("3");
+    expect(url.searchParams.get("pageToken")).toBe("tokA");
+    const text = result.content[0].text;
+    expect(text).toContain("[t1] user: User message: Please add tests");
+    expect(text).toContain("[t2] agent: Agent message: On it");
+    expect(text).toContain("[t3] user: Plan approved (planId: p1)");
+    expect(text).toContain("[t4] agent: Session completed");
+    expect(text).toContain("[t5] system: Something new");
+    expect(text).toContain("[t6] system: (event)");
+    expect(text).toContain("(more available — next page_token: more)");
+  });
+
+  it("jules_inspect activities renders bash output, media placeholders and truncates long artifacts", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [{
+          createTime: "t1",
+          originator: "agent",
+          progressUpdated: { title: "Running tests", description: "npm test" },
+          artifacts: [
+            { bashOutput: { command: "npm test", exitCode: 1, output: "x".repeat(2500) } },
+            { media: { mimeType: "image/png" } },
+            { changeSet: { gitPatch: { unidiffPatch: "y".repeat(3200) } } },
+          ],
+        }],
+      }),
+    });
+
+    const result = await server.tools.jules_inspect({ action: "activities", session: "42" });
+
+    const text = result.content[0].text;
+    expect(text).toContain("Progress: Running tests — npm test");
+    expect(text).toContain("  $ npm test  (exit 1)");
+    expect(text).toContain("... (truncated, 500 more chars)");
+    expect(text).toContain("  [media artifact: image/png]");
+    expect(text).toContain("  Diff:\n");
+    expect(text).toContain("... (truncated, 200 more chars)");
   });
 });
