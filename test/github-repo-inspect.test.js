@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock connectors/github/client.js (search.js, imported by repo_inspect.js,
+// Mock connectors/github/client.js (code_search.js, imported by repo_inspect.js,
 // also pulls githubGraphQL / githubFetchTarball from here).
 vi.mock("../connectors/github/client.js", () => ({
   githubRequest: vi.fn(),

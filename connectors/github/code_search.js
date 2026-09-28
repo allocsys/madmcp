@@ -1,8 +1,13 @@
 // ---------------------------------------------------------------------------
-// connectors/github/search.js — search tools
+// connectors/github/code_search.js — code-search implementation
+//
+// Renamed from search.js in group 6 of the GitHub tools consolidation.
+// search_issues moved to issue_manage.js ('search' action); nothing in this
+// file is registered as an MCP tool any more. runSearchCode() is called by
+// repo_inspect's 'search' action, and extractRepoQualifier/fallbackCodeSearch
+// are imported by agent_delegate.js. Behavior unchanged.
 // ---------------------------------------------------------------------------
 
-import { z } from "zod";
 import zlib from "node:zlib";
 import { githubRequest, githubGraphQL, githubFetchTarball } from "./client.js";
 
@@ -275,35 +280,6 @@ async function resolveMatchLines(items) {
   });
 
   return lines;
-}
-
-export function register(server) {
-  server.tool(
-    "search_issues",
-    "DOES: Search issues/PRs cross-repo via GitHub issue-search syntax (label:, is:issue, is:pr, stars:>N, org:, -repo:, etc). Returns title, repo, state, labels, assignee, date, URL per result.\n" +
-    "RULE: cross-repo discovery (bounty hunting, good-first-issue scanning) -> this tool. Single known repo -> list_issues instead.\n" +
-    "RULE: broader open-ended hunt (many searches -> read candidates -> narrow down) -> delegate_agent instead of chaining this manually.",
-    {
-      query:    z.string().describe("GitHub issue-search query string using standard qualifiers: label:, is:issue, is:pr, is:open, is:closed, stars:>N, org:, repo:, -repo: (exclude), -org: (exclude), created:, assignee:, no:assignee, etc. Combine with spaces (AND). e.g. 'label:bounty is:issue is:open stars:>100 -org:mergeos-bounties'"),
-      sort:     z.enum(["created", "updated", "comments"]).optional().describe("Sort field (default: best-match relevance if omitted)"),
-      order:    z.enum(["asc", "desc"]).optional().describe("Sort order (default: desc)"),
-      per_page: z.number().optional().describe("Number of results to return, max 100 (default: 20)"),
-    },
-    async ({ query, sort, order = "desc", per_page = 20 }) => {
-      let path = `/search/issues?q=${encodeURIComponent(query)}&order=${order}&per_page=${per_page}`;
-      if (sort) path += `&sort=${sort}`;
-      const data = await githubRequest(path);
-      if (!data.items?.length) return { content: [{ type: "text", text: "No results found." }] };
-      const lines = data.items.map((item) => {
-        const kind = item.pull_request ? "PR" : "Issue";
-        const labels = item.labels?.length ? ` [${item.labels.map((l) => l.name).join(", ")}]` : "";
-        const assignee = item.assignee ? ` (assigned: ${item.assignee.login})` : " (unassigned)";
-        return `${kind} #${item.number} [${item.state}] ${item.title}${labels}${assignee}\n  ${item.repository_url.replace("https://api.github.com/repos/", "")} | created ${item.created_at.slice(0, 10)} | ${item.html_url}`;
-      });
-      return { content: [{ type: "text", text: `Found ${data.total_count} total result(s) (GitHub search caps at 1000), showing ${data.items.length}:\n\n${lines.join("\n\n")}` }] };
-    }
-  );
-
 }
 
 // ---------------------------------------------------------------------------

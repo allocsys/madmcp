@@ -8,16 +8,16 @@
 // into one repo_inspect tool dispatched on `action`.
 //
 // NOTE: search_code's implementation (fallbackCodeSearch, tarball parsing,
-// GraphQL line resolution) deliberately STAYS in search.js, exported as
-// runSearchCode(). search.js is imported by other modules and tests
-// (agent_delegate.js, test/github-search.test.js) and still hosts
-// search_issues until group 6, so the helpers were not copied or moved.
+// GraphQL line resolution) lives in code_search.js (renamed from search.js in
+// group 6), exported as runSearchCode(). It is also imported by
+// agent_delegate.js and test/github-search.test.js, so the helpers were not
+// copied.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
 import { githubRequest, fromBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
-import { runSearchCode } from "./search.js";
+import { runSearchCode } from "./code_search.js";
 
 // ---------------------------------------------------------------------------
 // diff helpers (moved verbatim from diff.js)

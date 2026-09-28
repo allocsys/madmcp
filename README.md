@@ -230,7 +230,7 @@ File/repo ops: `read_file` (accepts optional `char_offset`/`char_limit` to page 
 
 Repo inspection: `repo_inspect` — one tool, selected by `action`: `at_commit` (file contents at a commit SHA), `diff`, `search` (code search; requires `ref` and a `repo:owner/name` qualifier in `query`), `branch_protection`, `list_branches`, `create_branch`, `list_commits`, `get_commit`. Only `create_branch` mutates. Consolidated from the former `get_file_at_commit`, `diff_files`, `search_code`, `get_branch_protection`, `list_branches`, `create_branch`, `list_commits`, and `get_commit` tools.
 
-Issues: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`
+Issues: `issue_manage` (`action`: `get` | `list` | `create` | `update` | `comment` | `search`), replacing `get_issue`, `list_issues`, `create_issue`, `update_issue`, `add_issue_comment`, `search_issues`. `search` is cross-repo and ignores `owner`/`repo` (scope it with qualifiers in `query`); `comment` works on PRs too.
 
 Pull request writes (mutating): `pr_write` (`action`: `create` | `update` | `merge` | `review` | `request_reviewers` | `remove_reviewers` | `inline_comment`), replacing `create_pull_request`, `update_pull_request`, `merge_pull_request`, `review_pull_request`, `request_reviewers`, `remove_requested_reviewers`, `add_review_comment`. `merge` is irreversible via this tool.
 
@@ -242,7 +242,7 @@ Repo metadata (read-only): `repo_metadata` (`action`: `list` | `get` | `contribu
 
 Repo lifecycle (mutating): `repo_lifecycle` (`action`: `create` | `fork` | `sync_fork` | `delete` | `set_topics`), replacing `create_repo`, `fork_repo`, `sync_fork`, `delete_repo` and the topics write path. `delete` is permanent and requires `confirm: true`.
 
-Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`, `search_issues`
+Actions: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`
 
 CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`
 
