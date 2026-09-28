@@ -274,10 +274,10 @@
       <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p><p class="tech">repo_inspect (search) · 1 file matched, no timeout set</p></div>
       <div class="card" data-id="1"><div class="tag-row"><span class="tag">Step 2 · Cloudflare</span><span class="metric">204ms</span></div><p>Pulls live Workers metrics to confirm the hunch.</p><p class="tech">cf_workers_observability_query · 0.93 correlation to traffic</p></div>
       <div class="card" data-id="2"><div class="tag-row"><span class="tag">Step 3 · GitHub</span><span class="metric">237ms</span></div><p>Commits the fix and opens a PR in the same turn.</p><p class="tech">overwrite_files + pr_write (create) · PR #482</p></div>
-      <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update_page · status → In review</p></div>
+      <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update · status → In review</p></div>
       <div class="card" data-id="4"><div class="tag-row"><span class="tag">Step 5 · Mem0</span><span class="metric">874ms</span></div><p>Stores the root cause with dedup + relations.</p><p class="tech">mem0_add + mem0_update · dup flagged, 3 relations linked</p></div>
       <div class="card" data-id="5"><div class="tag-row"><span class="tag">Step 6 · Fetch</span><span class="metric">233ms</span></div><p>Confirms the status page reflects the fix.</p><p class="tech">web_fetch · matches Cloudflare baseline</p></div>
-      <div class="card capstone" data-id="6"><div class="tag-row"><span class="tag">⭐ Step 7 · Gemini (capstone)</span><span class="metric">612ms</span></div><p>The payoff: 4 sub-steps of investigation, run server-side by Gemini, collapsed into <b>1 call</b> from the agent — no manual chaining.</p><p class="tech">delegate_gemini · repo_inspect + pr_read + cf_workers_observability_query + ci_manage, synthesized into one answer</p></div>
+      <div class="card capstone" data-id="6"><div class="tag-row"><span class="tag">⭐ Step 7 · Gemini (capstone)</span><span class="metric">612ms</span></div><p>The payoff: 4 sub-steps of investigation, run server-side by Gemini, collapsed into <b>1 call</b> from the agent — no manual chaining.</p><p class="tech">delegate_agent · repo_inspect + pr_read + cf_workers_observability_query + ci_manage, synthesized into one answer</p></div>
       <div class="stats">
         <div class="row"><span>Connectors touched</span><span id="statConn">1 / 6</span></div>
         <div class="row"><span>Total latency</span><span id="statMs">118ms</span></div>
@@ -323,16 +323,16 @@
     { id:'no', label:'NOTION · INCIDENT DOC', lines:[
       ['prompt','> update the incident doc'],
       ['why','Why: on-call and stakeholders watch the Notion doc, not GitHub — keep it as the single source of truth in real time.'],
-      ['call','→ notion_update_page({ page: "INC-114", properties: { status: "In review" }, append: "Fix in review (PR #482)." })'],
+      ['call','→ notion_update({ type: "page", items: [{ page_id: "INC-114", properties: { Status: "In review" }, append_content: "Fix in review (PR #482)." }] })'],
       ['result','✓ page updated · status: Investigating → In review\nlinked PR #482 attached to timeline'],
       ['stamped','✓ stamped · 312ms']
     ], ms:312},
     { id:'m0', label:'MEM0 · DEDUP + RELATIONS', lines:[
       ['prompt','> remember why, for next time'],
       ['why','Why: the same “no timeout on a third-party call” pattern recurs across services — storing it with relations makes future triage faster.'],
-      ['call','→ mem0_add({ content: "edge-router: no timeout on legacyPricingService caused checkout p95 spike", metadata: { tags: ["timeout","checkout"] } })'],
+      ['call','→ mem0_add({ content: "edge-router: no timeout on legacyPricingService caused checkout p95 spike", entity_id: "inc-114-root-cause", categories: ["timeout","checkout"] })'],
       ['result','⚠ possible duplicate (0.81 similarity to mem #4471) — added, flagged for review'],
-      ['call','→ mem0_update({ relations: ["INC-114", "edge-router", "legacyPricingService"] })'],
+      ['call','→ mem0_update({ memory_id: "mem_9b2e", relations: [{ to_entity_id: "inc-114", relation: "relates_to" }, { to_entity_id: "edge-router", relation: "relates_to" }, { to_entity_id: "legacy-pricing-service", relation: "depends_on" }] })'],
       ['stamped','✓ stamped · 874ms · relation graph updated']
     ], ms:874},
     { id:'wf', label:'FETCH · VERIFY', lines:[
@@ -345,7 +345,7 @@
     { id:'gm', label:'⭐ GEMINI · DELEGATED INVESTIGATION (CAPSTONE)', lines:[
       ['prompt','> write the postmortem — pull what changed, who reviewed it, and confirm it’s resolved'],
       ['why','Why: this needs GitHub and Cloudflare context stitched together. Doing it manually here would mean 4 more separate tool calls — instead, hand the whole investigation to Gemini in one call and let it run its own loop server-side. This delegation pattern is what the whole server is built around.'],
-      ['call','→ delegate_gemini({ task: "Summarize the review on PR #482 and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
+      ['call','→ delegate_agent({ task: "Summarize the review on PR #482 and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
       ['result','Gemini ran 4 steps server-side (repo_inspect, pr_read, cf_workers_observability_query, ci_manage)\n→ "PR #482 approved by 2 reviewers, merged 09:52. p95 back to 310ms baseline, checks green."'],
       ['stamped','✓ stamped · 612ms · 4 sub-steps run by Gemini, 1 call from the agent — 3 manual round-trips saved']
     ], ms:612}
