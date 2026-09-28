@@ -253,17 +253,19 @@ Notifications: `list_notifications`
 Codespaces: `codespace_manage` (`action`: `list` | `get` | `machines` | `create` | `start` | `stop` | `delete`), replacing `list_codespaces`, `get_codespace`, `list_codespace_machines`, `create_codespace`, `start_codespace`, `stop_codespace`, `delete_codespace`. `create`, `start`, `stop` and `delete` mutate; `delete` is permanent. Requires the `codespace` PAT scope on `GITHUB_TOKEN` — see [API_KEYS.md](./docs/API_KEYS.md). **Runtime requirement:** `exec_in_codespace` (separate, gated by `CODE_EXEC_ENABLED`) requires the GitHub CLI (`gh`) to be installed and authenticated on the server running this MCP instance.
 
 ### Cloudflare
-D1: `cf_d1_read` (action: get | list), `cf_d1_manage` (action: create), `cf_d1_query`, `cf_d1_database_delete` (to move into a guarded delete tool)
+D1: `cf_d1_read` (action: get | list), `cf_d1_manage` (action: create), `cf_d1_query`
 
-KV: `cf_kv_read` (action: get | list), `cf_kv_manage` (action: create | update), `cf_kv_namespace_delete` (to move into a guarded delete tool)
+KV: `cf_kv_read` (action: get | list), `cf_kv_manage` (action: create | update)
 
-R2: `cf_r2_read` (action: get | list), `cf_r2_manage` (action: create), `cf_r2_bucket_delete` (to move into a guarded delete tool)
+R2: `cf_r2_read` (action: get | list), `cf_r2_manage` (action: create)
 
-Hyperdrive: `cf_hyperdrive_config` (list/get), `cf_hyperdrive_config_create/update/delete`
+Hyperdrive: `cf_hyperdrive_read` (action: get | list), `cf_hyperdrive_manage` (action: update)
 
 Workers: `cf_workers_read` (action: list | get | code)
 
 Observability: `cf_workers_observability` (action: query | keys | values | compare)
+
+Delete: `cf_delete` (`resource`: d1 | kv | r2 | hyperdrive, `id`, `confirm`), replacing `cf_d1_database_delete`, `cf_kv_namespace_delete`, `cf_r2_bucket_delete`, `cf_hyperdrive_config_delete`. Irreversible; refuses unless `confirm: true`. For r2, `id` is the bucket name.
 
 ### Notion
 `notion_find`, `notion_read`, `notion_create`, `notion_update`, `notion_sync_content`,
