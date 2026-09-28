@@ -36,7 +36,7 @@ export function register(server) {
     "DOES: Read pull requests. READ-ONLY. Use `action` to pick.\n" +
     "RULE: 'list' needs owner + repo; optional state (open|closed|all, default open) and per_page (default 20). Returns one summary block per PR.\n" +
     "RULE: 'get' needs owner + repo + pull_number and returns that PR's details + comments + reviews + commits (with signature verification) merged into one response. Use include_comments/include_reviews/include_commits=false to trim a section out; max_comments (default 20), max_reviews (default 30), max_commits (default 100) cap each section.\n" +
-    "RULE: 'activity' needs owner + repo + pull_number and returns the PR's conversation comments and/or formal reviews (approve/request-changes/comment verdicts). Use `type` (comments|reviews|both, default both) to pick; per_page defaults to 30 here. NOT inline diff comments (no tool currently exposes those).\n" +
+    "RULE: 'activity' needs owner + repo + pull_number and returns the PR's conversation comments and/or formal reviews (approve/request-changes/comment verdicts). Use `type` (comments|reviews|inline|both, default both = comments + reviews) to pick; per_page defaults to 30 here. type 'inline' returns the diff-anchored review comments (file, line, text, reply marker; the counterpart of pr_write 'inline_comment') and is never included in 'both'.\n" +
     "RULE: 'mergeability' needs repo + pull_number (owner defaults) and checks mergeable state, conflicts and required-check status. It retries briefly server-side (up to 4 polls, ~1.2s apart) since GitHub computes this async. Use it instead of inferring conflicts from a failed merge attempt or a stale diff.\n" +
     "RULE: state/per_page apply to 'list' (and per_page to 'activity') only; the include_*/max_* params apply to 'get' only; type applies to 'activity' only.",
     {
@@ -53,7 +53,7 @@ export function register(server) {
       max_comments:     z.number().optional().describe("Max comments to include, most recent first (default: 20, max: 100). Used by 'get' only."),
       max_reviews:      z.number().optional().describe("Max reviews to include (default: 30, max: 100). Used by 'get' only."),
       max_commits:      z.number().optional().describe("Max commits to include (default: 100, max: 250). Used by 'get' only."),
-      type:             z.enum(["comments", "reviews", "both"]).optional().describe("Which activity to fetch (default: both). Used by 'activity' only."),
+      type:             z.enum(["comments", "reviews", "inline", "both"]).optional().describe("Which activity to fetch (default: both = comments + reviews). 'inline' = diff-anchored review comments (not part of 'both'). Used by 'activity' only."),
     },
     async ({ action, owner, repo, pull_number, state = "open", per_page, include_comments = true, include_reviews = true, include_commits = true, max_comments = 20, max_reviews = 30, max_commits = 100, type = "both" }) => {
 
@@ -154,6 +154,20 @@ export function register(server) {
                   `${r.body ? `:\n${r.body}` : ""}\n  ${r.html_url}`
                 ).join("\n\n---\n\n")
               : `No reviews on PR #${pull_number} yet.`
+          );
+        }
+
+        if (type === "inline") {
+          const inline = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/comments?per_page=${limit}`);
+          sections.push(
+            inline.length
+              ? `${inline.length} inline comment(s) on PR #${pull_number}:\n\n` + inline.map((c) => {
+                  const ln = c.line ?? c.original_line;
+                  const range = ln != null ? `:${c.start_line != null ? `${c.start_line}-` : ""}${ln}` : "";
+                  const outdated = c.line == null ? " (outdated)" : "";
+                  return `${c.user.login} on ${c.path}${range}${outdated} (${c.created_at.slice(0, 16).replace("T", " ")})${c.in_reply_to_id ? " [reply]" : ""}:\n${c.body}\n  ${c.html_url}`;
+                }).join("\n\n---\n\n")
+              : `No inline comments on PR #${pull_number}.`
           );
         }
 
