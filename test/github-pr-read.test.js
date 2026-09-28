@@ -83,6 +83,29 @@ describe("GitHub Connector - pr_read (consolidated)", () => {
       expect(githubRequest.mock.calls[0][0]).toBe("/repos/allocsys/madmcp/pulls/42/reviews?per_page=30");
     });
 
+    it("activity type=inline fetches only the diff-anchored review comments", async () => {
+      githubRequest.mockResolvedValueOnce([
+        { user: { login: "alice" }, path: "src/a.js", line: 12, original_line: 12, created_at: "2026-08-03T10:15:00Z", body: "nit", html_url: "https://x/c/1" },
+        { user: { login: "bob" }, path: "src/a.js", line: 20, start_line: 15, created_at: "2026-08-03T11:00:00Z", body: "range", html_url: "https://x/c/2", in_reply_to_id: 1 },
+        { user: { login: "carol" }, path: "src/b.js", line: null, original_line: 7, created_at: "2026-08-03T12:00:00Z", body: "old", html_url: "https://x/c/3" },
+      ]);
+      const result = await server.tools.pr_read({ action: "activity", owner: "allocsys", repo: "madmcp", pull_number: 42, type: "inline" });
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+      expect(githubRequest.mock.calls[0][0]).toBe("/repos/allocsys/madmcp/pulls/42/comments?per_page=30");
+      const text = result.content[0].text;
+      expect(text).toContain("3 inline comment(s) on PR #42:");
+      expect(text).toContain("alice on src/a.js:12 (2026-08-03 10:15):\nnit\n  https://x/c/1");
+      expect(text).toContain("bob on src/a.js:15-20 (2026-08-03 11:00) [reply]:\nrange");
+      expect(text).toContain("carol on src/b.js:7 (outdated) (2026-08-03 12:00):\nold");
+    });
+
+    it("activity type=inline says so when there are none", async () => {
+      githubRequest.mockResolvedValueOnce([]);
+      const result = await server.tools.pr_read({ action: "activity", owner: "allocsys", repo: "madmcp", pull_number: 42, type: "inline", per_page: 5 });
+      expect(githubRequest.mock.calls[0][0]).toBe("/repos/allocsys/madmcp/pulls/42/comments?per_page=5");
+      expect(result.content[0].text).toBe("No inline comments on PR #42.");
+    });
+
     it("get uses max_comments=20, max_reviews=30, max_commits=100 by default", async () => {
       githubRequest
         .mockResolvedValueOnce({
