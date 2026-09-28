@@ -44,14 +44,14 @@ describe("GitHub Connector - repo_inspect (consolidated)", () => {
     });
 
     it("create_branch requires the new branch name", async () => {
-      const result = await server.tools.repo_inspect({ action: "create_branch", repo: "madmcp" });
+      const result = await server.tools.repo_inspect({ action: "create_branch", owner: "allocsys", repo: "madmcp" });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("requires branch");
       expect(githubRequest).not.toHaveBeenCalled();
     });
 
     it("get_commit requires sha", async () => {
-      const result = await server.tools.repo_inspect({ action: "get_commit", repo: "madmcp" });
+      const result = await server.tools.repo_inspect({ action: "get_commit", owner: "allocsys", repo: "madmcp" });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("requires sha");
     });
@@ -89,11 +89,33 @@ describe("GitHub Connector - repo_inspect (consolidated)", () => {
     });
   });
 
-  describe("list_commits", () => {
-    it("omits the sha param entirely when branch is not given (uses default branch)", async () => {
+  describe("owner requirements (match the original tools)", () => {
+    it.each(["create_branch", "list_commits", "get_commit"])("%s requires an explicit owner", async (action) => {
+      const result = await server.tools.repo_inspect({ action, repo: "madmcp", branch: "b", sha: "abc" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("requires owner");
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it("list_branches still defaults owner", async () => {
       githubRequest.mockResolvedValueOnce([]);
-      await server.tools.repo_inspect({ action: "list_commits", owner: "allocsys", repo: "madmcp" });
-      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/commits?per_page=20");
+      await server.tools.repo_inspect({ action: "list_branches", repo: "madmcp" });
+      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/branches");
+    });
+  });
+
+  describe("list_commits", () => {
+    it("requires branch (as the original tool's schema did)", async () => {
+      const result = await server.tools.repo_inspect({ action: "list_commits", owner: "allocsys", repo: "madmcp" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("requires branch");
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it("defaults per_page to 20 and passes sha=branch", async () => {
+      githubRequest.mockResolvedValueOnce([]);
+      await server.tools.repo_inspect({ action: "list_commits", owner: "allocsys", repo: "madmcp", branch: "main" });
+      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/commits?per_page=20&sha=main");
     });
   });
 
