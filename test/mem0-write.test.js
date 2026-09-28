@@ -342,6 +342,7 @@ describe("Mem0 connector - write tools (add / add_batch / update)", () => {
       mem0Request.mockImplementation(async (path, opts) => {
         if (path === "/v3/memories/" && opts?.body?.page_size === 20) return { results: [{ id: "m1", memory: "one" }] };
         if (path === "/v3/memories/") return { results: [] }; // findByEntityId: nothing yet
+        if (path === "/v3/memories/search/") return { results: [] };
         if (path === "/v3/memories/add/") return { event_id: "ev" };
         throw new Error(`unexpected path ${path}`);
       });
@@ -356,7 +357,7 @@ describe("Mem0 connector - write tools (add / add_batch / update)", () => {
         })
       );
       const addCalls = mem0Request.mock.calls.filter(([p]) => p === "/v3/memories/add/");
-      expect(addCalls).toHaveLength(1 + 1);
+      expect(addCalls).toHaveLength(2);
       const lines = result.content[0].text.split("\n");
       expect(lines[1]).toContain("skipped, duplicate of item [0] in this same batch");
       expect(lines[3]).toContain("skipped, duplicate of item [2] in this same batch");
