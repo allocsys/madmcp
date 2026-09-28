@@ -136,7 +136,7 @@ export function register(server) {
               readyMsg = `PR #${pull_number} converted from draft to ready for review.`;
             }
           } catch (e) {
-            if (patchMsg) throw new Error(`${patchMsg}\nHowever, converting the PR to ready for review failed: ${e.message}`);
+            if (patchMsg) throw new Error(`${patchMsg}\nHowever, converting the PR to ready for review failed: ${e.message}`, { cause: e });
             throw e;
           }
         }
