@@ -124,7 +124,7 @@ export function register(server) {
       base_path:   z.string().optional().describe("Path of the base file (use with head_path for cross-file diff). Used by 'diff' only."),
       head_path:   z.string().optional().describe("Path of the head file (use with base_path for cross-file diff). Used by 'diff' only."),
       ref:         z.string().optional().describe("For 'diff' (cross-file mode): ref both files are read at (default: default branch). For 'search': branch, tag, or commit SHA to search -- REQUIRED there, and query must contain a repo:owner/name qualifier."),
-      query:       z.string().optional().describe("Search query for 'search' (e.g. 'VLESS filename:worker.js repo:owner/name'). Must include a repo:owner/name qualifier."),
+      query:       z.string().optional().describe("Search query for 'search' (e.g. 'createServer repo:owner/name'). Must include a repo:owner/name qualifier. Other qualifiers (filename:, extension:, language:) are stripped and the remaining text is matched as one literal string (no OR)."),
     },
     async ({ action, owner: ownerArg, repo, path, commit, sha, branch, from_branch, per_page, base_ref, head_ref, base_path, head_path, ref, query }) => {
 
