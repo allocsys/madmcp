@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // connectors/github/review_control.js — reviewer assignment, merge
 // readiness, inline review comments, and notifications. (Branch protection
-// read moved to repo_inspect's 'branch_protection' action.) Complements prs.js (which submits whole-PR reviews but
-// can't request reviewers or surface merge conflicts) and actions.js/
+// read moved to repo_inspect's 'branch_protection' action; merge-readiness
+// read moved to pr_read's 'mergeability' action.) Complements prs.js (which
+// submits whole-PR reviews but can't request reviewers) and actions.js/
 // ci_control.js (commit-level CI state, not PR-level review state).
 // ---------------------------------------------------------------------------
 
@@ -66,48 +67,6 @@ export function register(server) {
         },
       });
       return { content: [{ type: "text", text: `Removed review request(s) on PR #${pull_number}.` }] };
-    }
-  );
-
-  server.tool(
-    "get_pr_mergeability",
-    "DOES: Check mergeable state, conflicts, required-check status for a PR (retries briefly server-side since GitHub computes this async).\n" +
-    "RULE: use this instead of inferring conflicts from a failed merge attempt or a stale diff.",
-    {
-      owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:        z.string().describe("Repository name"),
-      pull_number: z.number().describe("Pull request number"),
-    },
-    async ({ owner = DEFAULT_OWNER, repo, pull_number }) => {
-      let pr;
-      let polls = 0;
-      for (let attempt = 0; attempt < 4; attempt++) {
-        pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
-        polls++;
-        if (pr.mergeable !== null) break;
-        if (attempt < 3) await new Promise((r) => setTimeout(r, 1200));
-      }
-
-      const stateMeaning = {
-        clean:     "No conflicts, all checks pass — ready to merge.",
-        dirty:     "Merge conflicts — the branch needs to be updated before it can merge.",
-        unstable:  "Mergeable, but some non-required checks are failing.",
-        blocked:   "Blocked — a required check is failing or hasn't run, or a required review is missing.",
-        behind:    "Branch is out of date with the base branch and needs updating (required by branch protection).",
-        draft:     "PR is a draft.",
-        unknown:   "GitHub is still computing mergeability — try again shortly.",
-      };
-
-      const mergeableLine = pr.mergeable === null
-        ? `mergeable: still computing (polled ${polls}x, ~${(polls - 1) * 1.2}s — GitHub hasn't finished; try again shortly)`
-        : `mergeable: ${pr.mergeable}${polls > 1 ? ` (resolved after ${polls} poll(s))` : ""}`;
-      const text =
-        `PR #${pull_number}: ${pr.title}\n` +
-        `${mergeableLine}\n` +
-        `mergeable_state: ${pr.mergeable_state}${stateMeaning[pr.mergeable_state] ? ` — ${stateMeaning[pr.mergeable_state]}` : ""}\n` +
-        `rebaseable: ${pr.rebaseable === null ? "unknown" : pr.rebaseable}\n` +
-        `${pr.head.label} → ${pr.base.label}`;
-      return { content: [{ type: "text", text }] };
     }
   );
 
