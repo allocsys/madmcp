@@ -34,8 +34,8 @@ export function register(server) {
     "RULE: 'create' needs repo + ref (owner defaults); optional machine and devcontainer_path. Async: state is 'Provisioning' on return, ~30-90s until 'Available'. Poll 'get' to confirm.\n" +
     "RULE: 'start' needs codespace_name. Starts a stopped codespace.\n" +
     "RULE: 'stop' needs codespace_name. Stops a running codespace. Async: state is 'ShuttingDown' on return, ~30-60s until 'Shutdown'. Poll 'get' to confirm.\n" +
-    "RULE: 'delete' needs codespace_name. PERMANENTLY and IRREVERSIBLY deletes the codespace -- use with caution.\n" +
-    "RULE: codespace_name applies to 'get', 'start', 'stop' and 'delete' only; ref to 'machines' and 'create'; machine/devcontainer_path to 'create' only. Running commands inside a codespace is a separate tool (exec_in_codespace), only available when enabled on the server.",
+    "RULE: 'delete' needs codespace_name AND confirm: true. PERMANENTLY and IRREVERSIBLY deletes the codespace; without confirm: true nothing is deleted.\n" +
+    "RULE: codespace_name applies to 'get', 'start', 'stop' and 'delete' only; ref to 'machines' and 'create'; machine/devcontainer_path to 'create' only; confirm to 'delete' only. Running commands inside a codespace is a separate tool (exec_in_codespace), only available when enabled on the server.",
     {
       action:            z.enum(["list", "get", "machines", "create", "start", "stop", "delete"]).describe("Which operation to perform."),
       owner:             z.string().optional().describe(`Repository owner. Used by 'list' (only when repo is given), 'machines' and 'create'. Defaults to "${DEFAULT_OWNER}" if omitted.`),
@@ -44,8 +44,9 @@ export function register(server) {
       ref:               z.string().optional().describe("Branch, tag, or commit SHA. Required for 'machines' (to check machine availability for) and 'create' (to create the codespace from)."),
       machine:           z.string().optional().describe("Machine type (e.g. 'basicLinux32gb'). Omit to let GitHub pick a default. Use 'machines' to see valid values for a repo. Used by 'create' only."),
       devcontainer_path: z.string().optional().describe("Path to a devcontainer.json to use, relative to repo root. Used by 'create' only."),
+      confirm:           z.boolean().optional().describe("Must be explicitly true for 'delete' to proceed. Safety guard against accidental deletion -- deletion is irreversible. Ignored by other actions."),
     },
-    async ({ action, owner, repo, codespace_name, ref, machine, devcontainer_path }) => {
+    async ({ action, owner, repo, codespace_name, ref, machine, devcontainer_path, confirm }) => {
 
       if ((action === "machines" || action === "create") && !repo) {
         return fail(`action '${action}' requires repo parameter.`);
@@ -84,7 +85,7 @@ export function register(server) {
 
       // ── get (was get_codespace) ───────────────────────────────────────────
       if (action === "get") {
-        const cs = await githubRequest(`/user/codespaces/${codespace_name}`);
+        const cs = await githubRequest(`/user/codespaces/${encodeURIComponent(codespace_name)}`);
         const lines = [
           `${cs.name} [${cs.state}]`,
           `Repo: ${cs.repository.full_name}@${cs.git_status.ref}`,
@@ -98,7 +99,7 @@ export function register(server) {
 
       // ── machines (was list_codespace_machines) ────────────────────────────
       if (action === "machines") {
-        const machineOwner = owner ?? DEFAULT_OWNER;
+        const machineOwner = owner || DEFAULT_OWNER;
         let path = `/repos/${machineOwner}/${repo}/codespaces/machines`;
         if (ref) path += `?ref=${encodeURIComponent(ref)}`;
 
@@ -120,7 +121,7 @@ export function register(server) {
 
       // ── create (was create_codespace) ─────────────────────────────────────
       if (action === "create") {
-        const createOwner = owner ?? DEFAULT_OWNER;
+        const createOwner = owner || DEFAULT_OWNER;
         const body = {};
         if (ref) body.ref = ref;
         if (machine) body.machine = machine;
@@ -140,7 +141,7 @@ export function register(server) {
 
       // ── start (was start_codespace) ───────────────────────────────────────
       if (action === "start") {
-        const cs = await githubRequest(`/user/codespaces/${codespace_name}/start`, { method: "POST" });
+        const cs = await githubRequest(`/user/codespaces/${encodeURIComponent(codespace_name)}/start`, { method: "POST" });
         return {
           content: [{ type: "text", text: `▶️ ${cs.name} — state: ${cs.state}` }],
         };
@@ -148,18 +149,22 @@ export function register(server) {
 
       // ── stop (was stop_codespace) ─────────────────────────────────────────
       if (action === "stop") {
-        const cs = await githubRequest(`/user/codespaces/${codespace_name}/stop`, { method: "POST" });
+        const cs = await githubRequest(`/user/codespaces/${encodeURIComponent(codespace_name)}/stop`, { method: "POST" });
         return {
           content: [{ type: "text", text: `⏹️ ${cs.name} — state: ${cs.state}` }],
         };
       }
 
       // ── delete (was delete_codespace) ─────────────────────────────────────
-      // PRECISION-PASS: irreversible. The original tool had no confirm
-      // parameter, so none is added here (no behavior change); the
-      // irreversibility warning lives in the top-level description.
+      // PRECISION-PASS: irreversible. A confirm guard was added after the
+      // consolidation (deliberate behavior change, mirrors repo_lifecycle's
+      // delete): this check is the ONLY thing between a stray call and
+      // permanent codespace deletion -- do not weaken or reorder it.
       // action === "delete"
-      await githubRequest(`/user/codespaces/${codespace_name}`, { method: "DELETE" });
+      if (confirm !== true) {
+        return fail(`Refused: codespace "${codespace_name}" was NOT deleted. Deleting a codespace is irreversible. Re-call with action: "delete" and confirm: true to proceed.`);
+      }
+      await githubRequest(`/user/codespaces/${encodeURIComponent(codespace_name)}`, { method: "DELETE" });
       return {
         content: [{ type: "text", text: `🗑️ Deleted codespace ${codespace_name} permanently.` }],
       };
