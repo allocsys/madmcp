@@ -49,12 +49,12 @@ export function register(server) {
   );
 
   // Replaces the former cf_d1_database_create. Deletion is intentionally not
-  // part of this tool (it will move to a separate guarded delete tool).
+  // part of this tool (it lives in the separate guarded cf_delete tool).
   server.tool(
     "cf_d1_manage",
     "DOES: Create D1 databases in your Cloudflare account. MUTATES Cloudflare state. Use `action` to pick.\n" +
     "RULE: action 'create' requires name; optional primary_location_hint (wnam|enam|weur|eeur|apac|oc).\n" +
-    "NOT: deleting a database -> cf_d1_database_delete.",
+    "NOT: deleting a database -> cf_delete.",
     {
       action: z.enum(["create"]).describe("Which operation to perform"),
       name: z.string().optional().describe("Name of the new database. Required for action 'create'."),
@@ -71,15 +71,6 @@ export function register(server) {
 
       return errorResult(`Unknown action '${action}'.`);
     }
-  );
-
-  // Kept until the guarded delete tool lands (last group of the overhaul).
-  server.tool(
-    "cf_d1_database_delete",
-    "Delete a D1 database in your Cloudflare account",
-    { database_id: z.string() },
-    async ({ database_id }) =>
-      textResult(await cfAccountRequest(`/d1/database/${database_id}`, { method: "DELETE" }))
   );
 
   // Renamed from cf_d1_database_query; behavior unchanged.

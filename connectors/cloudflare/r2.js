@@ -53,12 +53,12 @@ export function register(server) {
   );
 
   // Replaces the former cf_r2_bucket_create. Deletion is intentionally not
-  // part of this tool (it will move to a separate guarded delete tool).
+  // part of this tool (it lives in the separate guarded cf_delete tool).
   server.tool(
     "cf_r2_manage",
     "DOES: Create R2 buckets in your Cloudflare account. MUTATES Cloudflare state. Use `action` to pick.\n" +
     "RULE: action 'create' requires name and creates a new bucket.\n" +
-    "NOT: deleting a bucket -> cf_r2_bucket_delete.",
+    "NOT: deleting a bucket -> cf_delete.",
     {
       action: z.enum(["create"]).describe("Which operation to perform"),
       name: z.string().optional().describe("Bucket name. Required for action 'create'."),
@@ -71,13 +71,5 @@ export function register(server) {
 
       return errorResult(`Unknown action '${action}'.`);
     }
-  );
-
-  // Kept until the guarded delete tool lands (last group of the overhaul).
-  server.tool(
-    "cf_r2_bucket_delete",
-    "Delete an R2 bucket",
-    { name: z.string() },
-    async ({ name }) => textResult(await cfAccountRequest(`/r2/buckets/${name}`, { method: "DELETE" }))
   );
 }

@@ -30,8 +30,8 @@ describe("Cloudflare connector - consolidated KV tools", () => {
   });
 
   it("registers the new KV tools and drops the old names", () => {
-    expect(server.names).toEqual(["cf_kv_read", "cf_kv_manage", "cf_kv_namespace_delete"]);
-    for (const old of ["cf_kv_namespace", "cf_kv_namespace_create", "cf_kv_namespace_update"]) {
+    expect(server.names).toEqual(["cf_kv_read", "cf_kv_manage"]);
+    for (const old of ["cf_kv_namespace", "cf_kv_namespace_create", "cf_kv_namespace_update", "cf_kv_namespace_delete"]) {
       expect(server.names).not.toContain(old);
     }
   });
@@ -130,14 +130,6 @@ describe("Cloudflare connector - consolidated KV tools", () => {
       await expect(
         server.tools.cf_kv_manage({ action: "update", namespace_id: "ns1", title: "t" })
       ).rejects.toThrow("403 forbidden");
-    });
-  });
-
-  describe("cf_kv_namespace_delete (unchanged)", () => {
-    it("DELETEs /storage/kv/namespaces/{id}", async () => {
-      cfAccountRequest.mockResolvedValueOnce({});
-      await server.tools.cf_kv_namespace_delete({ namespace_id: "ns1" });
-      expect(cfAccountRequest).toHaveBeenCalledWith("/storage/kv/namespaces/ns1", { method: "DELETE" });
     });
   });
 });

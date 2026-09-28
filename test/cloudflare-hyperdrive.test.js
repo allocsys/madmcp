@@ -30,8 +30,8 @@ describe("Cloudflare connector - consolidated Hyperdrive tools", () => {
   });
 
   it("registers the new Hyperdrive tools and drops the old names", () => {
-    expect(server.names).toEqual(["cf_hyperdrive_read", "cf_hyperdrive_manage", "cf_hyperdrive_config_delete"]);
-    for (const old of ["cf_hyperdrive_config", "cf_hyperdrive_config_update"]) {
+    expect(server.names).toEqual(["cf_hyperdrive_read", "cf_hyperdrive_manage"]);
+    for (const old of ["cf_hyperdrive_config", "cf_hyperdrive_config_update", "cf_hyperdrive_config_delete"]) {
       expect(server.names).not.toContain(old);
     }
   });
@@ -142,14 +142,6 @@ describe("Cloudflare connector - consolidated Hyperdrive tools", () => {
       await expect(
         server.tools.cf_hyperdrive_manage({ action: "update", hyperdrive_id: "h1", name: "n" })
       ).rejects.toThrow("403 forbidden");
-    });
-  });
-
-  describe("cf_hyperdrive_config_delete (unchanged)", () => {
-    it("DELETEs /hyperdrive/configs/{id}", async () => {
-      cfAccountRequest.mockResolvedValueOnce({});
-      await server.tools.cf_hyperdrive_config_delete({ hyperdrive_id: "h1" });
-      expect(cfAccountRequest).toHaveBeenCalledWith("/hyperdrive/configs/h1", { method: "DELETE" });
     });
   });
 });

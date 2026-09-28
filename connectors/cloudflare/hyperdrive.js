@@ -51,12 +51,12 @@ export function register(server) {
   );
 
   // Replaces the former cf_hyperdrive_config_update. Deletion is intentionally
-  // not part of this tool (it will move to a separate guarded delete tool).
+  // not part of this tool (it lives in the separate guarded cf_delete tool).
   server.tool(
     "cf_hyperdrive_manage",
     "DOES: Update (patch) Hyperdrive configurations in your Cloudflare account. MUTATES Cloudflare state. Use `action` to pick.\n" +
     "RULE: action 'update' requires hyperdrive_id; only the fields you pass are patched (name, origin fields, caching fields).\n" +
-    "NOT: deleting a configuration -> cf_hyperdrive_config_delete.",
+    "NOT: deleting a configuration -> cf_delete.",
     {
       action: z.enum(["update"]).describe("Which operation to perform"),
       hyperdrive_id: z.string().optional().describe("The configuration ID. Required for action 'update'."),
@@ -96,14 +96,5 @@ export function register(server) {
 
       return errorResult(`Unknown action '${action}'.`);
     }
-  );
-
-  // Kept until the guarded delete tool lands (last group of the overhaul).
-  server.tool(
-    "cf_hyperdrive_config_delete",
-    "Delete a Hyperdrive configuration in your Cloudflare account",
-    { hyperdrive_id: z.string() },
-    async ({ hyperdrive_id }) =>
-      textResult(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`, { method: "DELETE" }))
   );
 }

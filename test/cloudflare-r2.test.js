@@ -30,8 +30,8 @@ describe("Cloudflare connector - consolidated R2 tools", () => {
   });
 
   it("registers the new R2 tools and drops the old names", () => {
-    expect(server.names).toEqual(["cf_r2_read", "cf_r2_manage", "cf_r2_bucket_delete"]);
-    for (const old of ["cf_r2_bucket", "cf_r2_bucket_create"]) {
+    expect(server.names).toEqual(["cf_r2_read", "cf_r2_manage"]);
+    for (const old of ["cf_r2_bucket", "cf_r2_bucket_create", "cf_r2_bucket_delete"]) {
       expect(server.names).not.toContain(old);
     }
   });
@@ -109,14 +109,6 @@ describe("Cloudflare connector - consolidated R2 tools", () => {
     it("lets API errors throw", async () => {
       cfAccountRequest.mockRejectedValueOnce(new Error("409 conflict"));
       await expect(server.tools.cf_r2_manage({ action: "create", name: "new" })).rejects.toThrow("409 conflict");
-    });
-  });
-
-  describe("cf_r2_bucket_delete (unchanged)", () => {
-    it("DELETEs /r2/buckets/{name}", async () => {
-      cfAccountRequest.mockResolvedValueOnce({});
-      await server.tools.cf_r2_bucket_delete({ name: "b1" });
-      expect(cfAccountRequest).toHaveBeenCalledWith("/r2/buckets/b1", { method: "DELETE" });
     });
   });
 });
