@@ -36,17 +36,10 @@ describe("GitHub Connector - repo_inspect (consolidated)", () => {
   });
 
   describe("parameter validation", () => {
-    it("requires repo for non-search actions", async () => {
+    it("requires repo for every action", async () => {
       const result = await server.tools.repo_inspect({ action: "list_branches" });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("requires repo");
-      expect(githubRequest).not.toHaveBeenCalled();
-    });
-
-    it("create_branch requires the new branch name", async () => {
-      const result = await server.tools.repo_inspect({ action: "create_branch", owner: "allocsys", repo: "madmcp" });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("requires branch");
       expect(githubRequest).not.toHaveBeenCalled();
     });
 
@@ -74,23 +67,10 @@ describe("GitHub Connector - repo_inspect (consolidated)", () => {
       expect(result.content[0].text).toContain("path + head_ref");
       expect(result.content[0].text).toContain("base_path + head_path");
     });
-
-    it("search requires query", async () => {
-      const result = await server.tools.repo_inspect({ action: "search", ref: "main" });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("requires query");
-    });
-
-    it("search requires ref and does not need repo param", async () => {
-      const result = await server.tools.repo_inspect({ action: "search", query: "foo repo:allocsys/madmcp" });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("requires ref");
-      expect(githubRequest).not.toHaveBeenCalled();
-    });
   });
 
   describe("owner requirements (match the original tools)", () => {
-    it.each(["create_branch", "list_commits", "get_commit"])("%s requires an explicit owner", async (action) => {
+    it.each(["list_commits", "get_commit"])("%s requires an explicit owner", async (action) => {
       const result = await server.tools.repo_inspect({ action, repo: "madmcp", branch: "b", sha: "abc" });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("requires owner");
