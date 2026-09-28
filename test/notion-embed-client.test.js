@@ -73,6 +73,7 @@ describe("connectors/notion/embed_client.js", () => {
     expect(init.headers["Authorization"]).toBe("Bearer top-secret");
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(JSON.parse(init.body)).toEqual({ page_id: "page-42", content: "title\nbody text" });
+    expect(init.signal).toBeInstanceOf(AbortSignal); // A7: request has a timeout
   });
 
   it("returns an awaitable promise that only settles once the underlying fetch does", async () => {
