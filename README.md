@@ -278,7 +278,8 @@ consolidation.
 
 ### Mem0
 `mem0_add`, `mem0_add_batch`, `mem0_get`, `mem0_get_history`, `mem0_list`, `mem0_search`,
-`mem0_update`, `mem0_delete`, `mem0_delete_batch`, `mem0_delete_all`
+`mem0_update`, `mem0_delete` (`action`: `one` | `batch` | `all` — replaces the former
+`mem0_delete`, `mem0_delete_batch` and `mem0_delete_all`)
 
 ### Context7
 `search_library`, `get_library_docs` — resolve a library/framework name to a Context7 ID, then fetch
