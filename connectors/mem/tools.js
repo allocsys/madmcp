@@ -597,57 +597,86 @@ export function register(server) {
     }
   );
 
-  // ── Get single memory ────────────────────────────────────────────────────
+  // ── Inspect one memory / entity ──────────────────────────────────────────
+  // Consolidates the former mem0_get, mem0_get_history and mem0_get_relations
+  // (action: get | history | relations). Output and requests are unchanged;
+  // required-ness moved from zod into the handler.
   server.tool(
-    "mem0_get",
-    "Get the full content of a specific Mem0 memory by ID.",
+    "mem0_inspect",
+    "DOES: Inspect one Mem0 memory or entity. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'get' requires memory_id and returns the memory's full content, categories/tags/entity_id/status/duplicate flags, metadata, and (when it has an entity_id) its related entities up to 3 hops, both directions.\n" +
+    "RULE: action 'history' requires memory_id and returns the version/audit trail — every ADD/UPDATE/DELETE event with old/new values and timestamps (wraps Mem0's native history endpoint).\n" +
+    "RULE: action 'relations' requires entity_id and returns the complete relation graph (up to 3 hops, both outgoing and incoming) around that entity, bypassing the top-5 results cap that mem0_list's include_relations has.\n" +
+    "RULE: memory_id applies to 'get' and 'history' only; entity_id/user_id/agent_id/run_id apply to 'relations' only.",
     {
-      memory_id: z.string().describe("The memory ID (from mem0_list or mem0_search)"),
+      action:    z.enum(["get", "history", "relations"]).describe("Which operation to perform"),
+      memory_id: z.string().optional().describe("The memory ID (from mem0_list or mem0_search). Required for actions 'get' and 'history'."),
+      entity_id: z.string().optional().describe("The entity_id to resolve relations for. Required for action 'relations'."),
+      user_id:   z.string().optional().describe(`Mem0 user ID scoping (default: ${MEM0_USER_ID}). Used by 'relations' only.`),
+      agent_id:  z.string().optional().describe("Optional agent ID scoping. Used by 'relations' only."),
+      run_id:    z.string().optional().describe("Optional run/session ID scoping. Used by 'relations' only."),
     },
-    async ({ memory_id }) => {
-      const m = await mem0Request(`/v1/memories/${memory_id}/`);
-      const cats = Array.isArray(m.categories) && m.categories.length ? `\nCategories: ${m.categories.join(", ")}` : "";
-      const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? `\nTags: ${m.metadata.tags.join(", ")}` : "";
-      const eid = m.metadata?.entity_id ? `\nEntity ID: ${m.metadata.entity_id}` : "";
-      const status = m.metadata?.status ? `\nStatus: ${m.metadata.status}` : "";
-      const dup = Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length ? `\nPossible duplicate of: ${m.metadata.possible_duplicate_of.join(", ")}` : "";
-      const meta = m.metadata && Object.keys(m.metadata).length ? `\n\nMetadata:\n${JSON.stringify(m.metadata, null, 2)}` : "";
-      let relatedSection = "";
-      if (m.metadata?.entity_id) {
-        const edges = await traverseRelations(m.metadata.entity_id, { user_id: m.user_id || MEM0_USER_ID, agent_id: m.agent_id, run_id: m.run_id });
-        const rendered = formatRelatedEntities(edges);
-        if (rendered) relatedSection = `\n\n${rendered}`;
-      }
-      const text =
-        `ID: ${m.id}\n` +
-        `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}${status}${dup}\n\n` +
-        (m.memory || m.text || "(no content)") +
-        meta + relatedSection;
-      return { content: [{ type: "text", text }] };
-    }
-  );
+    async ({ action, memory_id, entity_id, user_id = MEM0_USER_ID, agent_id, run_id }) => {
 
-  // ── Get memory version history ───────────────────────────────────────────
-  server.tool(
-    "mem0_get_history",
-    "Get the version/audit history of a specific Mem0 memory by ID — every ADD/UPDATE/DELETE event recorded for it, with old/new values and timestamps. Wraps Mem0's native history endpoint.",
-    {
-      memory_id: z.string().describe("The memory ID (from mem0_list or mem0_search)"),
-    },
-    async ({ memory_id }) => {
-      const data = await mem0Request(`/v1/memories/${memory_id}/history/`);
-      const entries = data.results || data.history || data || [];
-      if (!entries.length) return { content: [{ type: "text", text: "No history found for this memory." }] };
-      const lines = entries.map((h) => {
-        const date = (h.created_at || h.updated_at || "").slice(0, 10) || "?";
-        const event = h.event || h.action || "?";
-        const trunc = (s) => (s || "").slice(0, 70).replace(/\n/g, " ") + ((s || "").length > 70 ? "…" : "");
-        const oldVal = h.prev_value ?? h.old_memory;
-        const newVal = h.new_value ?? h.new_memory;
-        const diff = oldVal || newVal ? ` | ${trunc(oldVal) || "(none)"} → ${trunc(newVal) || "(none)"}` : "";
-        return `${date} [${event}]${diff}`;
-      });
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      if (action === "get") {
+        if (!memory_id) {
+          return { content: [{ type: "text", text: "action 'get' requires memory_id." }], isError: true };
+        }
+        const m = await mem0Request(`/v1/memories/${memory_id}/`);
+        const cats = Array.isArray(m.categories) && m.categories.length ? `\nCategories: ${m.categories.join(", ")}` : "";
+        const tags = Array.isArray(m.metadata?.tags) && m.metadata.tags.length ? `\nTags: ${m.metadata.tags.join(", ")}` : "";
+        const eid = m.metadata?.entity_id ? `\nEntity ID: ${m.metadata.entity_id}` : "";
+        const status = m.metadata?.status ? `\nStatus: ${m.metadata.status}` : "";
+        const dup = Array.isArray(m.metadata?.possible_duplicate_of) && m.metadata.possible_duplicate_of.length ? `\nPossible duplicate of: ${m.metadata.possible_duplicate_of.join(", ")}` : "";
+        const meta = m.metadata && Object.keys(m.metadata).length ? `\n\nMetadata:\n${JSON.stringify(m.metadata, null, 2)}` : "";
+        let relatedSection = "";
+        if (m.metadata?.entity_id) {
+          const edges = await traverseRelations(m.metadata.entity_id, { user_id: m.user_id || MEM0_USER_ID, agent_id: m.agent_id, run_id: m.run_id });
+          const rendered = formatRelatedEntities(edges);
+          if (rendered) relatedSection = `\n\n${rendered}`;
+        }
+        const text =
+          `ID: ${m.id}\n` +
+          `Created: ${m.created_at?.slice(0, 10) || "unknown"} | Updated: ${m.updated_at?.slice(0, 10) || "unknown"}${cats}${tags}${eid}${status}${dup}\n\n` +
+          (m.memory || m.text || "(no content)") +
+          meta + relatedSection;
+        return { content: [{ type: "text", text }] };
+      }
+
+      if (action === "history") {
+        if (!memory_id) {
+          return { content: [{ type: "text", text: "action 'history' requires memory_id." }], isError: true };
+        }
+        const data = await mem0Request(`/v1/memories/${memory_id}/history/`);
+        const entries = data.results || data.history || data || [];
+        if (!entries.length) return { content: [{ type: "text", text: "No history found for this memory." }] };
+        const lines = entries.map((h) => {
+          const date = (h.created_at || h.updated_at || "").slice(0, 10) || "?";
+          const event = h.event || h.action || "?";
+          const trunc = (s) => (s || "").slice(0, 70).replace(/\n/g, " ") + ((s || "").length > 70 ? "…" : "");
+          const oldVal = h.prev_value ?? h.old_memory;
+          const newVal = h.new_value ?? h.new_memory;
+          const diff = oldVal || newVal ? ` | ${trunc(oldVal) || "(none)"} → ${trunc(newVal) || "(none)"}` : "";
+          return `${date} [${event}]${diff}`;
+        });
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      // action === "relations"
+      if (!entity_id) {
+        return { content: [{ type: "text", text: "action 'relations' requires entity_id." }], isError: true };
+      }
+      const memory = await findByEntityId({ user_id, agent_id, run_id, entity_id });
+      const edges = await traverseRelations(entity_id, { user_id, agent_id, run_id });
+      if (!edges.length && !memory) {
+        return { content: [{ type: "text", text: `No entity found with entity_id "${entity_id}" and no relations recorded.` }] };
+      }
+      const rendered = formatRelatedEntities(edges);
+      const memoryHeader = memory
+        ? `Entity: ${entity_id} (memory ID: ${memory.id})\nContent preview: ${(memory.memory || memory.text || "").slice(0, 120)}\n\n`
+        : `Entity: ${entity_id} (no memory record currently found in scope, but relations reference it)\n\n`;
+      const text = memoryHeader + (rendered || "No relations found (up to 3 hops).");
+      return { content: [{ type: "text", text }] };
     }
   );
 
@@ -724,7 +753,7 @@ export function register(server) {
           duplicateWarning =
             `\n\n⚠ Possible duplicate(s) found — added anyway (not blocked), flagged for review:\n` +
             candidates.map((c) => `  ${c.id} (score ${c.score.toFixed(2)}): ${(c.memory || c.text || "").slice(0, 70)}`).join("\n") +
-            `\nCheck with mem0_get; if it's a real duplicate, merge via mem0_update and mark the stale one status="superseded".`;
+            `\nCheck with mem0_inspect (action 'get'); if it's a real duplicate, merge via mem0_update and mark the stale one status="superseded".`;
         }
       }
       const messages = [{ role: "user", content }];
@@ -835,31 +864,6 @@ export function register(server) {
     }
   );
 
-  // ── Get entity relations (full traversal) ───────────────────────────────
-  server.tool(
-    "mem0_get_relations",
-    "Perform a full relation resolution (up to 3 hops, both outgoing and incoming) for a single entity_id — bypassing the top-5 results cap that mem0_list's include_relations has. Use this when you need the complete relationship graph around one specific entity.",
-    {
-      entity_id: z.string().describe("The entity_id to resolve relations for (required)"),
-      user_id:   z.string().optional().describe(`Mem0 user ID scoping (default: ${MEM0_USER_ID})`),
-      agent_id:  z.string().optional().describe("Optional agent ID scoping"),
-      run_id:    z.string().optional().describe("Optional run/session ID scoping"),
-    },
-    async ({ entity_id, user_id = MEM0_USER_ID, agent_id, run_id }) => {
-      const memory = await findByEntityId({ user_id, agent_id, run_id, entity_id });
-      const edges = await traverseRelations(entity_id, { user_id, agent_id, run_id });
-      if (!edges.length && !memory) {
-        return { content: [{ type: "text", text: `No entity found with entity_id "${entity_id}" and no relations recorded.` }] };
-      }
-      const rendered = formatRelatedEntities(edges);
-      const memoryHeader = memory
-        ? `Entity: ${entity_id} (memory ID: ${memory.id})\nContent preview: ${(memory.memory || memory.text || "").slice(0, 120)}\n\n`
-        : `Entity: ${entity_id} (no memory record currently found in scope, but relations reference it)\n\n`;
-      const text = memoryHeader + (rendered || "No relations found (up to 3 hops).");
-      return { content: [{ type: "text", text }] };
-    }
-  );
-
   // ── Search memories ──────────────────────────────────────────────────────
   server.tool(
     "mem0_search",
@@ -956,7 +960,7 @@ export function register(server) {
           const count = finalText.split(find).length - 1;
           if (count === 0) {
             return {
-              content: [{ type: "text", text: `Update aborted, nothing written — "${find.slice(0, 60)}${find.length > 60 ? "…" : ""}" was not found in the current memory content. Content may have changed since you last read it — re-fetch with mem0_get and retry.` }],
+              content: [{ type: "text", text: `Update aborted, nothing written — "${find.slice(0, 60)}${find.length > 60 ? "…" : ""}" was not found in the current memory content. Content may have changed since you last read it — re-fetch with mem0_inspect (action 'get') and retry.` }],
               isError: true,
             };
           }
