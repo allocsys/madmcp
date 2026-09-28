@@ -42,7 +42,7 @@ describe("Mem0 connector - consolidated mem0_delete (one/batch/all)", () => {
     expect(full.names).not.toContain("mem0_delete_batch");
     expect(full.names).not.toContain("mem0_delete_all");
     // the non-delete tools are untouched
-    for (const n of ["mem0_find", "mem0_inspect", "mem0_add", "mem0_add_batch", "mem0_update"]) {
+    for (const n of ["mem0_find", "mem0_inspect", "mem0_write"]) {
       expect(full.names).toContain(n);
     }
   });
