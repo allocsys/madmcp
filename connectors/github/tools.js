@@ -12,7 +12,7 @@ import { register as registerIssueManage } from "./issue_manage.js";
 import { register as registerReleases  } from "./releases.js";
 import { register as registerRepo      } from "./repo.js";
 import { register as registerCiManage  } from "./ci_manage.js";
-import { register as registerReviewControl } from "./review_control.js";
+import { register as registerNotifications } from "./notifications.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
 import { register as registerCodespaceManage } from "./codespace_manage.js";
@@ -28,7 +28,7 @@ export function register(server) {
   registerReleases(server);
   registerRepo(server);
   registerCiManage(server);
-  registerReviewControl(server);
+  registerNotifications(server);
   registerRepoMgmt(server);
   registerCloneToken(server);
   registerCodespaceManage(server);
