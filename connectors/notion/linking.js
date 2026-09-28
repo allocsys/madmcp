@@ -72,11 +72,7 @@ function idKey(idStr) {
 }
 
 function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\function bodyMentionsId(body, idStr) {
-  const { repo, num } = idKey(idStr);
-  const haystack = (body || "").toLowerCase();
-  return haystack.includes(`${repo}#${num}`) || haystack.includes(`${repo}-${num}`);
-}");
+  return s.replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
 }
 
 // Audit A5: was a bare substring match, so repo#24 matched a body that only
