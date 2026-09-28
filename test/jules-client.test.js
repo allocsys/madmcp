@@ -90,6 +90,8 @@ describe("Jules Connector - tools", () => {
     // but exercise the consolidated jules_inspect tool.
     server.tools.jules_get_session = ({ session }) => server.tools.jules_inspect({ action: "session", session });
     server.tools.jules_get_activities = (args) => server.tools.jules_inspect({ action: "activities", ...args });
+    server.tools.jules_create_session = (args) => server.tools.jules_write({ action: "create", ...args });
+    server.tools.jules_send_message = (args) => server.tools.jules_write({ action: "message", ...args });
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -358,5 +360,67 @@ describe("Jules Connector - tools", () => {
     expect(text).toContain("  [media artifact: image/png]");
     expect(text).toContain("  Diff:\n");
     expect(text).toContain("... (truncated, 200 more chars)");
+  });
+
+  it("jules_write create sends optional args (branch, title, mode, plan approval) in the request body", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ name: "sessions/42", title: "T", state: "RUNNING", url: "https://jules.google.com/session/42" }),
+    });
+
+    const result = await server.tools.jules_write({
+      action: "create",
+      source: "sources/github-owner-repo",
+      prompt: "Add rate limiting",
+      title: "T",
+      starting_branch: "dev",
+      automation_mode: "AUTOMATION_MODE_UNSPECIFIED",
+      require_plan_approval: false,
+    });
+
+    const [url, opts] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({
+      prompt: "Add rate limiting",
+      sourceContext: { source: "sources/github-owner-repo", githubRepoContext: { startingBranch: "dev" } },
+      automationMode: "AUTOMATION_MODE_UNSPECIFIED",
+      title: "T",
+      requirePlanApproval: false,
+    });
+    const text = result.content[0].text;
+    expect(text).toContain("Title: T");
+    expect(text).toContain("View in Jules: https://jules.google.com/session/42");
+    expect(text).toContain('jules_inspect (action: "session", session: "sessions/42")');
+  });
+
+  it("jules_write create always sends an empty githubRepoContext and omits title/requirePlanApproval when not given", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ name: "sessions/1", state: "RUNNING" }) });
+
+    await server.tools.jules_write({ action: "create", source: "sources/github-owner-repo", prompt: "Do it" });
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.sourceContext).toEqual({ source: "sources/github-owner-repo", githubRepoContext: {} });
+    expect(body).not.toHaveProperty("title");
+    expect(body).not.toHaveProperty("requirePlanApproval");
+  });
+
+  it("jules_write rejects create without source/prompt and message without session/message, before any request", async () => {
+    await expect(server.tools.jules_write({ action: "create", prompt: "x" })).rejects.toThrow("requires source and prompt");
+    await expect(server.tools.jules_write({ action: "create", source: "sources/x" })).rejects.toThrow("requires source and prompt");
+    await expect(server.tools.jules_write({ action: "message", session: "42" })).rejects.toThrow("requires session and message");
+    await expect(server.tools.jules_write({ action: "message", message: "hi" })).rejects.toThrow("requires session and message");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("jules_write message passes a qualified session name through unchanged", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => "{}" });
+
+    const result = await server.tools.jules_write({ action: "message", session: "sessions/42", message: "Go on" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions/42:sendMessage");
+    expect(result.content[0].text).toBe('Message sent to sessions/42. Check jules_inspect (action: "activities") shortly for Jules\'s response.');
   });
 });
