@@ -104,8 +104,8 @@ export function register(server) {
         if (state !== undefined) patch.state = state;
         if (base !== undefined) patch.base = base;
 
-        if (Object.keys(patch).length === 0 && ready === undefined) {
-          return { content: [{ type: "text", text: "No fields provided to update — pass at least one of title, body, state, base, or ready." }] };
+        if (Object.keys(patch).length === 0 && ready !== true) {
+          return { content: [{ type: "text", text: ready === false ? "Nothing to update: ready: false is a no-op (no API path converts a PR back to draft). Pass at least one of title, body, state, base, or ready: true." : "No fields provided to update — pass at least one of title, body, state, base, or ready." }] };
         }
 
         const results = [];
