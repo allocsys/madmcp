@@ -136,25 +136,6 @@ export function register(server) {
         return { content: [{ type: "text", text: lines.join("\n") || "(no branches)" }] };
       }
 
-      // ── create_branch (MUTATING) ──────────────────────────────────────────
-      if (action === "create_branch") {
-        if (!branch) return fail("action 'create_branch' requires branch (the name of the new branch).");
-        let baseSha;
-        if (from_branch) {
-          const baseRef = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(from_branch)}`);
-          baseSha = baseRef.object.sha;
-        } else {
-          const repoData = await githubRequest(`/repos/${owner}/${repo}`);
-          const baseRef  = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(repoData.default_branch)}`);
-          baseSha = baseRef.object.sha;
-        }
-        await githubRequest(`/repos/${owner}/${repo}/git/refs`, {
-          method: "POST",
-          body: { ref: `refs/heads/${branch}`, sha: baseSha },
-        });
-        return { content: [{ type: "text", text: `Created branch '${branch}' in ${owner}/${repo} from ${baseSha.slice(0, 7)}.` }] };
-      }
-
       // ── list_commits ──────────────────────────────────────────────────────
       if (action === "list_commits") {
         if (!branch) return fail("action 'list_commits' requires branch (the branch to list commits on).");
