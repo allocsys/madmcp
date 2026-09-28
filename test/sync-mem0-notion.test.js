@@ -464,3 +464,72 @@ describe("A8: status / unchanged reporting on existing pages", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+describe("time budget (45s)", () => {
+  // Controllable clock: the handler reads Date.now(); mocks advance it to
+  // simulate slow Notion calls without real waiting.
+  function withFakeClock(fn) {
+    let now = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const advance = (ms) => { now += ms; };
+    return Promise.resolve(fn(advance)).finally(() => spy.mockRestore());
+  }
+
+  const orphan = (n) => ({ entity_id: `mem0:gone${n}`, page_id: `p-gone${n}`, url: `u${n}`, tags: [] });
+
+  it("stops before starting an item once 45s have passed, and says how to continue", async () => {
+    await withFakeClock(async (advance) => {
+      mem0Request.mockImplementation(mem0Pages([[mem("e1"), mem("e2"), mem("e3")]]));
+      findPageByEntityId.mockImplementation(async () => { advance(30_000); return null; });
+
+      const result = await getSync()({ dry_run: false });
+
+      // e1 starts at 0s, e2 at 30s, e3 would start at 60s -> not started
+      expect(doCreatePage).toHaveBeenCalledTimes(2);
+      expect(textOf(result)).toContain("Processed 2 of 3 memories");
+      expect(textOf(result)).toContain("rerun to continue");
+      expect(textOf(result)).toContain("entity_ids");
+    });
+  });
+
+  it("skips the hard-deletion pass (with a warning) when the budget was hit", async () => {
+    await withFakeClock(async (advance) => {
+      mem0Request.mockImplementation(mem0Pages([[mem("e1"), mem("e2")]]));
+      findPageByEntityId.mockImplementation(async () => { advance(50_000); return null; });
+      queryAllIndexEntries.mockResolvedValue([orphan(1)]);
+
+      const result = await getSync()({ dry_run: false });
+
+      expect(textOf(result)).toContain("Processed 1 of 2 memories");
+      expect(textOf(result)).toContain("hard-deletion pass skipped");
+      expect(textOf(result)).toContain("time budget");
+      expect(doUpdatePage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops archiving orphans when the budget runs out during the hard-deletion pass", async () => {
+    await withFakeClock(async (advance) => {
+      mem0Request.mockImplementation(mem0Pages([[mem("e1")]]));
+      queryAllIndexEntries.mockResolvedValue([orphan(1), orphan(2)]);
+      doUpdatePage.mockImplementation(async () => { advance(50_000); return []; });
+
+      const result = await getSync()({ dry_run: false });
+
+      expect(doUpdatePage).toHaveBeenCalledTimes(1);
+      expect(textOf(result)).toContain("archived (source deleted from mem0): mem0:gone1");
+      expect(textOf(result)).toContain("stopped archiving: time budget reached");
+      expect(textOf(result)).toContain("Time budget reached: rerun to continue");
+    });
+  });
+
+  it("a fast run has no budget note and keeps the normal header", async () => {
+    mem0Request.mockImplementation(mem0Pages([[mem("e1"), mem("e2")]]));
+
+    const result = await getSync()({ dry_run: true });
+
+    expect(textOf(result)).toContain("Synced 2 memories.");
+    expect(textOf(result)).not.toContain("time budget");
+    expect(textOf(result)).not.toContain("Processed");
+  });
+});
