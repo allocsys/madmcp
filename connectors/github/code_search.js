@@ -3,9 +3,9 @@
 //
 // Renamed from search.js in group 6 of the GitHub tools consolidation.
 // search_issues moved to issue_manage.js ('search' action); nothing in this
-// file is registered as an MCP tool any more. runSearchCode() is called by
-// repo_inspect's 'search' action, and extractRepoQualifier/fallbackCodeSearch
-// are imported by agent_delegate.js. Behavior unchanged.
+// file is registered as an MCP tool. runSearchCode() is called by the
+// standalone search_code tool (search_code.js), and extractRepoQualifier/
+// fallbackCodeSearch are imported by agent_delegate.js. Behavior unchanged.
 // ---------------------------------------------------------------------------
 
 import zlib from "node:zlib";
