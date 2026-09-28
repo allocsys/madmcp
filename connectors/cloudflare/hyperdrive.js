@@ -9,37 +9,57 @@ function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
+function errorResult(text) {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
 export function register(server) {
+  // Replaces the former cf_hyperdrive_config (get | list). Requests and output
+  // are unchanged.
   server.tool(
-    "cf_hyperdrive_config",
-    "DOES: Get a single Hyperdrive configuration (pass hyperdrive_id), OR list all Hyperdrive configurations in your Cloudflare account (omit hyperdrive_id).\n" +
-    "RULE: hyperdrive_id set -> page/per_page/order/direction ignored.",
+    "cf_hyperdrive_read",
+    "DOES: Read Hyperdrive configurations in your Cloudflare account. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'get' requires hyperdrive_id and returns that single configuration.\n" +
+    "RULE: action 'list' lists all Hyperdrive configurations; optional page, per_page, order, direction.\n" +
+    "RULE: page/per_page/order/direction apply to 'list' only.",
     {
-      hyperdrive_id: z.string().optional().describe("If provided, fetch this single configuration instead of listing."),
-      page: z.number().optional().describe("Page number when listing. Ignored if hyperdrive_id is given."),
-      per_page: z.number().optional().describe("Results per page when listing. Ignored if hyperdrive_id is given."),
-      order: z.enum(["id", "name"]).optional().describe("Sort field when listing. Ignored if hyperdrive_id is given."),
-      direction: z.enum(["asc", "desc"]).optional().describe("Sort direction when listing. Ignored if hyperdrive_id is given."),
+      action: z.enum(["get", "list"]).describe("Which operation to perform"),
+      hyperdrive_id: z.string().optional().describe("The configuration ID. Required for action 'get'."),
+      page: z.number().optional().describe("Page number. Used by 'list' only."),
+      per_page: z.number().optional().describe("Results per page. Used by 'list' only."),
+      order: z.enum(["id", "name"]).optional().describe("Sort field. Used by 'list' only."),
+      direction: z.enum(["asc", "desc"]).optional().describe("Sort direction. Used by 'list' only."),
     },
-    async ({ hyperdrive_id, page, per_page, order, direction }) => {
-      if (hyperdrive_id) {
+    async ({ action, hyperdrive_id, page, per_page, order, direction }) => {
+      if (action === "get") {
+        if (!hyperdrive_id) return errorResult("action 'get' requires hyperdrive_id.");
         return textResult(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`));
       }
-      const params = new URLSearchParams();
-      if (page) params.set("page", String(page));
-      if (per_page) params.set("per_page", String(per_page));
-      if (order) params.set("order", order);
-      if (direction) params.set("direction", direction);
-      const qs = params.toString() ? `?${params.toString()}` : "";
-      return textResult(await cfAccountRequest(`/hyperdrive/configs${qs}`));
+
+      if (action === "list") {
+        const params = new URLSearchParams();
+        if (page) params.set("page", String(page));
+        if (per_page) params.set("per_page", String(per_page));
+        if (order) params.set("order", order);
+        if (direction) params.set("direction", direction);
+        const qs = params.toString() ? `?${params.toString()}` : "";
+        return textResult(await cfAccountRequest(`/hyperdrive/configs${qs}`));
+      }
+
+      return errorResult(`Unknown action '${action}'.`);
     }
   );
 
+  // Replaces the former cf_hyperdrive_config_update. Deletion is intentionally
+  // not part of this tool (it will move to a separate guarded delete tool).
   server.tool(
-    "cf_hyperdrive_config_update",
-    "Update (patch) a Hyperdrive configuration in your Cloudflare account",
+    "cf_hyperdrive_manage",
+    "DOES: Update (patch) Hyperdrive configurations in your Cloudflare account. MUTATES Cloudflare state. Use `action` to pick.\n" +
+    "RULE: action 'update' requires hyperdrive_id; only the fields you pass are patched (name, origin fields, caching fields).\n" +
+    "NOT: deleting a configuration -> cf_hyperdrive_config_delete.",
     {
-      hyperdrive_id: z.string(),
+      action: z.enum(["update"]).describe("Which operation to perform"),
+      hyperdrive_id: z.string().optional().describe("The configuration ID. Required for action 'update'."),
       name: z.string().optional(),
       database: z.string().optional(),
       host: z.string().optional(),
@@ -50,29 +70,35 @@ export function register(server) {
       caching_max_age: z.number().optional(),
       caching_stale_while_revalidate: z.number().optional(),
     },
-    async ({ hyperdrive_id, ...patch }) => {
-      const body = {};
-      if (patch.name !== undefined) body.name = patch.name;
-      if (patch.database || patch.host || patch.port || patch.scheme || patch.user) {
-        body.origin = {
-          ...(patch.database ? { database: patch.database } : {}),
-          ...(patch.host ? { host: patch.host } : {}),
-          ...(patch.port ? { port: patch.port } : {}),
-          ...(patch.scheme ? { scheme: patch.scheme } : {}),
-          ...(patch.user ? { user: patch.user } : {}),
-        };
+    async ({ action, hyperdrive_id, ...patch }) => {
+      if (action === "update") {
+        if (hyperdrive_id === undefined) return errorResult("action 'update' requires hyperdrive_id.");
+        const body = {};
+        if (patch.name !== undefined) body.name = patch.name;
+        if (patch.database || patch.host || patch.port || patch.scheme || patch.user) {
+          body.origin = {
+            ...(patch.database ? { database: patch.database } : {}),
+            ...(patch.host ? { host: patch.host } : {}),
+            ...(patch.port ? { port: patch.port } : {}),
+            ...(patch.scheme ? { scheme: patch.scheme } : {}),
+            ...(patch.user ? { user: patch.user } : {}),
+          };
+        }
+        if (patch.caching_disabled !== undefined || patch.caching_max_age !== undefined || patch.caching_stale_while_revalidate !== undefined) {
+          body.caching = {
+            ...(patch.caching_disabled !== undefined ? { disabled: patch.caching_disabled } : {}),
+            ...(patch.caching_max_age !== undefined ? { max_age: patch.caching_max_age } : {}),
+            ...(patch.caching_stale_while_revalidate !== undefined ? { stale_while_revalidate: patch.caching_stale_while_revalidate } : {}),
+          };
+        }
+        return textResult(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`, { method: "PATCH", body }));
       }
-      if (patch.caching_disabled !== undefined || patch.caching_max_age !== undefined || patch.caching_stale_while_revalidate !== undefined) {
-        body.caching = {
-          ...(patch.caching_disabled !== undefined ? { disabled: patch.caching_disabled } : {}),
-          ...(patch.caching_max_age !== undefined ? { max_age: patch.caching_max_age } : {}),
-          ...(patch.caching_stale_while_revalidate !== undefined ? { stale_while_revalidate: patch.caching_stale_while_revalidate } : {}),
-        };
-      }
-      return textResult(await cfAccountRequest(`/hyperdrive/configs/${hyperdrive_id}`, { method: "PATCH", body }));
+
+      return errorResult(`Unknown action '${action}'.`);
     }
   );
 
+  // Kept until the guarded delete tool lands (last group of the overhaul).
   server.tool(
     "cf_hyperdrive_config_delete",
     "Delete a Hyperdrive configuration in your Cloudflare account",
