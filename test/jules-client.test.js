@@ -86,6 +86,12 @@ describe("Jules Connector - tools", () => {
     vi.stubGlobal("fetch", vi.fn());
     server = makeFakeServer();
     register(server);
+    // Thin wrappers: pre-consolidation tests keep their names and call shapes,
+    // but exercise the consolidated jules_inspect tool.
+    server.tools.jules_get_session = ({ session }) => server.tools.jules_inspect({ action: "session", session });
+    server.tools.jules_get_activities = (args) => server.tools.jules_inspect({ action: "activities", ...args });
+    server.tools.jules_create_session = (args) => server.tools.jules_write({ action: "create", ...args });
+    server.tools.jules_send_message = (args) => server.tools.jules_write({ action: "message", ...args });
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -142,11 +148,71 @@ describe("Jules Connector - tools", () => {
     expect(result.content[0].text).toContain("sessions/42");
   });
 
-  it("jules_list_sources reports an empty account clearly", async () => {
+  it("jules_find sources reports an empty account clearly", async () => {
     fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ sources: [] }) });
 
-    const result = await server.tools.jules_list_sources({});
+    const result = await server.tools.jules_find({ action: "sources" });
     expect(result.content[0].text).toContain("No sources connected");
+  });
+
+  it("jules_find sources lists repos with privacy, default branch and pagination, passing params through", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        sources: [
+          { name: "sources/github-owner-repo", githubRepo: { owner: "owner", repo: "repo", isPrivate: true, defaultBranch: { displayName: "main" } } },
+          { name: "sources/other" },
+        ],
+        nextPageToken: "tok2",
+      }),
+    });
+
+    const result = await server.tools.jules_find({ action: "sources", page_size: 5, page_token: "tok1" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sources");
+    expect(url.searchParams.get("pageSize")).toBe("5");
+    expect(url.searchParams.get("pageToken")).toBe("tok1");
+    const text = result.content[0].text;
+    expect(text).toContain("sources/github-owner-repo — owner/repo (private), default branch: main");
+    expect(text).toContain("sources/other — (non-GitHub source)");
+    expect(text).toContain("(more available — next page_token: tok2)");
+  });
+
+  it("jules_find sessions reports no sessions clearly", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({}) });
+
+    const result = await server.tools.jules_find({ action: "sessions" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions");
+    expect(result.content[0].text).toBe("No Jules sessions found.");
+  });
+
+  it("jules_find sessions shows title/prompt fallback, state, PR urls and pagination", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        sessions: [
+          { name: "sessions/1", title: "Add rate limiting", state: "COMPLETED", outputs: [{ pullRequest: { url: "https://github.com/owner/repo/pull/9" } }, {}] },
+          { name: "sessions/2", prompt: "Fix the bug", state: "RUNNING" },
+        ],
+        nextPageToken: "next",
+      }),
+    });
+
+    const result = await server.tools.jules_find({ action: "sessions", page_size: 2 });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.searchParams.get("pageSize")).toBe("2");
+    expect(url.searchParams.has("pageToken")).toBe(false);
+    const text = result.content[0].text;
+    expect(text).toContain('sessions/1 — "Add rate limiting" — COMPLETED — PR: https://github.com/owner/repo/pull/9');
+    expect(text).toContain('sessions/2 — "Fix the bug" — RUNNING');
+    expect(text).not.toContain("sessions/2 — \"Fix the bug\" — RUNNING — PR");
+    expect(text).toContain("(more available — next page_token: next)");
   });
 
   it("jules_get_activities surfaces the plan steps of a planGenerated event", async () => {
@@ -208,5 +274,153 @@ describe("Jules Connector - tools", () => {
     const result = await server.tools.jules_get_activities({ session: "42" });
     expect(result.content[0].text).toContain("Diff (Add hello)");
     expect(result.content[0].text).toContain("diff --git a/x b/x");
+  });
+
+  it("jules_inspect session falls back to the prompt, omits PRs when none, and passes qualified names through", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ name: "sessions/7", prompt: "Fix it", state: "RUNNING", url: "https://jules.google.com/session/7" }),
+    });
+
+    const result = await server.tools.jules_inspect({ action: "session", session: "sessions/7" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions/7");
+    expect(result.content[0].text).toBe('sessions/7 — "Fix it"\nState: RUNNING\nView in Jules: https://jules.google.com/session/7');
+    expect(result.content[0].text).not.toContain("Pull request");
+  });
+
+  it("jules_inspect activities reports an empty timeline and hits the activities endpoint", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({}) });
+
+    const result = await server.tools.jules_inspect({ action: "activities", session: "42" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions/42/activities");
+    expect(result.content[0].text).toBe("No activities recorded yet for this session.");
+  });
+
+  it("jules_inspect activities renders message/approval/completion/fallback events, passes pagination params and shows the footer", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [
+          { createTime: "t1", originator: "user", userMessaged: { userMessage: "Please add tests" } },
+          { createTime: "t2", originator: "agent", agentMessaged: { agentMessage: "On it" } },
+          { createTime: "t3", originator: "user", planApproved: { planId: "p1" } },
+          { createTime: "t4", originator: "agent", sessionCompleted: {} },
+          { createTime: "t5", originator: "system", description: "Something new" },
+          { createTime: "t6", originator: "system" },
+        ],
+        nextPageToken: "more",
+      }),
+    });
+
+    const result = await server.tools.jules_inspect({ action: "activities", session: "42", page_size: 3, page_token: "tokA" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.searchParams.get("pageSize")).toBe("3");
+    expect(url.searchParams.get("pageToken")).toBe("tokA");
+    const text = result.content[0].text;
+    expect(text).toContain("[t1] user: User message: Please add tests");
+    expect(text).toContain("[t2] agent: Agent message: On it");
+    expect(text).toContain("[t3] user: Plan approved (planId: p1)");
+    expect(text).toContain("[t4] agent: Session completed");
+    expect(text).toContain("[t5] system: Something new");
+    expect(text).toContain("[t6] system: (event)");
+    expect(text).toContain("(more available — next page_token: more)");
+  });
+
+  it("jules_inspect activities renders bash output, media placeholders and truncates long artifacts", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        activities: [{
+          createTime: "t1",
+          originator: "agent",
+          progressUpdated: { title: "Running tests", description: "npm test" },
+          artifacts: [
+            { bashOutput: { command: "npm test", exitCode: 1, output: "x".repeat(2500) } },
+            { media: { mimeType: "image/png" } },
+            { changeSet: { gitPatch: { unidiffPatch: "y".repeat(3200) } } },
+          ],
+        }],
+      }),
+    });
+
+    const result = await server.tools.jules_inspect({ action: "activities", session: "42" });
+
+    const text = result.content[0].text;
+    expect(text).toContain("Progress: Running tests — npm test");
+    expect(text).toContain("  $ npm test  (exit 1)");
+    expect(text).toContain("... (truncated, 500 more chars)");
+    expect(text).toContain("  [media artifact: image/png]");
+    expect(text).toContain("  Diff:\n");
+    expect(text).toContain("... (truncated, 200 more chars)");
+  });
+
+  it("jules_write create sends optional args (branch, title, mode, plan approval) in the request body", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ name: "sessions/42", title: "T", state: "RUNNING", url: "https://jules.google.com/session/42" }),
+    });
+
+    const result = await server.tools.jules_write({
+      action: "create",
+      source: "sources/github-owner-repo",
+      prompt: "Add rate limiting",
+      title: "T",
+      starting_branch: "dev",
+      automation_mode: "AUTOMATION_MODE_UNSPECIFIED",
+      require_plan_approval: false,
+    });
+
+    const [url, opts] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({
+      prompt: "Add rate limiting",
+      sourceContext: { source: "sources/github-owner-repo", githubRepoContext: { startingBranch: "dev" } },
+      automationMode: "AUTOMATION_MODE_UNSPECIFIED",
+      title: "T",
+      requirePlanApproval: false,
+    });
+    const text = result.content[0].text;
+    expect(text).toContain("Title: T");
+    expect(text).toContain("View in Jules: https://jules.google.com/session/42");
+    expect(text).toContain('jules_inspect (action: "session", session: "sessions/42")');
+  });
+
+  it("jules_write create always sends an empty githubRepoContext and omits title/requirePlanApproval when not given", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ name: "sessions/1", state: "RUNNING" }) });
+
+    await server.tools.jules_write({ action: "create", source: "sources/github-owner-repo", prompt: "Do it" });
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.sourceContext).toEqual({ source: "sources/github-owner-repo", githubRepoContext: {} });
+    expect(body).not.toHaveProperty("title");
+    expect(body).not.toHaveProperty("requirePlanApproval");
+  });
+
+  it("jules_write rejects create without source/prompt and message without session/message, before any request", async () => {
+    await expect(server.tools.jules_write({ action: "create", prompt: "x" })).rejects.toThrow("requires source and prompt");
+    await expect(server.tools.jules_write({ action: "create", source: "sources/x" })).rejects.toThrow("requires source and prompt");
+    await expect(server.tools.jules_write({ action: "message", session: "42" })).rejects.toThrow("requires session and message");
+    await expect(server.tools.jules_write({ action: "message", message: "hi" })).rejects.toThrow("requires session and message");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("jules_write message passes a qualified session name through unchanged", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => "{}" });
+
+    const result = await server.tools.jules_write({ action: "message", session: "sessions/42", message: "Go on" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions/42:sendMessage");
+    expect(result.content[0].text).toBe('Message sent to sessions/42. Check jules_inspect (action: "activities") shortly for Jules\'s response.');
   });
 });
