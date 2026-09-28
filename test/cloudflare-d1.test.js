@@ -30,8 +30,8 @@ describe("Cloudflare connector - consolidated D1 tools", () => {
   });
 
   it("registers the new D1 tools and drops the old names", () => {
-    expect(server.names).toEqual(["cf_d1_read", "cf_d1_manage", "cf_d1_database_delete", "cf_d1_query"]);
-    for (const old of ["cf_d1_database", "cf_d1_database_create", "cf_d1_database_query"]) {
+    expect(server.names).toEqual(["cf_d1_read", "cf_d1_manage", "cf_d1_query"]);
+    for (const old of ["cf_d1_database", "cf_d1_database_create", "cf_d1_database_query", "cf_d1_database_delete"]) {
       expect(server.names).not.toContain(old);
     }
   });
@@ -113,14 +113,6 @@ describe("Cloudflare connector - consolidated D1 tools", () => {
       await expect(
         server.tools.cf_d1_query({ database_id: "abc", sql: "oops" })
       ).rejects.toThrow("400 bad sql");
-    });
-  });
-
-  describe("cf_d1_database_delete (unchanged)", () => {
-    it("DELETEs /d1/database/{id}", async () => {
-      cfAccountRequest.mockResolvedValueOnce({});
-      await server.tools.cf_d1_database_delete({ database_id: "abc" });
-      expect(cfAccountRequest).toHaveBeenCalledWith("/d1/database/abc", { method: "DELETE" });
     });
   });
 });
