@@ -261,7 +261,7 @@ R2: `cf_r2_bucket` (list/get), `cf_r2_bucket_create/delete`
 
 Hyperdrive: `cf_hyperdrive_config` (list/get), `cf_hyperdrive_config_create/update/delete`
 
-Workers: `cf_workers_list`, `cf_workers_get_worker`, `cf_workers_get_worker_code`
+Workers: `cf_workers_read` (action: list | get | code)
 
 Observability: `cf_workers_observability_query/keys/values/compare`
 
