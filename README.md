@@ -277,7 +277,8 @@ separate backfill/repair tool for the entity_id → page_id dedup index, not par
 consolidation.
 
 ### Mem0
-`mem0_add`, `mem0_add_batch`, `mem0_get`, `mem0_get_history`, `mem0_list`, `mem0_search`,
+`mem0_add`, `mem0_add_batch`, `mem0_inspect` (`action`: `get` | `history` | `relations` — replaces the
+former `mem0_get`, `mem0_get_history` and `mem0_get_relations`), `mem0_list`, `mem0_search`,
 `mem0_update`, `mem0_delete` (`action`: `one` | `batch` | `all` — replaces the former
 `mem0_delete`, `mem0_delete_batch` and `mem0_delete_all`)
 
