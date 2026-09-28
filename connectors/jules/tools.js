@@ -23,36 +23,29 @@ import { julesRequest } from "./client.js";
 export function register(server) {
 
   server.tool(
-    "jules_list_sources",
-    "DOES: List the GitHub repositories connected to your Jules account (sources), each with its resource name (e.g. 'sources/github-owner-repo') needed for jules_create_session.\n" +
-    "RULE: call this first if you don't already know the exact source name for the repo you want to target.",
+    "jules_find",
+    "DOES: List Jules resources. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'sources' lists the GitHub repositories connected to your Jules account, each with its resource name (e.g. 'sources/github-owner-repo') needed for jules_create_session. Call this first if you don't already know the exact source name for the repo you want to target.\n" +
+    "RULE: action 'sessions' lists recent Jules sessions with state (e.g. RUNNING, AWAITING_PLAN_APPROVAL, COMPLETED, FAILED) and, for finished sessions, output PR URLs. 'has anything Jules is working on finished' / 'what's Jules doing' -> this, instead of guessing from a single session ID.\n" +
+    "RULE: page_size and page_token (pagination) apply to both actions.",
     {
-      page_size: z.number().optional().describe("Max sources to return per page (default: server default)"),
+      action: z.enum(["sources", "sessions"]).describe("Which list to fetch: 'sources' (connected repos) or 'sessions' (recent Jules sessions)"),
+      page_size: z.number().optional().describe("Max items to return per page (default: server default)"),
       page_token: z.string().optional().describe("Pagination token from a previous call's response, to fetch the next page"),
     },
-    async ({ page_size, page_token }) => {
-      const data = await julesRequest("/sources", { params: { pageSize: page_size, pageToken: page_token } });
-      const sources = data?.sources || [];
-      if (!sources.length) {
-        return { content: [{ type: "text", text: "No sources connected to this Jules account." }] };
-      }
-      const lines = sources.map((s) => {
-        const repo = s.githubRepo;
-        const repoDesc = repo ? `${repo.owner}/${repo.repo}${repo.isPrivate ? " (private)" : ""}${repo.defaultBranch?.displayName ? `, default branch: ${repo.defaultBranch.displayName}` : ""}` : "(non-GitHub source)";
-        return `${s.name} — ${repoDesc}`;
-      });
-      const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
-      return { content: [{ type: "text", text: lines.join("\n") + more }] };
+    async ({ action, page_size, page_token }) => {
+      if (action === "sources") return listSources({ page_size, page_token });
+      return listSessions({ page_size, page_token });
     }
   );
 
   server.tool(
     "jules_create_session",
     "DOES: Create a Jules session — hand off a coding task (prompt) against a connected repo to run autonomously in Jules's own sandboxed VM. Fire-and-forget by default: automation_mode defaults to AUTO_CREATE_PR and plans auto-approve, so the session runs unattended and opens a PR when done, with no approval step required from this tool.\n" +
-    "RULE: need the source resource name first -> jules_list_sources, UNLESS you already know it (format: 'sources/github-owner-repo').\n" +
+    "RULE: need the source resource name first -> jules_find (action 'sources'), UNLESS you already know it (format: 'sources/github-owner-repo').\n" +
     "RULE: this only STARTS the session — it does not wait for completion. Poll jules_get_session or jules_get_activities afterward to check progress and retrieve the resulting PR URL.",
     {
-      source: z.string().describe("Resource name of the source repo, e.g. 'sources/github-owner-repo' (from jules_list_sources)"),
+      source: z.string().describe("Resource name of the source repo, e.g. 'sources/github-owner-repo' (from jules_find action 'sources')"),
       prompt: z.string().describe("The coding task for Jules to execute, described with enough detail to act on without further clarification (Jules cannot ask follow-up questions mid-session unless you send one via a later message)"),
       title: z.string().optional().describe("Optional session title. If omitted, Jules generates one from the prompt."),
       starting_branch: z.string().optional().describe("Branch to start the session from (default: the repo's default branch)"),
@@ -90,34 +83,11 @@ export function register(server) {
   );
 
   server.tool(
-    "jules_list_sessions",
-    "DOES: List recent Jules sessions for the authenticated account, with state (e.g. RUNNING, AWAITING_PLAN_APPROVAL, COMPLETED, FAILED) and, for finished sessions, output PR URLs.\n" +
-    "RULE: 'has anything Jules is working on finished' / 'what's Jules doing' -> this, instead of guessing from a single session ID.",
-    {
-      page_size: z.number().optional().describe("Max sessions to return per page (default: server default)"),
-      page_token: z.string().optional().describe("Pagination token from a previous call's response"),
-    },
-    async ({ page_size, page_token }) => {
-      const data = await julesRequest("/sessions", { params: { pageSize: page_size, pageToken: page_token } });
-      const sessions = data?.sessions || [];
-      if (!sessions.length) {
-        return { content: [{ type: "text", text: "No Jules sessions found." }] };
-      }
-      const lines = sessions.map((s) => {
-        const prs = (s.outputs || []).map((o) => o.pullRequest?.url).filter(Boolean);
-        return `${s.name} — "${s.title || s.prompt}" — ${s.state}${prs.length ? ` — PR: ${prs.join(", ")}` : ""}`;
-      });
-      const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
-      return { content: [{ type: "text", text: lines.join("\n") + more }] };
-    }
-  );
-
-  server.tool(
     "jules_get_session",
     "DOES: Get full details of one Jules session by resource name — state, the original prompt, session URL, and (once available) outputs such as the created pull request's URL.\n" +
-    "RULE: checking whether a specific fire-and-forget session has finished -> this, rather than jules_list_sessions, once you have its name.",
+    "RULE: checking whether a specific fire-and-forget session has finished -> this, rather than jules_find action 'sessions', once you have its name.",
     {
-      session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567' (returned by jules_create_session or jules_list_sessions)"),
+      session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567' (returned by jules_create_session or jules_find action 'sessions')"),
     },
     async ({ session }) => {
       const name = session.startsWith("sessions/") ? session : `sessions/${session}`;
@@ -217,6 +187,35 @@ function describeActivity(a) {
   }
 
   return parts.join("\n");
+}
+
+async function listSources({ page_size, page_token }) {
+  const data = await julesRequest("/sources", { params: { pageSize: page_size, pageToken: page_token } });
+  const sources = data?.sources || [];
+  if (!sources.length) {
+    return { content: [{ type: "text", text: "No sources connected to this Jules account." }] };
+  }
+  const lines = sources.map((s) => {
+    const repo = s.githubRepo;
+    const repoDesc = repo ? `${repo.owner}/${repo.repo}${repo.isPrivate ? " (private)" : ""}${repo.defaultBranch?.displayName ? `, default branch: ${repo.defaultBranch.displayName}` : ""}` : "(non-GitHub source)";
+    return `${s.name} — ${repoDesc}`;
+  });
+  const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
+  return { content: [{ type: "text", text: lines.join("\n") + more }] };
+}
+
+async function listSessions({ page_size, page_token }) {
+  const data = await julesRequest("/sessions", { params: { pageSize: page_size, pageToken: page_token } });
+  const sessions = data?.sessions || [];
+  if (!sessions.length) {
+    return { content: [{ type: "text", text: "No Jules sessions found." }] };
+  }
+  const lines = sessions.map((s) => {
+    const prs = (s.outputs || []).map((o) => o.pullRequest?.url).filter(Boolean);
+    return `${s.name} — "${s.title || s.prompt}" — ${s.state}${prs.length ? ` — PR: ${prs.join(", ")}` : ""}`;
+  });
+  const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
+  return { content: [{ type: "text", text: lines.join("\n") + more }] };
 }
 
 function indent(text) {
