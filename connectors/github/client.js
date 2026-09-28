@@ -160,10 +160,10 @@ export async function githubGraphQL(query, variables = {}) {
 }
 
 // --- Binary tarball fetch (fix #4, 2026-07-28) -----------------------------
-// search.js's private-repo search_code fallback used to fetch one blob per
+// code_search.js's private-repo search_code fallback used to fetch one blob per
 // file through githubRequest -- up to 500 sequential, individually-throttled
 // requests for a single search. This replaces that with ONE request for the
-// whole repo via GitHub's tarball endpoint, which search.js decompresses and
+// whole repo via GitHub's tarball endpoint, which code_search.js decompresses and
 // greps locally instead.
 //
 // Deliberately uses node:https instead of the global fetch() used elsewhere

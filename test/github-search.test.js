@@ -4,7 +4,7 @@ import {
   extractRepoQualifier,
   parsePaxHeader,
   parseTar,
-} from "../connectors/github/search.js";
+} from "../connectors/github/code_search.js";
 
 describe("stripQualifiers", () => {
   it("removes repo:/filename:/extension: qualifiers, leaving free text", () => {
