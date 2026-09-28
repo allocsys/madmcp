@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { register as registerFiles     } from "./files.js";
-import { register as registerBranches  } from "./branches.js";
+import { register as registerRepoInspect } from "./repo_inspect.js";
 import { register as registerPRs       } from "./prs.js";
 import { register as registerIssues    } from "./issues.js";
 import { register as registerReleases  } from "./releases.js";
@@ -14,7 +14,6 @@ import { register as registerSearch    } from "./search.js";
 import { register as registerActions   } from "./actions.js";
 import { register as registerCiControl } from "./ci_control.js";
 import { register as registerReviewControl } from "./review_control.js";
-import { register as registerDiff      } from "./diff.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
 import { register as registerCodespaces } from "./codespaces.js";
@@ -22,7 +21,7 @@ import { register as registerEditor     } from "../delegate/editor/editor_tools.
 
 export function register(server) {
   registerFiles(server);
-  registerBranches(server);
+  registerRepoInspect(server);
   registerPRs(server);
   registerIssues(server);
   registerReleases(server);
@@ -31,7 +30,6 @@ export function register(server) {
   registerActions(server);
   registerCiControl(server);
   registerReviewControl(server);
-  registerDiff(server);
   registerRepoMgmt(server);
   registerCloneToken(server);
   registerCodespaces(server);
