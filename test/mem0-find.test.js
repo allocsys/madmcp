@@ -34,7 +34,7 @@ describe("Mem0 connector - consolidated mem0_find (list/search)", () => {
     expect(server.names.filter((n) => n === "mem0_find")).toHaveLength(1);
     expect(server.names).not.toContain("mem0_list");
     expect(server.names).not.toContain("mem0_search");
-    for (const n of ["mem0_inspect", "mem0_add", "mem0_add_batch", "mem0_update", "mem0_delete"]) {
+    for (const n of ["mem0_inspect", "mem0_write", "mem0_delete"]) {
       expect(server.names).toContain(n);
     }
   });

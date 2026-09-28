@@ -34,7 +34,7 @@ describe("Mem0 connector - consolidated mem0_inspect (get/history/relations)", (
     for (const old of ["mem0_get", "mem0_get_history", "mem0_get_relations"]) {
       expect(server.names).not.toContain(old);
     }
-    for (const n of ["mem0_find", "mem0_add", "mem0_add_batch", "mem0_update", "mem0_delete"]) {
+    for (const n of ["mem0_find", "mem0_write", "mem0_delete"]) {
       expect(server.names).toContain(n);
     }
   });
