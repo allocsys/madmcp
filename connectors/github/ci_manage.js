@@ -140,9 +140,17 @@ export function register(server) {
         const logText = typeof rawText === "string" ? rawText : JSON.stringify(rawText);
         const lines = logText.split("\n");
 
-        const pattern = grep
-          ? new RegExp(grep, "i")
-          : /##\[error\]|error TS\d|SyntaxError|ReferenceError|TypeError|Error:|FAIL\b|✗|AssertionError|Unexpected token|Process completed with exit code [1-9]/i;
+        let pattern;
+        if (grep) {
+          try {
+            pattern = new RegExp(grep, "i");
+          } catch (e) {
+            // Still a throw (as before), but with a message that names the parameter.
+            throw new Error(`Invalid grep regex: ${e.message}`, { cause: e });
+          }
+        } else {
+          pattern = /##\[error\]|error TS\d|SyntaxError|ReferenceError|TypeError|Error:|FAIL\b|✗|AssertionError|Unexpected token|Process completed with exit code [1-9]/i;
+        }
 
         const blocks = [];
         for (let i = 0; i < lines.length && blocks.length < max_matches; i++) {
@@ -166,6 +174,9 @@ export function register(server) {
 
       // ── trigger (was trigger_workflow) ────────────────────────────────────
       if (action === "trigger") {
+        // Runs created before this moment (minus a small clock-skew allowance)
+        // are earlier dispatches, not the one we just asked for.
+        const dispatchedAt = Date.now() - 5000;
         await githubRequest(`/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflow_id)}/dispatches`, {
           method: "POST",
           body: { ref, inputs },
@@ -175,13 +186,18 @@ export function register(server) {
         // endpoint returns no body (204), so poll the workflow's runs list
         // to hand back a run URL instead of a bare "ok". Do not share or
         // divide this budget with any other action in this tool.
+        // The runs list is newest-first, so the first entry is only ours if it
+        // was created after the dispatch; otherwise keep polling. The branch
+        // filter matches head_branch, so a full ref is reduced to its short name.
+        const shortRef = ref.replace(/^refs\/(heads|tags)\//, "");
         let found;
         for (let attempt = 0; attempt < 4 && !found; attempt++) {
           if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
           const runs = await githubRequest(
-            `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflow_id)}/runs?event=workflow_dispatch&branch=${encodeURIComponent(ref)}&per_page=1`
+            `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflow_id)}/runs?event=workflow_dispatch&branch=${encodeURIComponent(shortRef)}&per_page=1`
           );
-          found = runs.workflow_runs?.[0];
+          const latest = runs.workflow_runs?.[0];
+          if (latest && Date.parse(latest.created_at) >= dispatchedAt) found = latest;
         }
         return {
           content: [{
