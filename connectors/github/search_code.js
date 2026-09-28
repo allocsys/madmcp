@@ -16,11 +16,11 @@ export function register(server) {
   server.tool(
     "search_code",
     "DOES: Search code in a GitHub repository at a specific branch, tag, or commit.\n" +
-    "RULE: needs query AND ref (branch, tag, or commit SHA), and query MUST contain a repo:owner/name qualifier (there are no separate owner/repo params). GitHub's real /search/code index only ever covers a repo's default branch, so every call uses the local content-search fallback directly instead (fetches the repo as a tarball at `ref` and greps it locally; also sidesteps GitHub's known private-repo search-index gap).\n" +
-    "RULE: the remaining query text is matched as ONE literal string: no OR, and qualifiers other than repo: (filename:, extension:, language:) are stripped, not applied as filters. One literal per search.\n" +
-    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually. Query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map.query (mode: search) instead.",
+    "RULE: needs query AND ref (branch, tag, or commit SHA), and query MUST contain a repo:owner/name qualifier (there are no separate owner/repo params). Both are marked optional in the schema but REQUIRED: a call missing either returns a 'search_code requires ...' error. GitHub's real /search/code index only ever covers a repo's default branch, so every call uses the local content-search fallback directly instead (fetches the repo as a tarball at `ref` and greps it locally; also sidesteps GitHub's known private-repo search-index gap).\n" +
+    "RULE: the remaining query text is matched as ONE literal string: no OR, and qualifiers other than repo: (filename:, extension:, language:) are stripped, not applied as filters. One literal per search. Output shows only the first match per file.\n" +
+    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually. Query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map (mode: search) instead.",
     {
-      query:    z.string().optional().describe("Search text, e.g. 'createServer repo:owner/name'. Must include a repo:owner/name qualifier. Other qualifiers (filename:, extension:, language:) are stripped and the remaining text is matched as one literal string (no OR)."),
+      query:    z.string().optional().describe("Search text, e.g. 'createServer repo:owner/name'. Required. Must include a repo:owner/name qualifier. Other qualifiers (filename:, extension:, language:) are stripped and the remaining text is matched as one literal string (no OR)."),
       ref:      z.string().optional().describe("Branch, tag, or commit SHA to search. Required."),
       per_page: z.number().optional().describe("Number of results to return, max 100 (default: 20)."),
     },
