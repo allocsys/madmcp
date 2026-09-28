@@ -31,10 +31,9 @@ async function run(promiseFn) {
 
 describe("Mem0 connector - write tools (add / add_batch / update)", () => {
   let server;
-  // Thin wrappers so the consolidation retargets only these three lines.
-  const addMemory = (args) => server.tools.mem0_add(args);
-  const addBatch = (args) => server.tools.mem0_add_batch(args);
-  const updateMemory = (args) => server.tools.mem0_update(args);
+  const addMemory = (args) => server.tools.mem0_write({ action: "add", ...args });
+  const addBatch = (args) => server.tools.mem0_write({ action: "add_batch", ...args });
+  const updateMemory = (args) => server.tools.mem0_write({ action: "update", ...args });
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -47,10 +46,37 @@ describe("Mem0 connector - write tools (add / add_batch / update)", () => {
     vi.useRealTimers();
   });
 
-  it("registers the write tools", () => {
+  it("registers mem0_write once and no longer registers mem0_add / mem0_add_batch / mem0_update", () => {
+    expect(server.names.filter((n) => n === "mem0_write")).toHaveLength(1);
     for (const n of ["mem0_add", "mem0_add_batch", "mem0_update"]) {
-      expect(server.names.filter((x) => x === n)).toHaveLength(1);
+      expect(server.names).not.toContain(n);
     }
+    for (const n of ["mem0_find", "mem0_inspect", "mem0_delete"]) {
+      expect(server.names).toContain(n);
+    }
+  });
+
+  describe("required params per action", () => {
+    it("add requires content", async () => {
+      const result = await server.tools.mem0_write({ action: "add" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe("action 'add' requires content.");
+      expect(mem0Request).not.toHaveBeenCalled();
+    });
+
+    it("add_batch requires items", async () => {
+      const result = await server.tools.mem0_write({ action: "add_batch" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe("action 'add_batch' requires items (at least one).");
+      expect(mem0Request).not.toHaveBeenCalled();
+    });
+
+    it("update requires memory_id", async () => {
+      const result = await server.tools.mem0_write({ action: "update", content: "x" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe("action 'update' requires memory_id.");
+      expect(mem0Request).not.toHaveBeenCalled();
+    });
   });
 
   describe("add", () => {
