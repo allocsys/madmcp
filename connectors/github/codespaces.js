@@ -13,6 +13,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { githubRequest } from "./client.js";
 import { GITHUB_TOKEN, CODE_EXEC_ENABLED } from "../../config.js";
+import { encodeSegment } from "./encode.js";
+
+// Only what the gh CLI needs to run; the server's other env vars (API keys,
+// DB URLs, ...) are NOT forwarded to the child process.
+const ENV_ALLOWLIST = [
+  "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL",
+  "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+  "SSL_CERT_FILE", "SSL_CERT_DIR",
+];
 
 const execFileAsync = promisify(execFile);
 
@@ -45,17 +55,16 @@ export function register(server) {
       timeout_seconds: z.number().optional().describe("Command execution timeout in seconds (default: 300)"),
     },
     async ({ codespace_name, command, cwd, timeout_seconds = 300 }) => {
-      const cs = await githubRequest(`/user/codespaces/${codespace_name}`);
-      if (!cs) {
-        throw new Error(`Codespace ${codespace_name} not found.`);
-      }
+      const csPath = `/user/codespaces/${encodeSegment(codespace_name)}`;
+      // githubRequest throws on 404, so no separate not-found check is needed.
+      const cs = await githubRequest(csPath);
 
       if (cs.state !== "Available") {
-        await githubRequest(`/user/codespaces/${codespace_name}/start`, { method: "POST" });
+        await githubRequest(`${csPath}/start`, { method: "POST" });
         let currentCs = cs;
         for (let attempt = 0; attempt < 30 && currentCs.state !== "Available"; attempt++) {
           await new Promise((r) => setTimeout(r, 3000));
-          currentCs = await githubRequest(`/user/codespaces/${codespace_name}`);
+          currentCs = await githubRequest(csPath);
         }
         if (currentCs.state !== "Available") {
           throw new Error(`Codespace ${codespace_name} is in state '${currentCs.state}' and failed to become Available.`);
@@ -68,7 +77,8 @@ export function register(server) {
         fullCommand = `cd ${posixSingleQuote(cwd)} && ${command}`;
       }
 
-      const env = { ...process.env };
+      const env = {};
+      for (const k of ENV_ALLOWLIST) if (process.env[k] !== undefined) env[k] = process.env[k];
       if (GITHUB_TOKEN) {
         env.GH_TOKEN = GITHUB_TOKEN;
         env.GITHUB_TOKEN = GITHUB_TOKEN;
@@ -85,9 +95,12 @@ export function register(server) {
         // fullCommand`, run inside the codespace via ssh, sees a shell at
         // all -- which is where `command`'s intentionally-unrestricted
         // shell semantics are supposed to apply, not on this host.
+        // ssh joins its trailing args with spaces and the remote shell
+        // re-splits them, so `sh -c <cmd>` must reach it as ONE quoted
+        // string, otherwise only the first word of <cmd> becomes the script.
         const { stdout: out, stderr: err } = await execFileAsync(
           "gh",
-          ["codespace", "ssh", "-c", codespace_name, "--", "sh", "-c", fullCommand],
+          ["codespace", "ssh", "-c", codespace_name, "--", `sh -c ${posixSingleQuote(fullCommand)}`],
           {
             timeout: timeoutMs,
             maxBuffer: 10 * 1024 * 1024,
