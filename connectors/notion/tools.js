@@ -11,7 +11,7 @@ import {
   buildRelationBlocks, parseRelationBlocks,
   buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
   buildCheckpointRangeBlocks, findCheckpointRange, buildCheckpointStartText,
-  findPageByEntityId,
+  findPageByEntityId, chunkRichText,
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
 import { triggerNotionEmbed } from "./embed_client.js";
@@ -61,6 +61,87 @@ const STATUS_VALUES = ["open", "resolved", "superseded"];
 // titles a human might actually type ("follow-up", "day-1") don't trip it --
 // every real orphan had 3+ segments.
 const SLUG_LIKE_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+){2,}$/;
+
+// ---------------------------------------------------------------------------
+// Audit fixes (2026-09-28, N1/N3/N4/N7) -- shared helpers.
+//
+// N4: Notion caps /blocks/{id}/children at 100 blocks per request, both for
+// reads (pagination via has_more/next_cursor) and for appends (max 100
+// children per PATCH). Callers that need to see or write a whole page go
+// through these instead of a single page_size=100 call. The first request
+// path is identical to the old single call (`?page_size=100`), later pages
+// add start_cursor. Capped at MAX_BLOCK_PAGES pages (5000 blocks) so a
+// pathological page can't loop forever.
+const MAX_BLOCK_PAGES = 50;
+
+async function readAllBlocks(page_id) {
+  const blocks = [];
+  let cursor;
+  for (let i = 0; i < MAX_BLOCK_PAGES; i++) {
+    const path = `/blocks/${page_id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const data = await notionRequest(path);
+    blocks.push(...(data.results || []));
+    if (!data.has_more || !data.next_cursor) break;
+    cursor = data.next_cursor;
+  }
+  return blocks;
+}
+
+// Appends children in batches of <=100. Without `after`, batches go to the end
+// of the page in order. With `after`, batches are sent LAST-to-FIRST, all
+// anchored to the same block, so the final order is preserved without having
+// to read the new block ids back from each response.
+async function appendBlocks(page_id, children, { after } = {}) {
+  if (!children.length) return;
+  const chunks = [];
+  for (let i = 0; i < children.length; i += 100) chunks.push(children.slice(i, i + 100));
+  if (after) {
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: chunks[i], after } });
+    }
+  } else {
+    for (const chunk of chunks) {
+      await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: chunk } });
+    }
+  }
+}
+
+// N3: notionRequest errors are `Notion API error (<status>): ...`.
+function notionErrorStatus(err) {
+  const m = /\((\d{3})\)/.exec(err?.message || "");
+  return m ? Number(m[1]) : null;
+}
+
+// N7: Notion's page_size max is 100; clamp instead of sending a 400.
+function clampPageSize(value, fallback) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value), 1), 100);
+}
+
+// N1: upsert (not blind append) of an Entity Index row. If a row already
+// exists for this entity_id its PageId/Url are updated in place (Tags are left
+// alone); otherwise a new row is created via appendIndexEntry. Returns an
+// error string or null, same contract as appendIndexEntry.
+async function upsertIndexRow({ entity_id, page_id, url, tags }) {
+  try {
+    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+      method: "POST",
+      body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
+    });
+    const rowId = data?.results?.[0]?.id;
+    if (!rowId) return await appendIndexEntry({ entity_id, page_id, url, tags });
+    await notionRequest(`/pages/${rowId}`, {
+      method: "PATCH",
+      body: { properties: {
+        PageId: { rich_text: [{ text: { content: page_id } }] },
+        Url:    { url: url || null },
+      } },
+    });
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+}
 
 // Records a new entity_id -> page_id mapping as a row in the Entity Index
 // database. Best-effort: if this fails, the page itself was still created
@@ -177,8 +258,8 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
 
   const parent         = parent_type === "database" ? { database_id: parent_id } : { page_id: parent_id };
   const pageProperties = parent_type === "database"
-    ? { Name:  { title: [{ text: { content: title } }] }, ...(properties || {}) }
-    : { title: { title: [{ text: { content: title } }] } };
+    ? { Name:  { title: chunkRichText(title) }, ...(properties || {}) }
+    : { title: { title: chunkRichText(title) } };
   const markerBlocks   = buildMarkerBlocks({ entity_id, status });
   const relationBlocks = buildRelationBlocks(mergedRelations);
   const contentBlocks = content
@@ -297,13 +378,12 @@ const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3"
 // duplicating this whole read/delete/insert/patch sequence twice, which is
 // what this codebase did until 2026-09-27.
 async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged }) {
-  const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-  const blocks = blocksData.results || [];
+  const blocks = await readAllBlocks(page_id);
   const range = findRange(blocks);
 
   if (!range) {
     const children = buildRangeBlocks({ timestamp, contentLines });
-    await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
+    await appendBlocks(page_id, children);
     return { action: "created", blockCount: children.length };
   }
 
@@ -321,12 +401,7 @@ async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange,
   // cursor, so it lands inside the range regardless of what (if anything)
   // sits below the end marker.
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  if (contentBlocks.length) {
-    await notionRequest(`/blocks/${page_id}/children`, {
-      method: "PATCH",
-      body: { children: contentBlocks, after: range.startBlockId },
-    });
-  }
+  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
 
   // Update the start marker's own text in place with the new timestamp --
   // same single-block PATCH doUpdatePage uses for the status marker.
@@ -364,7 +439,7 @@ async function appendChangelogEntry(page_id, summary) {
       method: "PATCH",
       body: { children: [{
         object: "block", type: "paragraph",
-        paragraph: { rich_text: [{ type: "text", text: { content: buildChangelogEntryText(summary) } }] },
+        paragraph: { rich_text: chunkRichText(buildChangelogEntryText(summary)) },
       }] },
     });
     return null;
@@ -392,7 +467,7 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     const body = {};
     if (archived !== undefined) body.archived = archived;
     const propUpdates = {};
-    if (title      !== undefined) propUpdates.title = { title: [{ text: { content: title } }] };
+    if (title      !== undefined) propUpdates.title = { title: chunkRichText(title) };
     if (properties !== undefined) Object.assign(propUpdates, properties);
     if (Object.keys(propUpdates).length) body.properties = propUpdates;
     const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
@@ -400,17 +475,16 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
   }
   if (append_content) {
     const children = append_content.split("\n").filter(Boolean).map(textBlock);
-    await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
+    await appendBlocks(page_id, children);
     results.push(`Appended ${children.length} paragraph(s) to page.`);
   }
   if (replacements?.length) {
-    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-    const blocks = blocksData.results || [];
+    const blocks = await readAllBlocks(page_id);
     for (const { find, replace } of replacements) {
       const matches = blocks.filter((b) => notionBlockPlainText(b) === find);
       const trunc = (s) => s.slice(0, 60) + (s.length > 60 ? "…" : "");
       if (matches.length === 0) {
-        throw new Error(`Update aborted, nothing further written — "${trunc(find)}" was not found among this page's top-level blocks (first 100). It may be nested inside a toggle/column, or the page may have more than 100 blocks — re-check with notion_read.`);
+        throw new Error(`Update aborted, nothing further written — "${trunc(find)}" was not found among this page's top-level blocks. It may be nested inside a toggle/column — re-check with notion_read.`);
       }
       if (matches.length > 1) {
         throw new Error(`Update aborted, nothing further written — "${trunc(find)}" matches ${matches.length} blocks, but must be unique. Include more surrounding context in "find" to disambiguate.`);
@@ -420,7 +494,7 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
       if (!EDITABLE_BLOCK_TYPES.includes(type)) {
         throw new Error(`Update aborted, nothing further written — matched block is type "${type}", which notion_update can't edit in place yet (supported: ${EDITABLE_BLOCK_TYPES.join(", ")}).`);
       }
-      const patchBody = { [type]: { rich_text: [{ type: "text", text: { content: replace } }] } };
+      const patchBody = { [type]: { rich_text: chunkRichText(replace) } };
       if (type === "to_do") patchBody[type].checked = block.to_do?.checked ?? false;
       await notionRequest(`/blocks/${block.id}`, { method: "PATCH", body: patchBody });
       results.push(`Replaced block ("${trunc(find)}" → "${trunc(replace)}").`);
@@ -458,7 +532,9 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     // Re-fetch the page for its (stable) url -- appendIndexEntry needs it
     // and none of the branches above are guaranteed to have fetched it.
     const page = await notionRequest(`/pages/${page_id}`);
-    const indexError = await appendIndexEntry({ entity_id, page_id, url: page.url, tags: [] });
+    // Audit fix N1: upsert -- updates the existing index row for this
+    // entity_id if there is one instead of always POSTing a duplicate row.
+    const indexError = await upsertIndexRow({ entity_id, page_id, url: page.url, tags: [] });
     // NOTE: this does not delete/update the OLD entity_id's index row (if
     // any) -- best-effort, same tradeoff appendIndexEntry's own callers
     // already accept elsewhere in this file. The old row still resolves
@@ -478,14 +554,15 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
   // replacements/status branch above already fetched it, to avoid a
   // redundant call.
   if (relations !== undefined) {
-    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-    const existingRelations = parseRelationBlocks(blocksData.results || []);
+    // Read ALL blocks: replaced relation blocks are appended at the end of
+    // the page, so on a long page they sit past the first 100 (audit fix N4).
+    const existingRelations = parseRelationBlocks(await readAllBlocks(page_id));
     for (const r of existingRelations) {
       await notionRequest(`/blocks/${r.blockId}`, { method: "DELETE" });
     }
     const newBlocks = buildRelationBlocks(relations);
     if (newBlocks.length) {
-      await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: newBlocks } });
+      await appendBlocks(page_id, newBlocks);
     }
     results.push(`Relations replaced: ${existingRelations.length} removed, ${newBlocks.length} added.`);
   }
@@ -501,7 +578,7 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
   if (archived === true) {
     const body = { archived: true };
     const propUpdates = {};
-    if (title      !== undefined) propUpdates.title = { title: [{ text: { content: title } }] };
+    if (title      !== undefined) propUpdates.title = { title: chunkRichText(title) };
     if (properties !== undefined) Object.assign(propUpdates, properties);
     if (Object.keys(propUpdates).length) body.properties = propUpdates;
     const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
@@ -536,13 +613,12 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
 // small ways and mem0-specific skip/logging behavior in replaceSyncedRange
 // shouldn't silently start applying to checkpoint saves or vice versa.
 export async function replaceCheckpointRange({ page_id, contentLines, updated_at }) {
-  const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-  const blocks = blocksData.results || [];
+  const blocks = await readAllBlocks(page_id);
   const range = findCheckpointRange(blocks);
 
   if (!range) {
     const children = buildCheckpointRangeBlocks({ updated_at, contentLines });
-    await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children } });
+    await appendBlocks(page_id, children);
     return { action: "created", blockCount: children.length };
   }
 
@@ -554,12 +630,7 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
   }
 
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  if (contentBlocks.length) {
-    await notionRequest(`/blocks/${page_id}/children`, {
-      method: "PATCH",
-      body: { children: contentBlocks, after: range.startBlockId },
-    });
-  }
+  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
 
   await notionRequest(`/blocks/${range.startBlockId}`, {
     method: "PATCH",
@@ -604,8 +675,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     if (!existing) {
       return "No checkpoint found.";
     }
-    const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
-    const blocks = blocksData.results || [];
+    const blocks = await readAllBlocks(existing.pageId);
     const range = findCheckpointRange(blocks);
     if (!range) {
       return "No checkpoint found.";
@@ -641,7 +711,7 @@ export function register(server) {
 
   server.tool(
     "notion_find",
-    "DOES: Find pages or databases in your Notion workspace by keyword search or recent edit history, consolidating notion_search and notion_list into one tool. Mode 'search' looks up pages/databases by keyword query, then reranks page results by semantic similarity to the query (best-effort -- falls back to Notion's own keyword order for any page not yet embedded). Mode 'recent' lists pages/databases sorted by most recently edited first. Use this instead of calling notion_search or notion_list separately.\nRULE for the calling model: use this only for a single, targeted lookup. If you'll need to find and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_find and notion_read manually.",
+    "DOES: Find pages or databases in your Notion workspace by keyword search or recent edit history. Mode 'search' looks up pages/databases by keyword query, then reranks page results by semantic similarity to the query (best-effort -- falls back to Notion's own keyword order for any page not yet embedded). Mode 'recent' lists pages/databases sorted by most recently edited first.\nRULE for the calling model: use this only for a single, targeted lookup. If you'll need to find and then read more than 2 pages, or the request asks you to understand, review, or summarize a whole area of the Notion workspace -- regardless of how it's phrased ('go through our notes on X', 'get up to speed on the workspace', 'dig into our docs', etc. all count) -- use delegate_agent instead of looping notion_find and notion_read manually.",
     {
       mode:        z.enum(["search", "recent"]).describe("'search' looks up pages/databases by keyword query. 'recent' lists pages/databases sorted by most recently edited, no query needed — use this for 'what's new' / 'get the latest entry' asks."),
       query:       z.string().optional().describe("Search query string. Required when mode is 'search', ignored for 'recent'."),
@@ -653,7 +723,7 @@ export function register(server) {
         if (!query || !query.trim()) {
           return { content: [{ type: "text", text: "Error: query is required and cannot be empty when mode is 'search'." }], isError: true };
         }
-        const resolvedPageSize = page_size ?? 10;
+        const resolvedPageSize = clampPageSize(page_size, 10);
         const body = { query, page_size: resolvedPageSize };
         if (filter_type) body.filter = { value: filter_type, property: "object" };
         const data = await notionRequest("/search", { method: "POST", body });
@@ -710,7 +780,7 @@ export function register(server) {
         });
         return { content: [{ type: "text", text: lines.join("\n\n") }] };
       } else if (mode === "recent") {
-        const resolvedPageSize = page_size ?? 20;
+        const resolvedPageSize = clampPageSize(page_size, 20);
         const body = { query: "", sort: { direction: "descending", timestamp: "last_edited_time" }, page_size: resolvedPageSize };
         if (filter_type) body.filter = { value: filter_type, property: "object" };
         const data = await notionRequest("/search", { method: "POST", body });
@@ -730,27 +800,37 @@ export function register(server) {
 
   server.tool(
     "notion_read",
-    "DOES: Read a Notion page or database by ID, consolidating notion_get_page, notion_get_page_history, notion_get_database, and notion_query_database into a single tool. Auto-detects whether the ID refers to a page or a database. For pages, returns properties, content blocks, markers, and resolved relations (and optionally version history if include_history is true). For databases, returns schema information (and matching rows if a filter is provided).\nRULE for the calling model: only call this directly for a single, specifically-named page or database whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_agent instead of looping notion_read across pages.",
+    "DOES: Read a Notion page or database by ID. Auto-detects whether the ID refers to a page or a database. For pages, returns properties, content blocks, markers, and resolved relations (only the first 5 relations are resolved; optionally the page's madmcp changelog entries if include_history is true). Blocks are read up to 100 per call -- use the cursor param for longer pages. For databases, returns schema information; rows are only returned when a filter is provided (pass `{}`-style filters like `{ property: "Name", title: { is_not_empty: true } }` to list rows).\nRULE for the calling model: only call this directly for a single, specifically-named page or database whose ID you already have. If you'll need to read more than 2 pages, or the task involves understanding or reviewing a whole area of the workspace rather than one known page, use delegate_agent instead of looping notion_read across pages.",
     {
       id:              z.string().describe("Notion page or database ID (UUID format)"),
-      include_history: z.boolean().optional().describe("Optional boolean (default false): if true and the ID refers to a page, also include the page's version/change history in the response"),
+      include_history: z.boolean().optional().describe("Optional boolean (default false): if true and the ID refers to a page, also include the madmcp changelog entries recorded on the page by notion_update (found within the blocks read for this call). This is NOT Notion's own version history, which the API does not expose"),
       filter:          z.record(z.any()).optional().describe("Optional Notion filter object (only meaningful if the ID refers to a database) — if provided, runs the database query and includes matching rows in the response so callers don't need a second call"),
       cursor:          z.string().optional().describe("Optional pagination cursor for blocks (page) or rows (database)"),
-      page_size:       z.number().optional().describe("Optional page size for blocks (page) or rows (database)"),
+      page_size:       z.number().optional().describe("Optional page size for blocks (page) or rows (database), 1-100 (values above 100 are clamped). Defaults: 100 for blocks, 20 for rows"),
     },
     async ({ id, include_history = false, filter, cursor, page_size }) => {
       try {
         let isPage = false;
         let page, blocksData, dbData;
         try {
-          const blocksPath = `/blocks/${id}/children?page_size=${page_size ?? 100}${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`;
+          const blocksPath = `/blocks/${id}/children?page_size=${clampPageSize(page_size, 100)}${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`;
           [page, blocksData] = await Promise.all([
             notionRequest(`/pages/${id}`),
             notionRequest(blocksPath),
           ]);
           isPage = true;
-        } catch {
-          dbData = await notionRequest(`/databases/${id}`);
+        } catch (err) {
+          // Audit fix N3: only fall back to the database lookup when the page
+          // fetch failed the way "this ID isn't a page" fails (400/404).
+          // Auth/rate-limit/server errors used to be swallowed here and
+          // surface as a misleading database error.
+          const status = notionErrorStatus(err);
+          if (status !== 400 && status !== 404) throw err;
+          try {
+            dbData = await notionRequest(`/databases/${id}`);
+          } catch (dbErr) {
+            throw new Error(`Could not read ${id} as a page (${err.message}) or as a database (${dbErr.message}).`, { cause: dbErr });
+          }
         }
 
         if (isPage) {
@@ -814,7 +894,7 @@ export function register(server) {
           let text = `# ${title}\nID: ${dbData.id}\nURL: ${dbData.url}\nCreated: ${dbData.created_time?.slice(0, 10)} | Last edited: ${dbData.last_edited_time?.slice(0, 10)}\n\nProperties:\n${propLines.join("\n") || "(none)"}`;
 
           if (filter !== undefined) {
-            const queryBody = { page_size: page_size ?? 20, filter };
+            const queryBody = { page_size: clampPageSize(page_size, 20), filter };
             if (cursor) queryBody.start_cursor = cursor;
             const queryData = await notionRequest(`/databases/${id}/query`, { method: "POST", body: queryBody });
             if (!queryData.results?.length) {
@@ -848,7 +928,7 @@ export function register(server) {
 
   server.tool(
     "notion_create",
-    "DOES: Create one or more Notion pages, or one or more Notion databases, consolidating notion_create_page, notion_create_pages_batch, and notion_create_database into a single tool. `type: 'page'` creates page(s) under `items` (parent_id/parent_type/title/content/entity_id/status/relations/one_off/properties per item -- same fields and dedup behavior as notion_create_page). `type: 'database'` creates database(s) under `items` (parent_page_id/title/properties per item). Pass a single-element `items` array for a single create, or multiple for a batch -- both go through the same call, so there's no separate 'batch' tool anymore. Each item is created independently; one item failing does not block the others.\nRULE for the calling model: for `type: 'page'`, pass entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable) -- omitting both is refused, same as notion_create_page.",
+    "DOES: Create one or more Notion pages, or one or more Notion databases. `type: 'page'` creates page(s) under `items` (parent_id/parent_type/title/content/entity_id/status/relations/one_off/properties per item; an entity_id that already exists is skipped, not duplicated). `type: 'database'` creates database(s) under `items` (parent_page_id/title/properties per item). Pass a single-element `items` array for a single create, or multiple for a batch. Each item is created independently; one item failing does not block the others.\nRULE for the calling model: for `type: 'page'`, pass entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable) -- omitting both is refused.",
     {
       type:  z.enum(["page", "database"]).describe("'page' creates one or more Notion pages. 'database' creates one or more Notion databases."),
       items: z.array(z.object({
@@ -895,12 +975,13 @@ export function register(server) {
           return `\u2713 [${i}] "${label}" \u2014 id: ${v.id}, url: ${v.url}${idxNote}${dupNote}${relNote}`;
         });
         const created = results.filter((r) => r.status === "fulfilled" && !r.value.skipped).length;
-        return { content: [{ type: "text", text: `${created}/${items.length} page(s) created.\n\n${lines.join("\n")}` }] };
+        const allFailed = results.every((r) => r.status === "rejected"); // audit fix N6
+        return { ...(allFailed ? { isError: true } : {}), content: [{ type: "text", text: `${created}/${items.length} page(s) created.\n\n${lines.join("\n")}` }] };
       } else if (type === "database") {
         const results = await runSequentially(items, async (item) => {
           const data = await notionRequest("/databases", {
             method: "POST",
-            body: { parent: { type: "page_id", page_id: item.parent_page_id }, title: [{ type: "text", text: { content: item.title } }], properties: item.properties },
+            body: { parent: { type: "page_id", page_id: item.parent_page_id }, title: chunkRichText(item.title), properties: item.properties },
           });
           return { id: data.id, url: data.url };
         });
@@ -910,7 +991,8 @@ export function register(server) {
           return `\u2713 [${i}] "${label}" \u2014 id: ${r.value.id}, url: ${r.value.url}`;
         });
         const created = results.filter((r) => r.status === "fulfilled").length;
-        return { content: [{ type: "text", text: `${created}/${items.length} database(s) created.\n\n${lines.join("\n")}` }] };
+        const allFailed = results.every((r) => r.status === "rejected"); // audit fix N6
+        return { ...(allFailed ? { isError: true } : {}), content: [{ type: "text", text: `${created}/${items.length} database(s) created.\n\n${lines.join("\n")}` }] };
       } else {
         return { content: [{ type: "text", text: `Error: invalid type "${type}" (expected "page" or "database").` }], isError: true };
       }
@@ -919,7 +1001,7 @@ export function register(server) {
 
   server.tool(
     "notion_update",
-    "DOES: Update one or more Notion pages, or one or more Notion databases, consolidating notion_update_page, notion_update_pages_batch, and notion_update_database into a single tool. `type: 'page'` updates page(s) under `items` (page_id/title/append_content/archived/replacements/status/entity_id/relations/properties per item -- same fields and behavior as notion_update_page). `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch -- both go through the same call, so there's no separate 'batch' tool anymore. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
+    "DOES: Update one or more Notion pages, or one or more Notion databases. `type: 'page'` updates page(s) under `items` (page_id/title/append_content/archived/replacements/status/entity_id/relations/properties per item). `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
     {
       type:  z.enum(["page", "database"]).describe("'page' updates one or more Notion pages. 'database' updates one or more Notion databases."),
       items: z.array(z.object({
@@ -931,7 +1013,7 @@ export function register(server) {
         replacements:   z.array(z.object({
           find:    z.string().describe("Exact plain text of an existing top-level block (paragraph, heading, list item, or to-do) -- must match exactly one block"),
           replace: z.string().describe("New plain text for that block"),
-        })).optional().describe("type 'page' only: list of find-and-replace operations for targeted in-place block edits. Each `find` must match exactly one of the page's top-level blocks (first 100) by plain text -- fails loudly (no changes made) on zero or multiple matches. Only text-style blocks (paragraph/heading/list-item/to-do) can be edited this way."),
+        })).optional().describe("type 'page' only: list of find-and-replace operations for targeted in-place block edits. Each `find` must match exactly one of the page's top-level blocks by plain text -- fails loudly (no changes made) on zero or multiple matches. Only text-style blocks (paragraph/heading/list-item/to-do) can be edited this way."),
         status:         z.enum(STATUS_VALUES).optional().describe("type 'page' only: set this page's lifecycle status (open/resolved/superseded). Updates the existing status marker block in place if one exists, or appends a new marker if the page has none yet."),
         entity_id:      z.string().optional().describe("type 'page' only: correct or set this page's entity_id marker. Updates the visible entity_id marker block in place AND upserts the Entity Index database entry that notion_create's dedup check and notion_read's relation resolution both read from -- editing the marker text via `replacements` alone does NOT update the index."),
         relations:      z.array(z.object({
@@ -953,12 +1035,13 @@ export function register(server) {
           return `\u2713 [${i}] ${label} \u2014 ${r.value.join("; ") || "no changes made"}`;
         });
         const succeeded = results.filter((r) => r.status === "fulfilled").length;
-        return { content: [{ type: "text", text: `${succeeded}/${items.length} page(s) updated.\n\n${lines.join("\n")}` }] };
+        const allFailed = results.every((r) => r.status === "rejected"); // audit fix N6
+        return { ...(allFailed ? { isError: true } : {}), content: [{ type: "text", text: `${succeeded}/${items.length} page(s) updated.\n\n${lines.join("\n")}` }] };
       } else if (type === "database") {
         const results = await runSequentially(items, async (item) => {
           const body = {};
           if (item.archived !== undefined) body.archived = item.archived;
-          if (item.title    !== undefined) body.title    = [{ type: "text", text: { content: item.title } }];
+          if (item.title    !== undefined) body.title    = chunkRichText(item.title);
           if (Object.keys(body).length === 0) return { noChanges: true };
           const data = await notionRequest(`/databases/${item.database_id}`, { method: "PATCH", body });
           return { title: notionDatabaseTitle(data), id: data.id };
@@ -970,7 +1053,8 @@ export function register(server) {
           return `\u2713 [${i}] ${label} \u2014 updated "${r.value.title}"`;
         });
         const succeeded = results.filter((r) => r.status === "fulfilled" && !r.value.noChanges).length;
-        return { content: [{ type: "text", text: `${succeeded}/${items.length} database(s) updated.\n\n${lines.join("\n")}` }] };
+        const allFailed = results.every((r) => r.status === "rejected"); // audit fix N6
+        return { ...(allFailed ? { isError: true } : {}), content: [{ type: "text", text: `${succeeded}/${items.length} database(s) updated.\n\n${lines.join("\n")}` }] };
       } else {
         return { content: [{ type: "text", text: `Error: invalid type "${type}" (expected "page" or "database").` }], isError: true };
       }
@@ -1020,7 +1104,8 @@ export function register(server) {
         return `\u2713 [${i}] ${label} \u2014 indexed`;
       });
       const added = results.filter((r) => r.status === "fulfilled" && !r.value.skipped && !r.value.error).length;
-      return { content: [{ type: "text", text: `${added}/${items.length} added.\n\n${lines.join("\n")}` }] };
+      const allFailed = results.every((r) => r.status === "rejected" || !!r.value?.error); // audit fix N6
+      return { ...(allFailed ? { isError: true } : {}), content: [{ type: "text", text: `${added}/${items.length} added.\n\n${lines.join("\n")}` }] };
     }
   );
 }
