@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commons%20Clause-blue?style=flat-square)](./LICENSE)
 
 <a href="https://allocsys.github.io/madmcp/demo.html">
-  <img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&size=15&duration=2600&pause=900&color=E8A33D&center=true&vCenter=true&width=580&lines=%E2%86%92+tool_call+repo_inspect(%7B+action%3A+%22search%22+%7D);%E2%9C%93+200+%C2%B7+118ms+%C2%B7+1+match%2C+no+timeout+set;%E2%86%92+tool_call+pr_write(%7B+action%3A+%22create%22+%7D);%E2%9C%93+PR+%23482+opened+against+main;%E2%86%92+tool_call+mem0_add(%7B+entity_id%3A+%22edge-router-incident%22+%7D)" alt="typing animation of a madmcp tool-call trace" />
+  <img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&size=15&duration=2600&pause=900&color=E8A33D&center=true&vCenter=true&width=580&lines=%E2%86%92+tool_call+search_code(%7B+ref%3A+%22main%22+%7D);%E2%9C%93+200+%C2%B7+118ms+%C2%B7+1+match%2C+no+timeout+set;%E2%86%92+tool_call+pr_write(%7B+action%3A+%22create%22+%7D);%E2%9C%93+PR+%23482+opened+against+main;%E2%86%92+tool_call+mem0_add(%7B+entity_id%3A+%22edge-router-incident%22+%7D)" alt="typing animation of a madmcp tool-call trace" />
 </a>
 
 **[▶ Watch the live protocol trace](https://allocsys.github.io/madmcp/demo.html)**
