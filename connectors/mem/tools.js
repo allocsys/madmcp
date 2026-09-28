@@ -162,6 +162,7 @@ import { z } from "zod";
 import { mem0Request } from "./client.js";
 import { MEM0_USER_ID } from "../../config.js";
 import { register as registerDelete } from "./delete.js";
+import { register as registerWrite } from "./write.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
 // Hard-stop threshold for Tier 2 duplicate detection (2026-07-13, insert-
@@ -717,7 +718,13 @@ export function register(server) {
     }
   );
 
-  // ── Update memory ────────────────────────────────────────────────────────
+  // ── Write tools (add / add_batch / update) ────────────────────────────────────────────────────────
+  // mem0_add / mem0_add_batch / mem0_update were consolidated into one
+  // mem0_write tool (action: add | add_batch | update) — see ./write.js. The
+  // shared helpers it relies on are passed in (not imported) to avoid a
+  // circular import.
+  registerWrite(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, findByEntityId, processRelations, findPossibleDuplicates, verifyLanded });
+
   // ── Delete tools ─────────────────────────────────────────────────────────
   // mem0_delete / mem0_delete_batch / mem0_delete_all were consolidated into
   // one mem0_delete tool (action: one | batch | all) — see ./delete.js.
