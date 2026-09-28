@@ -558,42 +558,79 @@ async function verifyLanded({ user_id, agent_id, run_id, entity_id, content }, {
 
 export function register(server) {
 
-  // ── List memories ────────────────────────────────────────────────────────
+  // ── Find memories (list / search) ────────────────────────────────────────
+  // Consolidates the former mem0_list and mem0_search (action: list | search).
+  // Requests and output are unchanged; required-ness (query for 'search')
+  // moved from zod into the handler.
   server.tool(
-    "mem0_list",
-    "List recent memories from your Mem0 workspace.",
+    "mem0_find",
+    "DOES: List recent memories or search them semantically in your Mem0 workspace. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'list' returns recent memories (paginated) as compact one-line entries and needs no other params. NOT a relevance query — use 'search' for that.\n" +
+    "RULE: action 'search' requires query and runs hybrid semantic + keyword retrieval, returning compact one-line entries with relevance scores.\n" +
+    "RULE: user_id, limit, categories and status_filter apply to both actions. page, fields, flagged_duplicates_only and include_relations apply to 'list' only; query, agent_id, run_id, rerank and threshold apply to 'search' only.\n" +
+    "RULE: memories with status 'superseded' are hidden by default (memories with no status are always shown); pass status_filter to include them.",
     {
+      action:         z.enum(["list", "search"]).describe("Which operation to perform"),
+      query:          z.string().optional().describe("Search query string. Required for action 'search'."),
       user_id:        z.string().optional().describe(`Mem0 user ID to scope memories (default: ${MEM0_USER_ID})`),
+      agent_id:       z.string().optional().describe("Optional agent ID to scope search (e.g. per-project), in addition to user_id. Scoping at query time — not just at write time — meaningfully improves precision by excluding irrelevant projects/entities from the candidate pool before ranking even starts. Used by 'search' only."),
+      run_id:         z.string().optional().describe("Optional run/session ID to scope search, in addition to user_id. Used by 'search' only."),
       limit:          z.number().optional().describe("Number of memories to return (default: 20)"),
-      page:           z.number().optional().describe("Page number for pagination (default: 1)"),
+      page:           z.number().optional().describe("Page number for pagination (default: 1). Used by 'list' only."),
       categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
-      status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories, or [\"open\"] to narrow to just open ones."),
-      fields:         z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']"),
-      flagged_duplicates_only: z.boolean().optional().describe("If true, only return memories flagged at add-time as possible duplicates of another memory (metadata.possible_duplicate_of non-empty) — useful for a periodic consolidation pass (Part 5 of the anti-bloat plan)."),
-      include_relations: z.boolean().optional().describe(`Default: false. If true, resolve and show each memory's related entities (up to ${RELATION_TRAVERSAL_DEPTH} hops, both outgoing and incoming) — but only for the top ${RELATION_RESOLVE_LIMIT} results by rank, to avoid a full multi-hop resolution cost across the whole page. Remaining results show an outgoing-relation count only. Unresolved targets are labeled deleted / not found / different scope rather than left blank.`),
+      status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status 'superseded' (memories with no status set are always included). Pass e.g. ['superseded'] to explicitly see superseded memories, or ['open'] to narrow to just open ones."),
+      fields:         z.array(z.string()).optional().describe("Optional list of fields to return per memory (server-side projection to reduce payload size), e.g. ['id','memory','created_at']. Used by 'list' only."),
+      flagged_duplicates_only: z.boolean().optional().describe("If true, only return memories flagged at add-time as possible duplicates of another memory (metadata.possible_duplicate_of non-empty) — useful for a periodic consolidation pass (Part 5 of the anti-bloat plan). Used by 'list' only."),
+      include_relations: z.boolean().optional().describe(`Default: false. If true, resolve and show each memory's related entities (up to ${RELATION_TRAVERSAL_DEPTH} hops, both outgoing and incoming) — but only for the top ${RELATION_RESOLVE_LIMIT} results by rank, to avoid a full multi-hop resolution cost across the whole page. Remaining results show an outgoing-relation count only. Unresolved targets are labeled deleted / not found / different scope rather than left blank. Used by 'list' only.`),
+      rerank:         z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval. Default: true — reranking meaningfully improves precision and is now the connector default rather than opt-in; pass false to skip it if latency matters more than precision for a given call. Used by 'search' only."),
+      threshold:      z.number().optional().describe("Minimum relevance score (0-1) — results below this are dropped. Default: 0.35 (raised from Mem0 v3's own default of 0.1, which let through too much low-relevance noise). Pass 0 explicitly to disable filtering and see everything Mem0 returns. Used by 'search' only."),
     },
-    async ({ user_id = MEM0_USER_ID, limit = 20, page = 1, categories, status_filter, fields, flagged_duplicates_only, include_relations = false }) => {
+    async ({ action, query, user_id = MEM0_USER_ID, agent_id, run_id, limit = 20, page = 1, categories, status_filter, fields, flagged_duplicates_only, include_relations = false, rerank = true, threshold = 0.35 }) => {
+
+      if (action === "list") {
+        const filters = { user_id };
+        // Over-fetch a bit since tag/status filtering happens client-side.
+        const needsClientFilter = categories?.length || status_filter?.length || flagged_duplicates_only || true; // status default-filter always applies
+        const fetchSize = needsClientFilter ? Math.max(limit * 2, limit + 20) : limit;
+        const body = { filters, page, page_size: fetchSize };
+        if (fields?.length) body.fields = Array.from(new Set([...fields, "metadata"]));
+        const data = await mem0Request("/v3/memories/", { method: "POST", body });
+        let memories = data.results || data.memories || data || [];
+        memories = filterByTags(memories, categories);
+        memories = filterByStatus(memories, status_filter);
+        memories = filterFlaggedDuplicates(memories, flagged_duplicates_only).slice(0, limit);
+        if (!memories.length) return { content: [{ type: "text", text: "No memories found." }] };
+        if (!include_relations) {
+          return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
+        }
+        const lines = [];
+        for (let i = 0; i < memories.length; i++) {
+          const suffix = await buildRelationsSuffix(memories[i], i, { user_id });
+          lines.push(compactLine(memories[i]) + suffix);
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      // action === "search"
+      if (query === undefined) {
+        return { content: [{ type: "text", text: "action 'search' requires query." }], isError: true };
+      }
       const filters = { user_id };
-      // Over-fetch a bit since tag/status filtering happens client-side.
-      const needsClientFilter = categories?.length || status_filter?.length || flagged_duplicates_only || true; // status default-filter always applies
-      const fetchSize = needsClientFilter ? Math.max(limit * 2, limit + 20) : limit;
-      const body = { filters, page, page_size: fetchSize };
-      if (fields?.length) body.fields = Array.from(new Set([...fields, "metadata"]));
-      const data = await mem0Request("/v3/memories/", { method: "POST", body });
+      if (agent_id) filters.agent_id = agent_id;
+      if (run_id) filters.run_id = run_id;
+      // Over-fetch since tag/status filtering happens client-side (status
+      // default-exclusion of "superseded" always applies, so always over-fetch
+      // a bit even with no explicit categories/status_filter given).
+      const fetchLimit = Math.max(limit * 3, limit + 20);
+      const body = { query, filters, top_k: fetchLimit };
+      if (rerank) body.rerank = true;
+      if (threshold > 0) body.threshold = threshold;
+      const data = await mem0Request("/v3/memories/search/", { method: "POST", body });
       let memories = data.results || data.memories || data || [];
       memories = filterByTags(memories, categories);
-      memories = filterByStatus(memories, status_filter);
-      memories = filterFlaggedDuplicates(memories, flagged_duplicates_only).slice(0, limit);
-      if (!memories.length) return { content: [{ type: "text", text: "No memories found." }] };
-      if (!include_relations) {
-        return { content: [{ type: "text", text: memories.map((m) => compactLine(m)).join("\n") }] };
-      }
-      const lines = [];
-      for (let i = 0; i < memories.length; i++) {
-        const suffix = await buildRelationsSuffix(memories[i], i, { user_id });
-        lines.push(compactLine(memories[i]) + suffix);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      memories = filterByStatus(memories, status_filter).slice(0, limit);
+      if (!memories.length) return { content: [{ type: "text", text: "No memories found matching your query." }] };
+      return { content: [{ type: "text", text: memories.map((m) => compactLine(m, { showScore: true })).join("\n") }] };
     }
   );
 
@@ -606,11 +643,11 @@ export function register(server) {
     "DOES: Inspect one Mem0 memory or entity. READ-ONLY. Use `action` to pick.\n" +
     "RULE: action 'get' requires memory_id and returns the memory's full content, categories/tags/entity_id/status/duplicate flags, metadata, and (when it has an entity_id) its related entities up to 3 hops, both directions.\n" +
     "RULE: action 'history' requires memory_id and returns the version/audit trail — every ADD/UPDATE/DELETE event with old/new values and timestamps (wraps Mem0's native history endpoint).\n" +
-    "RULE: action 'relations' requires entity_id and returns the complete relation graph (up to 3 hops, both outgoing and incoming) around that entity, bypassing the top-5 results cap that mem0_list's include_relations has.\n" +
+    "RULE: action 'relations' requires entity_id and returns the complete relation graph (up to 3 hops, both outgoing and incoming) around that entity, bypassing the top-5 results cap that mem0_find's list include_relations has.\n" +
     "RULE: memory_id applies to 'get' and 'history' only; entity_id/user_id/agent_id/run_id apply to 'relations' only.",
     {
       action:    z.enum(["get", "history", "relations"]).describe("Which operation to perform"),
-      memory_id: z.string().optional().describe("The memory ID (from mem0_list or mem0_search). Required for actions 'get' and 'history'."),
+      memory_id: z.string().optional().describe("The memory ID (from mem0_find or mem0_inspect). Required for actions 'get' and 'history'."),
       entity_id: z.string().optional().describe("The entity_id to resolve relations for. Required for action 'relations'."),
       user_id:   z.string().optional().describe(`Mem0 user ID scoping (default: ${MEM0_USER_ID}). Used by 'relations' only.`),
       agent_id:  z.string().optional().describe("Optional agent ID scoping. Used by 'relations' only."),
@@ -691,7 +728,7 @@ export function register(server) {
       run_id:     z.string().optional().describe("Optional run/session ID for finer-grained scoping"),
       categories: z.array(z.string()).optional().describe("Optional tags to attach to this memory (e.g. ['manager.js','decisions']) — stored under metadata.tags and used for later tag-filtered list/search, since Mem0's own category classifier can't be overridden per-call"),
       entity_id:  z.string().optional().describe("Optional stable identifier for the fact/entity this memory is about (e.g. 'bug-4', 'nexus-file-naming'). BEFORE inventing a new one, search/list for an existing entity on the same topic — entity_id only prevents duplicates when it EXACTLY matches a string used before; a new entity_id for something that already has a different entity_id will NOT be caught by the exact-match check (though it will still get flagged by the Tier 2 similarity check below, so check the response for a possible_duplicate_of warning). If a memory already exists with this exact entity_id, mem0_add will NOT create a duplicate — it returns the existing memory's id and content instead, so you can merge old + new content yourself (keeping everything not explicitly contradicted) and call mem0_update. Use this whenever you're recording an update to something you've stored before, rather than adding a fresh mem0_add call."),
-      status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status for this memory (open/resolved/superseded). Left unset by default. Memories marked \"superseded\" are hidden from mem0_list/mem0_search by default."),
+      status:     z.enum(STATUS_VALUES).optional().describe("Optional lifecycle status for this memory (open/resolved/superseded). Left unset by default. Memories marked \"superseded\" are hidden from mem0_find by default."),
       relations:  z.array(z.object({
         to_entity_id: z.string().describe("The entity_id of the other entity this one relates to"),
         relation: z.string().describe("The relation type, e.g. 'blocks', 'depends_on', 'relates_to' — free text; known synonyms/variants are canonicalized automatically, unrecognized strings pass through unchanged"),
@@ -766,7 +803,7 @@ export function register(server) {
       const landed = await verifyLanded({ user_id, agent_id, run_id, entity_id, content });
       const landedNote = landed
         ? ` Confirmed landed (id: ${landed.id}).`
-        : `\n\n⚠ Could not confirm this memory landed after several verification attempts — Mem0's async job may have silently failed (see madmcp-mem0-add-silent-failure-diagnostic). Re-run mem0_search/mem0_list shortly to check, and retry mem0_add if it's still missing.`;
+        : `\n\n⚠ Could not confirm this memory landed after several verification attempts — Mem0's async job may have silently failed (see madmcp-mem0-add-silent-failure-diagnostic). Re-run mem0_find shortly to check, and retry mem0_add if it's still missing.`;
       const relationNote = relationWarnings.length ? `\n\n⚠ Relations:\n${relationWarnings.map((w) => `  ${w}`).join("\n")}` : "";
       return {
         content: [{
@@ -861,41 +898,6 @@ export function register(server) {
         return `✗ [${i}] "${title}" — error: ${r.reason?.message || r.reason}`;
       });
       return { content: [{ type: "text", text: lines.join("\n") }] };
-    }
-  );
-
-  // ── Search memories ──────────────────────────────────────────────────────
-  server.tool(
-    "mem0_search",
-    "Search memories in your Mem0 workspace using hybrid semantic + keyword retrieval.",
-    {
-      query:          z.string().describe("Search query string"),
-      user_id:        z.string().optional().describe(`Mem0 user ID to scope search (default: ${MEM0_USER_ID})`),
-      agent_id:       z.string().optional().describe("Optional agent ID to scope search (e.g. per-project), in addition to user_id. Scoping at query time — not just at write time — meaningfully improves precision by excluding irrelevant projects/entities from the candidate pool before ranking even starts."),
-      run_id:         z.string().optional().describe("Optional run/session ID to scope search, in addition to user_id."),
-      limit:          z.number().optional().describe("Number of results to return (default: 20)"),
-      categories:     z.array(z.string()).optional().describe("Optional tag filters (memory must match any listed tag; matched client-side against metadata.tags, not Mem0's built-in classifier categories)"),
-      status_filter:  z.array(z.enum(STATUS_VALUES)).optional().describe("Optional status filter (memory must match one of the listed statuses). If omitted, defaults to excluding status=\"superseded\" (memories with no status set are always included). Pass e.g. [\"superseded\"] to explicitly see superseded memories."),
-      rerank:         z.boolean().optional().describe("Whether to apply Mem0's relevance reranking on top of hybrid retrieval. Default: true — reranking meaningfully improves precision and is now the connector default rather than opt-in; pass false to skip it if latency matters more than precision for a given call."),
-      threshold:      z.number().optional().describe("Minimum relevance score (0-1) — results below this are dropped. Default: 0.35 (raised from Mem0 v3's own default of 0.1, which let through too much low-relevance noise). Pass 0 explicitly to disable filtering and see everything Mem0 returns."),
-    },
-    async ({ query, user_id = MEM0_USER_ID, agent_id, run_id, limit = 20, categories, status_filter, rerank = true, threshold = 0.35 }) => {
-      const filters = { user_id };
-      if (agent_id) filters.agent_id = agent_id;
-      if (run_id) filters.run_id = run_id;
-      // Over-fetch since tag/status filtering happens client-side (status
-      // default-exclusion of "superseded" always applies, so always over-fetch
-      // a bit even with no explicit categories/status_filter given).
-      const fetchLimit = Math.max(limit * 3, limit + 20);
-      const body = { query, filters, top_k: fetchLimit };
-      if (rerank) body.rerank = true;
-      if (threshold > 0) body.threshold = threshold;
-      const data = await mem0Request("/v3/memories/search/", { method: "POST", body });
-      let memories = data.results || data.memories || data || [];
-      memories = filterByTags(memories, categories);
-      memories = filterByStatus(memories, status_filter).slice(0, limit);
-      if (!memories.length) return { content: [{ type: "text", text: "No memories found matching your query." }] };
-      return { content: [{ type: "text", text: memories.map((m) => compactLine(m, { showScore: true })).join("\n") }] };
     }
   );
 
