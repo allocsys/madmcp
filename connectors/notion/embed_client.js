@@ -50,7 +50,7 @@ export async function triggerNotionEmbed({ page_id, content }) {
         "Authorization": `Bearer ${REPO_MAP_SHARED_SECRET}`,
       },
       body: JSON.stringify({ page_id, content }),
-      signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+      signal: globalThis.AbortSignal.timeout(EMBED_TIMEOUT_MS),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
