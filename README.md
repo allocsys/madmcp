@@ -263,7 +263,7 @@ Hyperdrive: `cf_hyperdrive_config` (list/get), `cf_hyperdrive_config_create/upda
 
 Workers: `cf_workers_read` (action: list | get | code)
 
-Observability: `cf_workers_observability_query/keys/values/compare`
+Observability: `cf_workers_observability` (action: query | keys | values | compare)
 
 ### Notion
 `notion_find`, `notion_read`, `notion_create`, `notion_update`, `notion_sync_content`,

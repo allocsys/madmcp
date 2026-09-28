@@ -1,21 +1,22 @@
 // ---------------------------------------------------------------------------
 // connectors/cloudflare/observability_compare.js
 //
-// cf_workers_observability_compare — fetches Workers Observability telemetry
-// for TWO scripts over the SAME timeframe and returns a normalized,
-// side-by-side diff, instead of two raw event dumps that have to be eyeballed
-// separately.
+// The 'compare' action of cf_workers_observability — fetches Workers
+// Observability telemetry for TWO scripts over the SAME timeframe and returns
+// a normalized, side-by-side diff, instead of two raw event dumps that have to
+// be eyeballed separately. (Registered by observability.js; this module only
+// exports compareScripts.)
 //
 // Why this exists: raw event counts between two workers aren't comparable
 // unless normalized, because the two queries can span very different amounts
 // of actual wall-clock time even with the same `limit` (e.g. a busier worker
 // fills its event quota over a much shorter window). Every ad-hoc comparison
-// done manually against cf_workers_observability_query had to redo this
+// done manually against the 'query' action had to redo this
 // normalization by hand and was easy to get wrong (see: a same-day comparison
 // that used differing sample windows and produced an apparently-contradictory
 // result versus an earlier, larger-sample comparison).
 //
-// What this tool normalizes:
+// What this action normalizes:
 //   - event rate (events/sec, computed off actual min/max timestamp span of
 //     the returned sample — NOT off the requested timeframe window, since a
 //     `limit` cutoff usually means the sample covers less time than requested)
@@ -26,19 +27,14 @@
 //     Worker's own code barely ran) — surfaced as a count + example events
 //     rather than requiring a human to spot it in a wall of JSON.
 //
-// What this tool deliberately does NOT try to normalize (confounds that need
+// What this action deliberately does NOT try to normalize (confounds that need
 // a human, per DumbCodesOnly's own past findings): different test-server
 // geography (e.g. SG vs DE testmy.net endpoints), client-side network
 // conditions, and time-of-day traffic differences. The output includes a
 // caveat noting these aren't a controlled A/B.
 // ---------------------------------------------------------------------------
 
-import { z } from "zod";
 import { queryTelemetry, toEpochMillis } from "./observability.js";
-
-function textResult(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-}
 
 function getPath(obj, path) {
   return path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), obj);
@@ -149,43 +145,29 @@ function analyzeEvents(events) {
   };
 }
 
-export function register(server) {
-  server.tool(
-    "cf_workers_observability_compare",
-    "DOES: Compare Workers Observability telemetry between TWO scripts over the SAME timeframe -- normalized rates (events/sec, loadShed/sec, error/sec), not raw counts, plus a 'stuck socket' heuristic (high wall-time vs low CPU-time) with example events per side.\n" +
-    "RULE: comparing a deploy against a baseline -> this, not two separate cf_workers_observability_query calls -- raw counts aren't comparable across differing sample time-spans (see file header for why).\n" +
-    "NOT a controlled A/B: traffic mix, client geography, time-of-day aren't normalized -- output includes that caveat.",
-    {
-      script_a: z.string().describe("First Worker script name, e.g. the post-deploy / current version"),
-      script_b: z.string().describe("Second Worker script name, e.g. the pre-deploy / baseline version"),
-      timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis — applied identically to both scripts"),
-      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis — applied identically to both scripts"),
-      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers'). Pass 'otel' to compare span/exception data instead."),
-      view: z.string().optional().describe("Result grouping mode, e.g. 'events' or 'invocations'. Default: 'events'."),
-      limit: z.number().optional().describe("Max events fetched per script (default: 1000). Same limit applied to both sides for a fair comparison."),
-    },
-    async ({ script_a, script_b, timeframe_from, timeframe_to, dataset = "cloudflare-workers", view = "events", limit = 1000 }) => {
-      const from = toEpochMillis(timeframe_from);
-      const to = toEpochMillis(timeframe_to);
+// Returns the comparison object; the caller (cf_workers_observability)
+// serializes it. Defaults (dataset, view, limit=1000) are applied here so they
+// are unchanged from the former standalone cf_workers_observability_compare.
+export async function compareScripts({ script_a, script_b, timeframe_from, timeframe_to, dataset = "cloudflare-workers", view = "events", limit = 1000 }) {
+  const from = toEpochMillis(timeframe_from);
+  const to = toEpochMillis(timeframe_to);
 
-      const [resultA, resultB] = await Promise.all([
-        queryTelemetry({ timeframe_from: from, timeframe_to: to, script_name: script_a, dataset, view, limit }),
-        queryTelemetry({ timeframe_from: from, timeframe_to: to, script_name: script_b, dataset, view, limit }),
-      ]);
+  const [resultA, resultB] = await Promise.all([
+    queryTelemetry({ timeframe_from: from, timeframe_to: to, script_name: script_a, dataset, view, limit }),
+    queryTelemetry({ timeframe_from: from, timeframe_to: to, script_name: script_b, dataset, view, limit }),
+  ]);
 
-      const eventsA = resultA?.events?.events || [];
-      const eventsB = resultB?.events?.events || [];
+  const eventsA = resultA?.events?.events || [];
+  const eventsB = resultB?.events?.events || [];
 
-      const analysisA = analyzeEvents(eventsA);
-      const analysisB = analyzeEvents(eventsB);
+  const analysisA = analyzeEvents(eventsA);
+  const analysisB = analyzeEvents(eventsB);
 
-      return textResult({
-        timeframe: { from, to },
-        scripts: { a: script_a, b: script_b },
-        a: analysisA,
-        b: analysisB,
-        note: "Rates are normalized per-second off each sample's own observed timestamp span, not off the requested timeframe — a `limit` cutoff usually means the returned sample covers less wall-clock time than requested, especially for a busier script. This is NOT a controlled A/B: differing traffic mix, client geography, and time-of-day are not accounted for here and can still explain rate differences on their own.",
-      });
-    }
-  );
+  return {
+    timeframe: { from, to },
+    scripts: { a: script_a, b: script_b },
+    a: analysisA,
+    b: analysisB,
+    note: "Rates are normalized per-second off each sample's own observed timestamp span, not off the requested timeframe — a `limit` cutoff usually means the returned sample covers less wall-clock time than requested, especially for a busier script. This is NOT a controlled A/B: differing traffic mix, client geography, and time-of-day are not accounted for here and can still explain rate differences on their own.",
+  };
 }

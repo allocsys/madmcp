@@ -1,6 +1,8 @@
 // ---------------------------------------------------------------------------
 // connectors/cloudflare/tools.js — aggregates and registers all Cloudflare
-// sub-tool modules (D1, KV, R2, Workers, Hyperdrive) with the MCP server.
+// sub-tool modules (D1, KV, R2, Workers, Hyperdrive, Observability) with the
+// MCP server. observability_compare.js exports compareScripts, which the
+// observability module calls for action 'compare' (it registers no tool).
 // ---------------------------------------------------------------------------
 
 import * as d1 from "./d1.js";
@@ -9,7 +11,6 @@ import * as r2 from "./r2.js";
 import * as workers from "./workers.js";
 import * as hyperdrive from "./hyperdrive.js";
 import * as observability from "./observability.js";
-import * as observabilityCompare from "./observability_compare.js";
 
 export function register(server) {
   d1.register(server);
@@ -18,5 +19,4 @@ export function register(server) {
   workers.register(server);
   hyperdrive.register(server);
   observability.register(server);
-  observabilityCompare.register(server);
 }
