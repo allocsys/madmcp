@@ -299,11 +299,44 @@ describe("connectors/github/codespace_manage.js", () => {
     });
   });
 
+  describe("owner fallback and path encoding", () => {
+    it.each(["machines", "create"])("%s treats an empty-string owner like an omitted one", async (action) => {
+      githubRequest.mockResolvedValueOnce(action === "machines" ? { machines: [] } : { name: "n", state: "Provisioning", web_url: "https://x" });
+
+      await call({ action, owner: "", repo: "madmcp", ref: "main" });
+
+      expect(githubRequest.mock.calls[0][0]).toContain("/repos/allocsys/madmcp/codespaces");
+    });
+
+    it("url-encodes codespace_name in request paths", async () => {
+      githubRequest.mockResolvedValueOnce({ name: "a/b", state: "Starting" });
+
+      await call({ action: "start", codespace_name: "a/b" });
+
+      expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/a%2Fb/start", { method: "POST" });
+    });
+  });
+
   describe("delete", () => {
+    it("refuses to delete without confirm: true and makes no request", async () => {
+      const result = await call({ action: "delete", codespace_name: "curly-fiesta-abc123" });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/NOT deleted/);
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it("refuses when confirm is false or a non-true value", async () => {
+      const result = await call({ action: "delete", codespace_name: "curly-fiesta-abc123", confirm: false });
+
+      expect(result.isError).toBe(true);
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
     it("deletes a codespace and returns a confirmation", async () => {
       githubRequest.mockResolvedValueOnce({});
 
-      const result = await call({ action: "delete", codespace_name: "curly-fiesta-abc123" });
+      const result = await call({ action: "delete", codespace_name: "curly-fiesta-abc123", confirm: true });
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123", { method: "DELETE" });
       expect(result.content[0].text).toMatch(/🗑️ Deleted codespace curly-fiesta-abc123 permanently\./);
@@ -312,7 +345,7 @@ describe("connectors/github/codespace_manage.js", () => {
     it("propagates the error when the codespace doesn't exist", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
-      await expect(call({ action: "delete", codespace_name: "does-not-exist" }))
+      await expect(call({ action: "delete", codespace_name: "does-not-exist", confirm: true }))
         .rejects.toThrow(/404/);
     });
   });
