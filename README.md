@@ -253,7 +253,7 @@ Notifications: `list_notifications`
 Codespaces: `codespace_manage` (`action`: `list` | `get` | `machines` | `create` | `start` | `stop` | `delete`), replacing `list_codespaces`, `get_codespace`, `list_codespace_machines`, `create_codespace`, `start_codespace`, `stop_codespace`, `delete_codespace`. `create`, `start`, `stop` and `delete` mutate; `delete` is permanent. Requires the `codespace` PAT scope on `GITHUB_TOKEN` — see [API_KEYS.md](./docs/API_KEYS.md). **Runtime requirement:** `exec_in_codespace` (separate, gated by `CODE_EXEC_ENABLED`) requires the GitHub CLI (`gh`) to be installed and authenticated on the server running this MCP instance.
 
 ### Cloudflare
-D1: `cf_d1_database` (list/get), `cf_d1_database_create`, `cf_d1_database_delete`, `cf_d1_database_query`
+D1: `cf_d1_read` (action: get | list), `cf_d1_manage` (action: create), `cf_d1_query`, `cf_d1_database_delete` (to move into a guarded delete tool)
 
 KV: `cf_kv_namespace` (list/get), `cf_kv_namespace_create/update/delete`
 
