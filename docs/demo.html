@@ -271,13 +271,13 @@
 
     <div class="cards" id="cards">
       <div class="cards-head">Manifest log</div>
-      <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p><p class="tech">search_code · 1 file matched, no timeout set</p></div>
+      <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p><p class="tech">repo_inspect (search) · 1 file matched, no timeout set</p></div>
       <div class="card" data-id="1"><div class="tag-row"><span class="tag">Step 2 · Cloudflare</span><span class="metric">204ms</span></div><p>Pulls live Workers metrics to confirm the hunch.</p><p class="tech">cf_workers_observability_query · 0.93 correlation to traffic</p></div>
-      <div class="card" data-id="2"><div class="tag-row"><span class="tag">Step 3 · GitHub</span><span class="metric">237ms</span></div><p>Commits the fix and opens a PR in the same turn.</p><p class="tech">push_files + create_pull_request · PR #482</p></div>
+      <div class="card" data-id="2"><div class="tag-row"><span class="tag">Step 3 · GitHub</span><span class="metric">237ms</span></div><p>Commits the fix and opens a PR in the same turn.</p><p class="tech">overwrite_files + pr_write (create) · PR #482</p></div>
       <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update_page · status → In review</p></div>
       <div class="card" data-id="4"><div class="tag-row"><span class="tag">Step 5 · Mem0</span><span class="metric">874ms</span></div><p>Stores the root cause with dedup + relations.</p><p class="tech">mem0_add + mem0_update · dup flagged, 3 relations linked</p></div>
       <div class="card" data-id="5"><div class="tag-row"><span class="tag">Step 6 · Fetch</span><span class="metric">233ms</span></div><p>Confirms the status page reflects the fix.</p><p class="tech">web_fetch · matches Cloudflare baseline</p></div>
-      <div class="card capstone" data-id="6"><div class="tag-row"><span class="tag">⭐ Step 7 · Gemini (capstone)</span><span class="metric">612ms</span></div><p>The payoff: 4 sub-steps of investigation, run server-side by Gemini, collapsed into <b>1 call</b> from the agent — no manual chaining.</p><p class="tech">delegate_gemini · list_commits + get_pr_reviews + cf_workers_observability_query + get_check_runs, synthesized into one answer</p></div>
+      <div class="card capstone" data-id="6"><div class="tag-row"><span class="tag">⭐ Step 7 · Gemini (capstone)</span><span class="metric">612ms</span></div><p>The payoff: 4 sub-steps of investigation, run server-side by Gemini, collapsed into <b>1 call</b> from the agent — no manual chaining.</p><p class="tech">delegate_gemini · repo_inspect + pr_read + cf_workers_observability_query + ci_manage, synthesized into one answer</p></div>
       <div class="stats">
         <div class="row"><span>Connectors touched</span><span id="statConn">1 / 6</span></div>
         <div class="row"><span>Total latency</span><span id="statMs">118ms</span></div>
@@ -302,7 +302,7 @@
     { id:'gh', label:'GITHUB · SEARCH', lines:[
       ['prompt','> edge-router is slow under load — find the suspect code'],
       ['why','Why: checkout latency usually traces to an unbounded downstream call, not the router itself — search the code before touching infra.'],
-      ['call','→ search_code({ repo: "acme-labs/edge-router", query: "legacyPricingService", per_page: 10 })'],
+      ['call','→ repo_inspect({ action: "search", ref: "main", query: "legacyPricingService repo:acme-labs/edge-router", per_page: 10 })'],
       ['result','checkout.js:142  await legacyPricingService.call(req.body)\ncheckout.js:143  // TODO: no timeout — revisit before GA\n1 file matched · 0 other callers found'],
       ['stamped','✓ stamped · 118ms · 1 match, no timeout set']
     ], ms:118},
@@ -316,7 +316,7 @@
     { id:'gh', label:'GITHUB · COMMIT + PR', lines:[
       ['prompt','> add an 800ms timeout + circuit breaker, open a PR'],
       ['why','Why: 800ms covers this service’s normal p99 with headroom, without adding a full second of user-facing lag on top.'],
-      ['call','→ push_files({ branch: "fix/pricing-timeout", files: ["checkout.js"] })\n→ create_pull_request({ title: "Add timeout guard", base: "main", body: "Fixes INC-114" })'],
+      ['call','→ overwrite_files({ branch: "fix/pricing-timeout", files: ["checkout.js"] })\n→ pr_write({ action: "create", title: "Add timeout guard", head: "fix/pricing-timeout", base: "main", body: "Fixes INC-114" })'],
       ['result','✓ committed a4f0c12 (1 file, +9/-1) · PR #482 opened against main\nchecks queued: lint, unit-tests'],
       ['stamped','✓ stamped · 237ms']
     ], ms:237},
@@ -346,7 +346,7 @@
       ['prompt','> write the postmortem — pull what changed, who reviewed it, and confirm it’s resolved'],
       ['why','Why: this needs GitHub and Cloudflare context stitched together. Doing it manually here would mean 4 more separate tool calls — instead, hand the whole investigation to Gemini in one call and let it run its own loop server-side. This delegation pattern is what the whole server is built around.'],
       ['call','→ delegate_gemini({ task: "Summarize the review on PR #482 and confirm INC-114 is resolved, using GitHub and Cloudflare", max_steps: 6 })'],
-      ['result','Gemini ran 4 steps server-side (list_commits, get_pr_reviews, cf_workers_observability_query, get_check_runs)\n→ "PR #482 approved by 2 reviewers, merged 09:52. p95 back to 310ms baseline, checks green."'],
+      ['result','Gemini ran 4 steps server-side (repo_inspect, pr_read, cf_workers_observability_query, ci_manage)\n→ "PR #482 approved by 2 reviewers, merged 09:52. p95 back to 310ms baseline, checks green."'],
       ['stamped','✓ stamped · 612ms · 4 sub-steps run by Gemini, 1 call from the agent — 3 manual round-trips saved']
     ], ms:612}
   ];
