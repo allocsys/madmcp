@@ -30,7 +30,15 @@
 import { z } from "zod";
 import { githubRequest, toBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
-import { readFileViaBlob, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
+import { readFileViaBlob, readFileWithSha, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
+
+// True only for a GitHub 404 (githubRequest throws "GitHub API error (404): ...").
+// Used where 404 legitimately means "path is free / new file" -- any other
+// failure (403 rate limit, 5xx, network) must surface instead of being
+// mistaken for a missing file.
+function isNotFound(e) {
+  return /\(404\)/.test(e?.message ?? "");
+}
 
 // Slicing logic behind read_file's optional char_offset/char_limit.
 // (Formerly shared with a separate read_file_chunked tool, removed once
@@ -173,12 +181,15 @@ export function register(server) {
     },
     async ({ owner = DEFAULT_OWNER, repo, path, content, message, branch }) => {
       const query = `?ref=${encodeURIComponent(branch)}`;
+      let exists = false;
       try {
         await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
-        throw new Error(`${path} already exists in ${owner}/${repo}${branch ? `@${branch}` : ""}. Use edit_file to replace or patch it.`);
+        exists = true;
       } catch (e) {
-        if (e.message?.includes("already exists")) throw e;
-        /* 404 means the path is free -- proceed */
+        if (!isNotFound(e)) throw e; // 404 means the path is free -- proceed
+      }
+      if (exists) {
+        throw new Error(`${path} already exists in ${owner}/${repo}${branch ? `@${branch}` : ""}. Use edit_file to replace or patch it.`);
       }
       const result = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
         method: "PUT",
@@ -212,7 +223,7 @@ export function register(server) {
       }
 
       if (replacements) {
-        const original = await readFileViaBlob(owner, repo, path, branch);
+        const { content: original, blobSha } = await readFileWithSha(owner, repo, path, branch);
         let updated = original;
 
         const errors = [];
@@ -220,7 +231,10 @@ export function register(server) {
           const count = updated.split(old_str).length - 1;
           if (count === 0) { errors.push(`⚠️ String not found: ${JSON.stringify(old_str)}`); continue; }
           if (count > 1)   { errors.push(`⚠️ String found ${count} times (must be unique): ${JSON.stringify(old_str)}`); continue; }
-          updated = updated.replace(old_str, new_str);
+          // Function replacer: a plain string replacement would treat dollar-sign
+          // sequences in new_str (double dollar, dollar-ampersand, etc.) as special
+          // patterns and corrupt the output.
+          updated = updated.replace(old_str, () => new_str);
         }
 
         if (errors.length) {
@@ -230,11 +244,11 @@ export function register(server) {
           return { content: [{ type: "text", text: "No changes — all replacements produced identical content." }] };
         }
 
-        const query    = `?ref=${encodeURIComponent(branch)}`;
-        const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
+        // PUT with the blob sha we actually read: if the file changed since, GitHub
+        // rejects with 409 instead of silently overwriting the newer commit.
         const result   = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
           method: "PUT",
-          body: { message, content: toBase64(updated), branch, sha: existing.sha },
+          body: { message, content: toBase64(updated), branch, sha: blobSha },
         });
 
         // The unified diff below is redundant for the calling model (it just wrote
@@ -287,7 +301,9 @@ export function register(server) {
         const query    = `?ref=${encodeURIComponent(branch)}`;
         const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
         sha = existing.sha;
-      } catch { /* new file */ }
+      } catch (e) {
+        if (!isNotFound(e)) throw e; // 404 = new file
+      }
       const result = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
         method: "PUT",
         body: { message, content: toBase64(content), branch, sha },
@@ -332,20 +348,23 @@ export function register(server) {
     },
     async ({ owner, repo, old_path, new_path, message, branch }) => {
       const commitMessage = message || `rename ${old_path} to ${new_path}`;
-      const content      = await readFileViaBlob(owner, repo, old_path, branch);
       const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
-      const newBlob = await githubRequest(`/repos/${owner}/${repo}/git/blobs`, {
-        method: "POST",
-        body: { content: toBase64(content), encoding: "base64" },
-      });
+      // Resolve the file from the SAME commit snapshot we build on, and reuse its
+      // existing blob sha + mode. No text round-trip, so binary files stay intact
+      // and exec bits / symlinks are preserved.
+      const baseTree = await githubRequest(`/repos/${owner}/${repo}/git/trees/${baseCommit.tree.sha}?recursive=1`);
+      const entry = baseTree.tree.find((item) => item.path === old_path && item.type === "blob");
+      if (!entry) {
+        throw new Error(`File not found in tree: ${old_path}${baseTree.truncated ? " (repository tree was truncated by GitHub; the file may exist beyond the limit)" : ""}`);
+      }
       const newTree = await githubRequest(`/repos/${owner}/${repo}/git/trees`, {
         method: "POST",
         body: {
           base_tree: baseCommit.tree.sha,
           tree: [
-            { path: new_path, mode: "100644", type: "blob", sha: newBlob.sha },
-            { path: old_path, mode: "100644", type: "blob", sha: null },
+            { path: new_path, mode: entry.mode, type: "blob", sha: entry.sha },
+            { path: old_path, mode: entry.mode, type: "blob", sha: null },
           ],
         },
       });

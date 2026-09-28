@@ -50,7 +50,7 @@
 // enforced server-side (GitHub kills the token outright), not merely
 // "please don't reuse this" guidance to the calling model. The tradeoff:
 // repeat clones of the same repo now always cost a fresh mint call (cheap;
-// contents:read, single repo) instead of reusing a cached one.
+// contents:write, single repo) instead of reusing a cached one.
 // ---------------------------------------------------------------------------
 
 import crypto from "node:crypto";
@@ -181,8 +181,8 @@ async function revokeInstallationToken(token) {
 // minted token (see ONE-TIME-USE note above; no server-side cache/reuse).
 // Schedules that token's revocation GITHUB_APP_TOKEN_REVOKE_GRACE_SECONDS
 // from now, so it stops working shortly after being handed off regardless
-// of GitHub's own ~1hr TTL. The timer is unref()'d so it never keeps the
-// process alive on its own.
+// of GitHub's own ~1hr TTL. The delay runs inside waitUntil (see below) so the platform keeps the
+// invocation alive until the revoke has run.
 export async function getCloneToken(owner, repo) {
   const minted = await mintInstallationToken(owner, repo);
 

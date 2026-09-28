@@ -179,6 +179,14 @@ describe("ci_manage", () => {
       expect(r.content[0].text).not.toContain("line 49\n");
     });
 
+    it("throws a clear error (with cause) for an invalid grep regex", async () => {
+      githubRequest.mockResolvedValueOnce("some log");
+      const err = await call({ action: "job_logs", repo: "r", job_id: 5, grep: "(unclosed" }).catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/^Invalid grep regex: /);
+      expect(err.cause).toBeInstanceOf(SyntaxError);
+    });
+
     it("honors custom grep and max_matches", async () => {
       githubRequest.mockResolvedValueOnce("a\nfoo 1\nb\nc\nd\ne\nf\nfoo 2\ng");
       const r = await call({ action: "job_logs", repo: "r", job_id: 5, grep: "FOO", max_matches: 1 });
@@ -192,12 +200,48 @@ describe("ci_manage", () => {
     it("dispatches then returns the run URL when GitHub lists it", async () => {
       githubRequest
         .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce({ workflow_runs: [run({ run_number: 7, html_url: "https://x/7" })] });
+        .mockResolvedValueOnce({ workflow_runs: [run({ run_number: 7, html_url: "https://x/7", created_at: new Date().toISOString() })] });
       const r = await call({ action: "trigger", repo: "r", workflow_id: "ci.yml", ref: "feat/x", inputs: { a: "1" } });
       expect(githubRequest.mock.calls[0][0]).toBe(`/repos/${DEFAULT_OWNER}/r/actions/workflows/ci.yml/dispatches`);
       expect(githubRequest.mock.calls[0][1]).toEqual({ method: "POST", body: { ref: "feat/x", inputs: { a: "1" } } });
       expect(githubRequest.mock.calls[1][0]).toContain("event=workflow_dispatch&branch=feat%2Fx&per_page=1");
       expect(r.content[0].text).toBe("Triggered workflow 'ci.yml' on feat/x. Run #7: https://x/7");
+    });
+
+    it("ignores a run created before the dispatch and keeps polling until the new one appears", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-28T12:00:00Z"));
+      const stale = run({ run_number: 6, html_url: "https://x/6", created_at: "2026-09-28T11:00:00Z" });
+      const fresh = run({ run_number: 7, html_url: "https://x/7", created_at: "2026-09-28T12:00:01Z" });
+      githubRequest
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({ workflow_runs: [stale] })
+        .mockResolvedValueOnce({ workflow_runs: [fresh] });
+      const p = call({ action: "trigger", repo: "r", workflow_id: "ci.yml", ref: "main" });
+      await vi.advanceTimersByTimeAsync(1500);
+      const r = await p;
+      expect(githubRequest).toHaveBeenCalledTimes(3);
+      expect(r.content[0].text).toBe("Triggered workflow 'ci.yml' on main. Run #7: https://x/7");
+    });
+
+    it("reports the run isn't listed when only a pre-dispatch run exists", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-28T12:00:00Z"));
+      githubRequest.mockResolvedValue({ workflow_runs: [run({ created_at: "2026-09-28T11:00:00Z" })] });
+      githubRequest.mockResolvedValueOnce(undefined);
+      const p = call({ action: "trigger", repo: "r", workflow_id: "ci.yml", ref: "main" });
+      await vi.advanceTimersByTimeAsync(1500 * 4);
+      const r = await p;
+      expect(r.content[0].text).toContain("hasn't listed the new run yet");
+    });
+
+    it("strips refs/heads/ from the branch filter but dispatches the ref as given", async () => {
+      githubRequest
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({ workflow_runs: [run({ created_at: new Date().toISOString() })] });
+      await call({ action: "trigger", repo: "r", workflow_id: "ci.yml", ref: "refs/heads/feat/x" });
+      expect(githubRequest.mock.calls[0][1].body.ref).toBe("refs/heads/feat/x");
+      expect(githubRequest.mock.calls[1][0]).toContain("branch=feat%2Fx&per_page=1");
     });
 
     it("retries the runs lookup up to 4 times, then reports the run isn't listed", async () => {
