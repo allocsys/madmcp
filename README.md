@@ -224,25 +224,27 @@ and final answer to a Notion page under a fixed Gemini root page
 (`log_to_notion`, default `false`).
 
 ### GitHub
-File/repo ops: `read_file` (accepts optional `char_offset`/`char_limit` to page through large files), `get_file_at_commit`, `list_directory`,
+File/repo ops: `read_file` (accepts optional `char_offset`/`char_limit` to page through large files), `list_directory`,
 `get_file_tree`, `create_repo_file`, `edit_file`, `overwrite_files`, `rename_file`,
-`delete_file`, `diff_files`
+`delete_file`
 
-Branches & commits: `list_branches`, `create_branch`, `list_commits`, `get_commit`, `list_contributors`
+Repo inspection: `repo_inspect` — one tool, selected by `action`: `at_commit` (file contents at a commit SHA), `diff`, `search` (code search; requires `ref` and a `repo:owner/name` qualifier in `query`), `branch_protection`, `list_branches`, `create_branch`, `list_commits`, `get_commit`. Only `create_branch` mutates. Consolidated from the former `get_file_at_commit`, `diff_files`, `search_code`, `get_branch_protection`, `list_branches`, `create_branch`, `list_commits`, and `get_commit` tools.
 
 Issues & PRs: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`,
 `get_pull_requests`, `create_pull_request`, `update_pull_request`, `get_pr_activity`,
 `review_pull_request`, `merge_pull_request`
 
-Releases & tags: `list_releases`, `create_release`, `list_tags`
+Releases & tags: `release_manage` (`action`: `list` | `create` | `list_tags`), replacing `list_releases`, `create_release`, `list_tags`
 
-Repo management: `list_repos`, `get_repo`, `create_repo`, `delete_repo`, `get_repo_topics`, `fork_repo`, `sync_fork`
+Repo metadata (read-only): `repo_metadata` (`action`: `list` | `get` | `contributors` | `topics`), replacing `list_repos`, `get_repo`, `list_contributors`, `get_repo_topics`
 
-Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`, `search_code`, `search_issues`
+Repo lifecycle (mutating): `repo_lifecycle` (`action`: `create` | `fork` | `sync_fork` | `delete` | `set_topics`), replacing `create_repo`, `fork_repo`, `sync_fork`, `delete_repo` and the topics write path. `delete` is permanent and requires `confirm: true`.
+
+Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`, `search_issues`
 
 CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`
 
-Review control: `request_reviewers`, `remove_requested_reviewers`, `get_pr_mergeability`, `add_review_comment`, `get_branch_protection`, `list_notifications`
+Review control: `request_reviewers`, `remove_requested_reviewers`, `get_pr_mergeability`, `add_review_comment`, `list_notifications`
 
 Codespaces: `list_codespaces`, `get_codespace`, `list_codespace_machines`, `create_codespace`, `start_codespace`, `stop_codespace`, `delete_codespace` (requires the `codespace` PAT scope on `GITHUB_TOKEN` — see [API_KEYS.md](./docs/API_KEYS.md)). **Runtime requirement:** `exec_in_codespace` requires the GitHub CLI (`gh`) to be installed and authenticated on the server running this MCP instance.
 
