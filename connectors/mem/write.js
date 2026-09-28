@@ -167,7 +167,30 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
         if (!items?.length) {
           return { content: [{ type: "text", text: "action 'add_batch' requires items (at least one)." }], isError: true };
         }
-        const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, relations, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
+        // Items run concurrently and Mem0's add is async, so two items in ONE
+        // batch can't see each other through findByEntityId or the Tier 2
+        // search (neither has landed yet) and would both pass dedup. Catch the
+        // deterministic cases up front: same scope + same entity_id, or (unless
+        // skip_duplicate_check) same scope + identical trimmed/case-folded
+        // content. First occurrence wins; later ones are skipped. Similar but
+        // non-identical items inside one batch are still not caught here.
+        const scopeKey = (it) => [it.user_id ?? MEM0_USER_ID, it.agent_id ?? "", it.run_id ?? ""].join("|");
+        const seenBatchKeys = new Map();
+        const inBatchDuplicateOf = items.map((it, idx) => {
+          const keys = [];
+          if (it.entity_id) keys.push(`e|${scopeKey(it)}|${it.entity_id}`);
+          if (!it.skip_duplicate_check) keys.push(`c|${scopeKey(it)}|${(it.content || "").trim().toLowerCase()}`);
+          let dupOf = null;
+          for (const k of keys) {
+            if (seenBatchKeys.has(k)) dupOf = dupOf ?? seenBatchKeys.get(k);
+            else seenBatchKeys.set(k, idx);
+          }
+          return dupOf;
+        });
+        const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, relations, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }, idx) => {
+          if (inBatchDuplicateOf[idx] !== null) {
+            return { skipped: true, inBatch: true, ofIndex: inBatchDuplicateOf[idx] };
+          }
           if (entity_id) {
             const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
             if (existing) {
@@ -202,13 +225,18 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
           if (run_id) body.run_id = run_id;
           if (Object.keys(meta).length) body.metadata = meta;
           const result = await mem0Request("/v3/memories/add/", { method: "POST", body });
-          const landed = await verifyLanded({ user_id, agent_id, run_id, entity_id, content });
-          return { ...result, duplicatesFlagged, relationWarnings, landed: !!landed, landedId: landed?.id };
+          // infer:true without an entity_id can't be matched verbatim -- see 'add'.
+          const verifiable = !(infer && !entity_id);
+          const landed = verifiable ? await verifyLanded({ user_id, agent_id, run_id, entity_id, content }) : null;
+          return { ...result, duplicatesFlagged, relationWarnings, landed: !!landed, landedId: landed?.id, unverifiable: !verifiable };
         }));
         const lines = results.map((r, i) => {
           const title = (items[i].content || "").split("\n")[0].slice(0, 60);
           if (r.status === "fulfilled") {
             if (r.value?.skipped) {
+              if (r.value.inBatch) {
+                return `⏭ [${i}] "${title}" — skipped, duplicate of item [${r.value.ofIndex}] in this same batch (same entity_id or identical content). Send one merged item instead.`;
+              }
               if (r.value.blocked) {
                 return `⛔ [${i}] "${title}" — blocked, near-identical (score ${r.value.existingScore.toFixed(2)}) to existing memory (id: ${r.value.existingId}). No duplicate created. Merge and call mem0_write (action 'update') yourself if this content adds anything new.`;
               }
@@ -217,7 +245,9 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
             const eventId = r.value.event_id || r.value.id || "ok";
             const dupNote = r.value.duplicatesFlagged?.length ? ` ⚠ flagged as possible duplicate of ${r.value.duplicatesFlagged.join(", ")}` : "";
             const relNote = r.value.relationWarnings?.length ? ` ⚠ relations: ${r.value.relationWarnings.join("; ")}` : "";
-            const landedNote = r.value.landed ? ` — confirmed landed (id: ${r.value.landedId})` : ` — ⚠ could not confirm this landed, check manually`;
+            const landedNote = r.value.unverifiable
+              ? ` — landing not verified (infer:true without entity_id can't be matched verbatim)`
+              : r.value.landed ? ` — confirmed landed (id: ${r.value.landedId})` : ` — ⚠ could not confirm this landed, check manually`;
             return `✓ [${i}] "${title}" — event_id: ${eventId}${dupNote}${relNote}${landedNote}`;
           }
           return `✗ [${i}] "${title}" — error: ${r.reason?.message || r.reason}`;
