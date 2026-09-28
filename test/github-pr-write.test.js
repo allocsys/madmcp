@@ -117,11 +117,11 @@ describe("pr_write", () => {
       expect(r.content[0].text).toContain("Updated PR #9 (title).");
     });
 
-    it("ready: false alone does not count as a field to change but still avoids the no-op message", async () => {
+    it("ready: false alone makes no requests and explains it is a no-op", async () => {
       const r = await server.tools.pr_write({ action: "update", owner: "o", repo: "r", pull_number: 9, ready: false });
       expect(githubRequest).not.toHaveBeenCalled();
       expect(githubGraphQL).not.toHaveBeenCalled();
-      expect(r.content[0].text).toBe("");
+      expect(r.content[0].text).toContain("ready: false is a no-op");
     });
 
     it("an empty-string body is still sent (replaces description)", async () => {
