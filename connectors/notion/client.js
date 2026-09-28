@@ -125,13 +125,21 @@ export function chunkRichText(text) {
   const chunks = [];
   let rest = text;
   while (rest.length > RICH_TEXT_MAX) {
-    // Prefer breaking at the last space within the limit so words aren't
-    // split mid-word; fall back to a hard cut if there's no space at all
-    // (e.g. a single unbroken token longer than the limit).
-    let cut = rest.lastIndexOf(" ", RICH_TEXT_MAX);
-    if (cut <= 0) cut = RICH_TEXT_MAX;
-    chunks.push(rest.slice(0, cut));
-    rest = rest.slice(cut).replace(/^ /, "");
+    // Prefer breaking right after the last space within the limit so words
+    // aren't split mid-word; fall back to a hard cut if there's no space at
+    // all (e.g. a single unbroken token longer than the limit). The space
+    // stays at the end of the chunk, so joining the chunks reproduces the
+    // input exactly (audit A4: the old version dropped it, gluing words
+    // together in the rendered paragraph).
+    let cut = rest.lastIndexOf(" ", RICH_TEXT_MAX - 1);
+    if (cut <= 0) {
+      cut = RICH_TEXT_MAX - 1;
+      // Don't split a surrogate pair (emoji etc.) across two chunks.
+      const code = rest.charCodeAt(cut);
+      if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+    }
+    chunks.push(rest.slice(0, cut + 1));
+    rest = rest.slice(cut + 1);
   }
   chunks.push(rest);
   return chunks.map((c) => ({ type: "text", text: { content: c } }));
@@ -303,17 +311,31 @@ export async function findPageByEntityId(entity_id) {
   const row = rows[0];
   const page_id = notionRichTextToString(row.properties?.PageId?.rich_text || []);
   if (!page_id) return null;
+  let page;
   try {
-    const page = await clientInternals.notionRequest(`/pages/${page_id}`);
-    const blocksData = await clientInternals.notionRequest(`/blocks/${page_id}/children?page_size=20`);
-    const markers = parseMarkers(blocksData.results || []);
-    return { pageId: page_id, title: notionPageTitle(page), url: page.url, markers };
-  } catch {
-    // Stale index row (target page deleted/archived outside these tools) --
-    // treat as not-found so a fresh page can be created, rather than
-    // erroring out on a dangling reference.
-    return null;
+    page = await clientInternals.notionRequest(`/pages/${page_id}`);
+  } catch (err) {
+    // Stale index row (target page deleted outside these tools) -- a 404 is
+    // treated as not-found so a fresh page can be created, rather than
+    // erroring out on a dangling reference. Anything else (429 exhausted,
+    // 5xx, network) is NOT evidence the page is gone: rethrow instead of
+    // letting the caller create a duplicate page (audit A3).
+    if (/\(404\)/.test(err.message)) return null;
+    throw new Error(`Could not read Notion page ${page_id} for entity_id "${entity_id}": ${err.message}`, { cause: err });
   }
+  const archived = page.archived === true || page.in_trash === true;
+  let blocksData;
+  try {
+    blocksData = await clientInternals.notionRequest(`/blocks/${page_id}/children?page_size=20`);
+  } catch (err) {
+    if (/\(404\)/.test(err.message)) return null;
+    // Archived pages may refuse block reads; the archived flag is enough
+    // for callers, so return empty markers rather than failing.
+    if (archived) blocksData = { results: [] };
+    else throw new Error(`Could not read blocks of Notion page ${page_id} for entity_id "${entity_id}": ${err.message}`, { cause: err });
+  }
+  const markers = parseMarkers(blocksData.results || []);
+  return { pageId: page_id, title: notionPageTitle(page), url: page.url, markers, archived };
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +359,9 @@ export async function queryAllIndexEntries() {
   const entries = [];
   let cursor;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const body = { page_size: PAGE_SIZE };
+    // Newest first, so if the MAX_PAGES cap ever truncates the result it is
+    // the oldest rows that get dropped, not an arbitrary subset (audit A6).
+    const body = { page_size: PAGE_SIZE, sorts: [{ timestamp: "created_time", direction: "descending" }] };
     if (cursor) body.start_cursor = cursor;
     const data = await clientInternals.notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
     for (const row of data.results || []) {

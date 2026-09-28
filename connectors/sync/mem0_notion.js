@@ -5,11 +5,15 @@
 
 import { z } from "zod";
 import { mem0Request } from "../mem/client.js";
-import { notionRequest, parseRelationBlocks, queryAllIndexEntries, findPageByEntityId } from "../notion/client.js";
+import { notionRequest, parseRelationBlocks, queryAllIndexEntries, findPageByEntityId, findSyncRange } from "../notion/client.js";
 import { doCreatePage, doUpdatePage, replaceSyncedRange } from "../notion/tools.js";
 import { MEM0_USER_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 
 const MEM0_ENTITY_PREFIX = "mem0:";
+
+// Notion rejects edits to an already-archived page with one of these
+// messages; for an archive request that's the desired end state, not a failure.
+const ALREADY_ARCHIVED_RE = /already archived|Can't edit block that is archived/i;
 
 function notionEntityIdFor(memory) {
   return `${MEM0_ENTITY_PREFIX}${memory.metadata?.entity_id || memory.id}`;
@@ -51,27 +55,41 @@ function relationsEqual(a = [], b = []) {
   return norm(a) === norm(b);
 }
 
-// Paginates the full set of memories in scope, same 100/page * up-to-10-page
-// ceiling as findByEntityId/mem0_list elsewhere in this codebase. Optional
-// entity_ids filters to specific mem0 entity_ids (not the mem0:-prefixed
-// Notion form) after fetching, same client-side-filter tradeoff mem0_list
-// already makes for tags/status.
+// Paginates the full set of memories in scope (100/page requested, up to 10
+// pages). Optional entity_ids filters to specific mem0 entity_ids (not the
+// mem0:-prefixed Notion form) after fetching, same client-side-filter
+// tradeoff mem0_list already makes for tags/status.
+//
+// Audit A1: reads until an EMPTY page (not "a page shorter than 100"), so a
+// server that clamps page_size below 100 can't make us stop after one page,
+// and de-dupes by id in case a server ignores `page` and repeats itself.
+// Returns { memories, truncated }: truncated is true when the page cap was
+// hit with results still coming, i.e. the list may be incomplete -- callers
+// must not treat an incomplete list as the full set (hard-deletion pass).
 async function listAllMemories({ user_id, entity_ids }) {
   const filters = { user_id };
   const PAGE_SIZE = 100;
   const MAX_PAGES = 10;
-  const all = [];
+  const byId = new Map();
+  let truncated = false;
   for (let page = 1; page <= MAX_PAGES; page++) {
     const data = await mem0Request("/v3/memories/", { method: "POST", body: { filters, page, page_size: PAGE_SIZE } });
-    const memories = data.results || data.memories || data || [];
-    all.push(...memories);
-    if (memories.length < PAGE_SIZE) break;
+    const batch = data?.results || data?.memories || data || [];
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    let added = 0;
+    for (const m of batch) {
+      const key = m.id ?? m.metadata?.entity_id ?? `${page}:${byId.size}`;
+      if (!byId.has(key)) { byId.set(key, m); added++; }
+    }
+    if (added === 0) break; // page repeated what we already have -- server ignores paging
+    if (page === MAX_PAGES) truncated = true;
   }
+  let memories = [...byId.values()];
   if (entity_ids?.length) {
     const wanted = new Set(entity_ids);
-    return all.filter((m) => m.metadata?.entity_id && wanted.has(m.metadata.entity_id));
+    memories = memories.filter((m) => m.metadata?.entity_id && wanted.has(m.metadata.entity_id));
   }
-  return all;
+  return { memories, truncated };
 }
 
 // Reads every mem0:-prefixed entry off the Entity Index database (see
@@ -102,9 +120,25 @@ async function syncOneMemory(memory, { dry_run }) {
   // on a page we're archiving in the same pass.
   if (status === "superseded") {
     if (!existing) return { entity_id: notionEntityId, action: "skip-superseded-no-page" };
+    // Audit A2: already archived (e.g. by a previous run) is the desired end
+    // state; re-archiving used to error on every subsequent sync.
+    if (existing.archived) return { entity_id: notionEntityId, action: "already-archived", pageUrl: existing.url };
     if (dry_run) return { entity_id: notionEntityId, action: "would-archive", pageUrl: existing.url };
-    await doUpdatePage({ page_id: existing.pageId, archived: true });
+    try {
+      await doUpdatePage({ page_id: existing.pageId, archived: true });
+    } catch (err) {
+      if (ALREADY_ARCHIVED_RE.test(err.message)) return { entity_id: notionEntityId, action: "already-archived", pageUrl: existing.url };
+      throw err;
+    }
     return { entity_id: notionEntityId, action: "archived", pageUrl: existing.url };
+  }
+
+  // Audit A2: a live (non-superseded) memory whose Notion page is archived
+  // (archived by hand, or by an earlier superseded/deleted pass). Writing to
+  // an archived page fails in Notion, so report and skip instead of erroring
+  // every run; a person can unarchive the page to resume syncing.
+  if (existing?.archived) {
+    return { entity_id: notionEntityId, action: "skip-page-archived", pageUrl: existing.url };
   }
 
   if (!existing) {
@@ -130,9 +164,15 @@ async function syncOneMemory(memory, { dry_run }) {
     const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
     const blocks = blocksData.results || [];
     const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
-    const statusChanged = (existing.markers.status || undefined) !== status;
+    // Audit A8: an unset mem0 status never changes the page (doUpdatePage
+    // with status: undefined is a no-op), so don't report it as a change.
+    const statusChanged = status !== undefined && (existing.markers.status || undefined) !== status;
     const relationsChanged = !relationsEqual(currentRelations, relations);
-    return { entity_id: notionEntityId, action: "would-update", pageUrl: existing.url, statusChanged, relationsChanged };
+    // Content is rewritten only when the synced_at stamp differs (same test
+    // replaceSyncedRange applies), so a dry run can say "unchanged" too.
+    const contentUnchanged = findSyncRange(blocks)?.synced_at === synced_at;
+    const action = contentUnchanged && !statusChanged && !relationsChanged ? "would-skip-unchanged" : "would-update";
+    return { entity_id: notionEntityId, action, pageUrl: existing.url, statusChanged, relationsChanged };
   }
 
   const range = await replaceSyncedRange({ page_id: existing.pageId, contentLines, synced_at });
@@ -140,7 +180,7 @@ async function syncOneMemory(memory, { dry_run }) {
   const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
   const blocks = blocksData.results || [];
   const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
-  const statusChanged = (existing.markers.status || undefined) !== status;
+  const statusChanged = status !== undefined && (existing.markers.status || undefined) !== status; // A8
   const relationsChanged = !relationsEqual(currentRelations, relations);
   if (statusChanged || relationsChanged) {
     await doUpdatePage({
@@ -161,7 +201,7 @@ export function register(server) {
       entity_ids: z.array(z.string()).optional().describe("Optional filter to sync only mem0 memories with one of these mem0 entity_ids (not the mem0:-prefixed Notion form), instead of the full workspace. NOTE: using this filter disables hard-deletion detection for this run, since a partial sync can't tell 'deleted from mem0' apart from 'not in this batch'."),
     },
     async ({ dry_run = false, entity_ids }) => {
-      const memories = await listAllMemories({ user_id: MEM0_USER_ID, entity_ids });
+      const { memories, truncated } = await listAllMemories({ user_id: MEM0_USER_ID, entity_ids });
       const results = [];
       // Sequential, not Promise.all -- every item's dedup check reads the
       // same shared index page, so concurrent items can race the same way
@@ -180,7 +220,15 @@ export function register(server) {
       if (!entity_ids?.length) {
         const currentEntityIds = new Set(memories.map((m) => notionEntityIdFor(m)));
         const indexEntries = await readSyncedIndexEntries();
-        const orphaned = indexEntries.filter((e) => !currentEntityIds.has(e.entity_id));
+        // Audit A1: the hard-deletion pass treats "not in this list" as
+        // "deleted from mem0", so it is only safe when the list is trustworthy.
+        // Skip it (with a visible warning) if the listing may be incomplete, or
+        // came back empty while synced pages exist (bad MEM0_USER_ID / outage).
+        let skipReason = null;
+        if (truncated) skipReason = "mem0 listing hit the page cap, so it may be incomplete";
+        else if (memories.length === 0 && indexEntries.length > 0) skipReason = "mem0 returned no memories although synced Notion pages exist (wrong MEM0_USER_ID or an outage?)";
+        const orphaned = skipReason ? [] : indexEntries.filter((e) => !currentEntityIds.has(e.entity_id));
+        if (skipReason) deletionLines.push(`  ⚠ hard-deletion pass skipped: ${skipReason}. Nothing was archived on that basis.`);
         for (const entry of orphaned) {
           if (dry_run) {
             deletionLines.push(`  would-archive (source deleted from mem0): ${entry.entity_id} — ${entry.url}`);
@@ -215,7 +263,8 @@ export function register(server) {
           : `  ${r.action} — ${r.entity_id}${r.pageUrl ? ` (${r.pageUrl})` : ""}${r.statusChanged ? " [status changed]" : ""}${r.relationsChanged ? " [relations changed]" : ""}`
       );
       const header = `${dry_run ? "[DRY RUN] " : ""}Synced ${memories.length} memor${memories.length === 1 ? "y" : "ies"}. ${summary || "nothing to do"}.`;
-      const deletionHeader = deletionLines.length ? `\n\nHard-deletion check:\n${deletionLines.join("\n")}` : (entity_ids?.length ? "\n\n(Hard-deletion check skipped — entity_ids filter was used.)" : "");
+      const truncationNote = truncated && entity_ids?.length ? "\n\n⚠ mem0 listing hit the page cap; some requested memories may not have been found." : "";
+      const deletionHeader = truncationNote + (deletionLines.length ? `\n\nHard-deletion check:\n${deletionLines.join("\n")}` : (entity_ids?.length ? "\n\n(Hard-deletion check skipped — entity_ids filter was used.)" : ""));
       return { content: [{ type: "text", text: `${header}\n\n${lines.join("\n")}${deletionHeader}` }] };
     }
   );

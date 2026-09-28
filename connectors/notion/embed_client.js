@@ -34,6 +34,12 @@
 
 import { REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET } from "../../config.js";
 
+// Audit A7: callers await this from doCreatePage/doUpdatePage, and a cold
+// (sleeping) Render worker can take far longer than a Notion write should
+// wait. On timeout the fetch aborts and lands in the catch below like any
+// other failure (logged, never thrown).
+const EMBED_TIMEOUT_MS = 15000;
+
 export async function triggerNotionEmbed({ page_id, content }) {
   if (!REPO_MAP_WORKER_URL || !REPO_MAP_SHARED_SECRET) return; // not configured -- silently skip, same as map.query's optional-connector posture
   try {
@@ -44,6 +50,7 @@ export async function triggerNotionEmbed({ page_id, content }) {
         "Authorization": `Bearer ${REPO_MAP_SHARED_SECRET}`,
       },
       body: JSON.stringify({ page_id, content }),
+      signal: globalThis.AbortSignal.timeout(EMBED_TIMEOUT_MS),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

@@ -71,10 +71,19 @@ function idKey(idStr) {
   return { repo, num: Number(num) };
 }
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
+}
+
+// Audit A5: was a bare substring match, so repo#24 matched a body that only
+// mentioned repo#244 (and myrepo#24 matched repo#24). Require that the repo
+// name isn't preceded by another identifier character (same class
+// extractIdentifiers uses) and that the number isn't followed by a digit.
 function bodyMentionsId(body, idStr) {
   const { repo, num } = idKey(idStr);
   const haystack = (body || "").toLowerCase();
-  return haystack.includes(`${repo}#${num}`) || haystack.includes(`${repo}-${num}`);
+  const re = new RegExp(`(?<![a-z0-9_.-])${escapeRegExp(repo)}[#-]0*${num}(?!\\d)`);
+  return re.test(haystack);
 }
 
 // Scores one candidate page against the new page being created.
@@ -135,6 +144,7 @@ export function scoreCandidate({ title, content, tags, createdAt }, candidate) {
 
 const MAX_CANDIDATES_TO_SCORE = 8;
 const MAX_TAG_CANDIDATES_TO_RESOLVE = 8;
+const MAX_TAG_RESOLVE_ATTEMPTS = 24;
 const TAG_OVERLAP_WINDOW_DAYS = 7;
 
 // ---------------------------------------------------------------------------
@@ -190,8 +200,16 @@ export async function findTagOverlapCandidates({ tags, createdAt }) {
   }
   if (!overlapping.length) return [];
 
+  // Audit A6: the old code sliced to the first 8 overlapping entries BEFORE
+  // applying the 7-day window, so 8 stale matches could hide a fresh one.
+  // Keep resolving (bounded by MAX_TAG_RESOLVE_ATTEMPTS page reads) until 8
+  // candidates have actually passed the window. queryAllIndexEntries returns
+  // newest first, so the freshest entries are tried first.
   const candidates = [];
-  for (const { entry, shared } of overlapping.slice(0, MAX_TAG_CANDIDATES_TO_RESOLVE)) {
+  let attempts = 0;
+  for (const { entry, shared } of overlapping) {
+    if (candidates.length >= MAX_TAG_CANDIDATES_TO_RESOLVE || attempts >= MAX_TAG_RESOLVE_ATTEMPTS) break;
+    attempts++;
     let page;
     try {
       page = await notionRequest(`/pages/${entry.page_id}`);
