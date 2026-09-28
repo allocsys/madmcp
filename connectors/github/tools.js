@@ -7,7 +7,7 @@
 import { register as registerFiles     } from "./files.js";
 import { register as registerRepoInspect } from "./repo_inspect.js";
 import { register as registerPRRead     } from "./pr_read.js";
-import { register as registerPRs       } from "./prs.js";
+import { register as registerPRWrite    } from "./pr_write.js";
 import { register as registerIssues    } from "./issues.js";
 import { register as registerReleases  } from "./releases.js";
 import { register as registerRepo      } from "./repo.js";
@@ -24,7 +24,7 @@ export function register(server) {
   registerFiles(server);
   registerRepoInspect(server);
   registerPRRead(server);
-  registerPRs(server);
+  registerPRWrite(server);
   registerIssues(server);
   registerReleases(server);
   registerRepo(server);
