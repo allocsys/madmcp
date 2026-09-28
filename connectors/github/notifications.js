@@ -16,16 +16,23 @@ export function register(server) {
     {
       all:           z.boolean().optional().describe("If true, include notifications already marked as read (default: false — unread only)"),
       participating: z.boolean().optional().describe("If true, only show notifications where the token owner is directly @mentioned or involved (not just watching) (default: false)"),
-      owner:         z.string().optional().describe("Restrict to a single repository owner. Omit for all repos the token can see."),
+      owner:         z.string().optional().describe("Restrict to a single repository owner. With repo: scopes the request to owner/repo. Without repo: filters the fetched page (per_page) client-side by owner. Omit for all repos the token can see."),
       repo:          z.string().optional().describe("Restrict to a single repository (requires owner). Omit for all repos."),
       per_page:      z.number().optional().describe("Number of notifications to return, max 100 (default: 30)"),
     },
     async ({ all = false, participating = false, owner, repo, per_page = 30 }) => {
+      if (repo && !owner) {
+        return { content: [{ type: "text", text: "repo requires owner (owner/repo scope)." }], isError: true };
+      }
       const query = new URLSearchParams({ all: String(all), participating: String(participating), per_page: String(per_page) });
       const endpoint = owner && repo
         ? `/repos/${owner}/${repo}/notifications?${query}`
         : `/notifications?${query}`;
-      const data = await githubRequest(endpoint);
+      let data = await githubRequest(endpoint);
+      if (owner && !repo) {
+        const want = owner.toLowerCase();
+        data = data.filter((n) => String(n.repository?.owner?.login).toLowerCase() === want);
+      }
       if (!data.length) return { content: [{ type: "text", text: all ? "No notifications." : "No unread notifications." }] };
       const icon = (reason) => ({
         mention: "💬", review_requested: "👀", assign: "📌", author: "✍️",
