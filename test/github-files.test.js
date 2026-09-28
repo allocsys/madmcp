@@ -14,9 +14,19 @@
 // mutual exclusivity, and the unified-diff builder used by the
 // `replacements` mode are covered here.
 //
-// githubRequest/toBase64/readFileViaBlob are mocked -- this is a handler
-// unit test, not a live-network test (see mcp-integration.test.js /
-// server-e2e.test.js for tests that go through the real MCP/HTTP stack).
+// Regression coverage for the files.js audit fixes is also here:
+//   - edit_file replacements: dollar-sign patterns in new_str are literal
+//   - edit_file replacements: PUT carries the blob sha that was READ (a
+//     concurrent commit surfaces as an error instead of being overwritten)
+//   - rename_file: reuses the existing blob sha + mode (no text round-trip,
+//     so binary files and exec bits survive; no blob POST)
+//   - edit_file (full overwrite) / create_repo_file: only a 404 means
+//     "path is free"; any other error is rethrown
+//
+// githubRequest/toBase64/readFileWithSha/readFileViaBlob are mocked -- this
+// is a handler unit test, not a live-network test (see
+// mcp-integration.test.js / server-e2e.test.js for tests that go through the
+// real MCP/HTTP stack).
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -28,12 +38,13 @@ vi.mock("../connectors/github/client.js", () => ({
 
 vi.mock("../connectors/github/helpers.js", () => ({
   readFileViaBlob: vi.fn(),
+  readFileWithSha: vi.fn(),
   CHUNK_SIZE: 20000,
   CHUNK_THRESHOLD: 100000,
 }));
 
 import { githubRequest } from "../connectors/github/client.js";
-import { readFileViaBlob } from "../connectors/github/helpers.js";
+import { readFileWithSha } from "../connectors/github/helpers.js";
 import { register } from "../connectors/github/files.js";
 
 // Minimal fake MCP server: just captures the handler function for each
@@ -48,11 +59,25 @@ function makeFakeServer() {
   };
 }
 
+// Queues the six githubRequest responses rename_file makes, in order:
+// ref, base commit, base tree (recursive), new tree, new commit, ref update.
+function mockRenameRequests({ tree, truncated = false } = {}) {
+  githubRequest
+    .mockResolvedValueOnce({ object: { sha: "ref-sha" } })                        // ref lookup
+    .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })                    // base commit
+    .mockResolvedValueOnce({ tree: tree ?? [], truncated })                       // base tree (recursive)
+    .mockResolvedValueOnce({ sha: "new-tree-sha" })                               // new tree
+    .mockResolvedValueOnce({ sha: "new-commit-sha1234" })                         // new commit
+    .mockResolvedValueOnce({});                                                   // ref update
+}
+
 describe("connectors/github/files.js", () => {
   let server;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // mockReset (not just clear): drops any unconsumed mockResolvedValueOnce
+    // queue so one failing test can't cascade into the tests after it.
+    vi.resetAllMocks();
     server = makeFakeServer();
     register(server);
   });
@@ -87,7 +112,7 @@ describe("connectors/github/files.js", () => {
 
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "new.txt",
-        content: "hello world", message: "create new.txt",
+        content: "hello world", message: "create new.txt", branch: "main",
       });
 
       expect(result.content[0].text).toMatch(/^Created new\.txt/);
@@ -103,21 +128,33 @@ describe("connectors/github/files.js", () => {
 
       const result = await server.tools.edit_file({
         owner: "allocsys", repo: "madmcp", path: "existing.txt",
-        content: "new content", message: "overwrite existing.txt",
+        content: "new content", message: "overwrite existing.txt", branch: "main",
       });
 
       expect(result.content[0].text).toMatch(/^Overwrote existing\.txt/);
       const putCall = githubRequest.mock.calls[1];
       expect(putCall[1].body.sha).toBe("existing-sha");
     });
+
+    it("rethrows a non-404 error from the existence check instead of treating the file as new", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (403): rate limit exceeded"));
+
+      await expect(server.tools.edit_file({
+        owner: "allocsys", repo: "madmcp", path: "existing.txt",
+        content: "new content", message: "m", branch: "main",
+      })).rejects.toThrow(/403/);
+
+      // Existence check only -- no PUT was attempted.
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("edit_file — replacements (targeted str_replace) mode", () => {
     it("aborts the whole call if an old_str string is not found, without committing", async () => {
-      readFileViaBlob.mockResolvedValue("line one\nline two\n");
+      readFileWithSha.mockResolvedValue({ content: "line one\nline two\n", blobSha: "blob-1" });
 
       const result = await server.tools.edit_file({
-        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m", branch: "main",
         replacements: [{ old_str: "does not exist", new_str: "x" }],
       });
 
@@ -127,10 +164,10 @@ describe("connectors/github/files.js", () => {
     });
 
     it("aborts the whole call if an old_str string appears more than once, without committing", async () => {
-      readFileViaBlob.mockResolvedValue("dup\ndup\n");
+      readFileWithSha.mockResolvedValue({ content: "dup\ndup\n", blobSha: "blob-1" });
 
       const result = await server.tools.edit_file({
-        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m", branch: "main",
         replacements: [{ old_str: "dup", new_str: "x" }],
       });
 
@@ -140,10 +177,10 @@ describe("connectors/github/files.js", () => {
     });
 
     it("reports no changes when all replacements are no-ops, without committing", async () => {
-      readFileViaBlob.mockResolvedValue("same\n");
+      readFileWithSha.mockResolvedValue({ content: "same\n", blobSha: "blob-1" });
 
       const result = await server.tools.edit_file({
-        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m",
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m", branch: "main",
         replacements: [{ old_str: "same", new_str: "same" }],
       });
 
@@ -152,13 +189,11 @@ describe("connectors/github/files.js", () => {
     });
 
     it("commits a valid unique replacement and returns a short confirmation (no diff by default)", async () => {
-      readFileViaBlob.mockResolvedValue("alpha\nbeta\ngamma\n");
-      githubRequest
-        .mockResolvedValueOnce({ sha: "existing-sha" })            // existence check before PUT
-        .mockResolvedValueOnce({ commit: { sha: "aaa1111111" } }); // PUT
+      readFileWithSha.mockResolvedValue({ content: "alpha\nbeta\ngamma\n", blobSha: "blob-read-sha" });
+      githubRequest.mockResolvedValueOnce({ commit: { sha: "aaa1111111" } }); // PUT
 
       const result = await server.tools.edit_file({
-        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap beta",
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap beta", branch: "main",
         replacements: [{ old_str: "beta", new_str: "BETA" }],
       });
 
@@ -167,22 +202,25 @@ describe("connectors/github/files.js", () => {
       expect(result.content[0].text).not.toMatch(/\+BETA/);
       expect(result.content[0].text).not.toMatch(/--- a\.txt/);
 
-      const putCall = githubRequest.mock.calls[1];
+      expect(readFileWithSha).toHaveBeenCalledWith("allocsys", "madmcp", "a.txt", "main");
+      // The PUT is the only githubRequest -- the read went through readFileWithSha.
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+      const putCall = githubRequest.mock.calls[0];
+      expect(putCall[1].method).toBe("PUT");
       const committedContent = Buffer.from(putCall[1].body.content, "base64").toString("utf-8");
       expect(committedContent).toBe("alpha\nBETA\ngamma\n");
-      expect(putCall[1].body.sha).toBe("existing-sha");
+      expect(putCall[1].body.sha).toBe("blob-read-sha");
+      expect(putCall[1].body.branch).toBe("main");
     });
 
     it("still builds and returns the unified diff when EDIT_FILE_INCLUDE_DIFF=true", async () => {
       vi.stubEnv("EDIT_FILE_INCLUDE_DIFF", "true");
       try {
-        readFileViaBlob.mockResolvedValue("alpha\nbeta\ngamma\n");
-        githubRequest
-          .mockResolvedValueOnce({ sha: "existing-sha" })
-          .mockResolvedValueOnce({ commit: { sha: "aaa1111111" } });
+        readFileWithSha.mockResolvedValue({ content: "alpha\nbeta\ngamma\n", blobSha: "blob-1" });
+        githubRequest.mockResolvedValueOnce({ commit: { sha: "aaa1111111" } });
 
         const result = await server.tools.edit_file({
-          owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap beta",
+          owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap beta", branch: "main",
           replacements: [{ old_str: "beta", new_str: "BETA" }],
         });
 
@@ -195,13 +233,11 @@ describe("connectors/github/files.js", () => {
     });
 
     it("applies multiple replacements sequentially in one commit", async () => {
-      readFileViaBlob.mockResolvedValue("one\ntwo\nthree\n");
-      githubRequest
-        .mockResolvedValueOnce({ sha: "existing-sha" })
-        .mockResolvedValueOnce({ commit: { sha: "bbb2222222" } });
+      readFileWithSha.mockResolvedValue({ content: "one\ntwo\nthree\n", blobSha: "blob-1" });
+      githubRequest.mockResolvedValueOnce({ commit: { sha: "bbb2222222" } });
 
       const result = await server.tools.edit_file({
-        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap two",
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "swap two", branch: "main",
         replacements: [
           { old_str: "one", new_str: "ONE" },
           { old_str: "three", new_str: "THREE" },
@@ -209,9 +245,38 @@ describe("connectors/github/files.js", () => {
       });
 
       expect(result.content[0].text).toMatch(/Committed 2 replacement/);
-      const putCall = githubRequest.mock.calls[1];
+      const putCall = githubRequest.mock.calls[0];
       const committedContent = Buffer.from(putCall[1].body.content, "base64").toString("utf-8");
       expect(committedContent).toBe("ONE\ntwo\nTHREE\n");
+    });
+
+    it("treats dollar-sign patterns in new_str literally (no $& / $$ / $` / $' expansion)", async () => {
+      readFileWithSha.mockResolvedValue({ content: "price: X\n", blobSha: "blob-1" });
+      githubRequest.mockResolvedValueOnce({ commit: { sha: "ddd4444444" } });
+
+      const newStr = "$& $$ $` $' $1";
+      await server.tools.edit_file({
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m", branch: "main",
+        replacements: [{ old_str: "X", new_str: newStr }],
+      });
+
+      const putCall = githubRequest.mock.calls[0];
+      const committedContent = Buffer.from(putCall[1].body.content, "base64").toString("utf-8");
+      expect(committedContent).toBe(`price: ${newStr}\n`);
+    });
+
+    it("propagates a 409 from the PUT when the file changed since it was read (no silent overwrite)", async () => {
+      readFileWithSha.mockResolvedValue({ content: "alpha\nbeta\n", blobSha: "stale-blob-sha" });
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (409): sha does not match"));
+
+      await expect(server.tools.edit_file({
+        owner: "allocsys", repo: "madmcp", path: "a.txt", message: "m", branch: "main",
+        replacements: [{ old_str: "beta", new_str: "BETA" }],
+      })).rejects.toThrow(/409/);
+
+      // Exactly one PUT, carrying the sha from the read -- no re-fetch of a fresher sha.
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+      expect(githubRequest.mock.calls[0][1].body.sha).toBe("stale-blob-sha");
     });
   });
 
@@ -254,7 +319,7 @@ describe("connectors/github/files.js", () => {
 
       await expect(server.tools.create_repo_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt",
-        content: "x", message: "m",
+        content: "x", message: "m", branch: "main",
       })).rejects.toThrow(/already exists/i);
 
       // Only the existence check should have run -- no PUT.
@@ -268,10 +333,22 @@ describe("connectors/github/files.js", () => {
 
       const result = await server.tools.create_repo_file({
         owner: "allocsys", repo: "madmcp", path: "a.txt",
-        content: "x", message: "m",
+        content: "x", message: "m", branch: "main",
       });
 
       expect(result.content[0].text).toMatch(/^Created a\.txt/);
+    });
+
+    it("rethrows a non-404 error from the existence check instead of assuming the path is free", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("GitHub API error (500): Server Error"));
+
+      await expect(server.tools.create_repo_file({
+        owner: "allocsys", repo: "madmcp", path: "a.txt",
+        content: "x", message: "m", branch: "main",
+      })).rejects.toThrow(/500/);
+
+      // Existence check only -- no PUT was attempted.
+      expect(githubRequest).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -282,7 +359,7 @@ describe("connectors/github/files.js", () => {
         .mockResolvedValueOnce({});                   // DELETE
 
       const result = await server.tools.delete_file({
-        owner: "allocsys", repo: "madmcp", path: "gone.txt", message: "remove gone.txt",
+        owner: "allocsys", repo: "madmcp", path: "gone.txt", message: "remove gone.txt", branch: "main",
       });
 
       expect(result.content[0].text).toMatch(/^Deleted gone\.txt/);
@@ -311,7 +388,7 @@ describe("connectors/github/files.js", () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
       await expect(server.tools.delete_file({
-        owner: "allocsys", repo: "madmcp", path: "missing.txt", message: "m",
+        owner: "allocsys", repo: "madmcp", path: "missing.txt", message: "m", branch: "main",
       })).rejects.toThrow(/404/);
 
       expect(githubRequest).toHaveBeenCalledTimes(1);
@@ -321,16 +398,18 @@ describe("connectors/github/files.js", () => {
   // NOTE: `branch` is now required (files.js) -- the handler no longer
   // falls back to a repo-info fetch + repoData.default_branch when it's
   // omitted, so every call below passes `branch` explicitly.
+  //
+  // rename_file resolves the file from the base commit's recursive tree and
+  // reuses its existing blob sha + mode: no blob download/upload, so there
+  // is NO /git/blobs request at all (binary-safe, exec-bit/symlink-safe).
   describe("rename_file", () => {
-    it("moves a file via blob+tree+commit, adding the new path and removing the old one", async () => {
-      readFileViaBlob.mockResolvedValue("moved content\n");
-      githubRequest
-        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })       // ref lookup
-        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })   // base commit
-        .mockResolvedValueOnce({ sha: "new-blob-sha" })              // new blob
-        .mockResolvedValueOnce({ sha: "new-tree-sha" })              // new tree
-        .mockResolvedValueOnce({ sha: "new-commit-sha1234" })        // new commit
-        .mockResolvedValueOnce({});                                  // ref update
+    it("moves a file by reusing its blob sha and mode, adding the new path and removing the old one", async () => {
+      mockRenameRequests({
+        tree: [
+          { path: "other.txt", mode: "100644", type: "blob", sha: "other-sha" },
+          { path: "old/name.txt", mode: "100644", type: "blob", sha: "orig-blob-sha" },
+        ],
+      });
 
       const result = await server.tools.rename_file({
         owner: "allocsys", repo: "madmcp", old_path: "old/name.txt", new_path: "new/name.txt", branch: "main",
@@ -338,29 +417,42 @@ describe("connectors/github/files.js", () => {
 
       expect(result.content[0].text).toMatch(/^Renamed old\/name\.txt → new\/name\.txt/);
 
-      const treeCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/trees"));
+      const treeCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/trees") && c[1]?.method === "POST");
       expect(treeCall[1].body.base_tree).toBe("base-tree-sha");
       expect(treeCall[1].body.tree).toEqual([
-        { path: "new/name.txt", mode: "100644", type: "blob", sha: "new-blob-sha" },
+        { path: "new/name.txt", mode: "100644", type: "blob", sha: "orig-blob-sha" },
         { path: "old/name.txt", mode: "100644", type: "blob", sha: null },
       ]);
 
+      // No blob is downloaded or created -- the existing one is reused.
+      expect(githubRequest.mock.calls.some((c) => c[0].includes("/git/blobs"))).toBe(false);
+
       const commitCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/commits") && c[1]?.method === "POST");
       expect(commitCall[1].body.message).toBe("rename old/name.txt to new/name.txt");
+      expect(commitCall[1].body.parents).toEqual(["ref-sha"]);
 
       const refUpdateCall = githubRequest.mock.calls.find((c) => c[1]?.method === "PATCH");
       expect(refUpdateCall[1].body.sha).toBe("new-commit-sha1234");
     });
 
+    it("preserves the file mode (e.g. executable bit) on both tree entries", async () => {
+      mockRenameRequests({
+        tree: [{ path: "bin/run.sh", mode: "100755", type: "blob", sha: "exec-blob-sha" }],
+      });
+
+      await server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "bin/run.sh", new_path: "scripts/run.sh", branch: "main",
+      });
+
+      const treeCall = githubRequest.mock.calls.find((c) => c[0].endsWith("/git/trees") && c[1]?.method === "POST");
+      expect(treeCall[1].body.tree).toEqual([
+        { path: "scripts/run.sh", mode: "100755", type: "blob", sha: "exec-blob-sha" },
+        { path: "bin/run.sh", mode: "100755", type: "blob", sha: null },
+      ]);
+    });
+
     it("uses a custom commit message when provided", async () => {
-      readFileViaBlob.mockResolvedValue("content\n");
-      githubRequest
-        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
-        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
-        .mockResolvedValueOnce({ sha: "blob-sha" })
-        .mockResolvedValueOnce({ sha: "tree-sha" })
-        .mockResolvedValueOnce({ sha: "commit-sha" })
-        .mockResolvedValueOnce({});
+      mockRenameRequests({ tree: [{ path: "a.txt", mode: "100644", type: "blob", sha: "blob-sha" }] });
 
       await server.tools.rename_file({
         owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", message: "tidy up naming", branch: "main",
@@ -371,24 +463,41 @@ describe("connectors/github/files.js", () => {
     });
 
     it("targets the given branch instead of the repo default", async () => {
-      readFileViaBlob.mockResolvedValue("content\n");
-      githubRequest
-        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
-        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
-        .mockResolvedValueOnce({ sha: "blob-sha" })
-        .mockResolvedValueOnce({ sha: "tree-sha" })
-        .mockResolvedValueOnce({ sha: "commit-sha" })
-        .mockResolvedValueOnce({});
+      mockRenameRequests({ tree: [{ path: "a.txt", mode: "100644", type: "blob", sha: "blob-sha" }] });
 
       await server.tools.rename_file({
         owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", branch: "feature-y",
       });
 
-      expect(readFileViaBlob).toHaveBeenCalledWith("allocsys", "madmcp", "a.txt", "feature-y");
       const refLookupCall = githubRequest.mock.calls.find((c) => c[0].includes("/git/ref/heads/"));
       expect(refLookupCall[0]).toContain("feature-y");
       const refUpdateCall = githubRequest.mock.calls.find((c) => c[1]?.method === "PATCH");
       expect(refUpdateCall[0]).toContain("feature-y");
+    });
+
+    it("throws when the file is not in the tree, without creating a tree or commit", async () => {
+      githubRequest
+        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
+        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
+        .mockResolvedValueOnce({ tree: [{ path: "other.txt", mode: "100644", type: "blob", sha: "x" }], truncated: false });
+
+      await expect(server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "missing.txt", new_path: "b.txt", branch: "main",
+      })).rejects.toThrow(/File not found in tree: missing\.txt/);
+
+      // ref + base commit + base tree only.
+      expect(githubRequest).toHaveBeenCalledTimes(3);
+    });
+
+    it("mentions tree truncation in the not-found error when GitHub truncated the tree", async () => {
+      githubRequest
+        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
+        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
+        .mockResolvedValueOnce({ tree: [], truncated: true });
+
+      await expect(server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "deep/file.txt", new_path: "b.txt", branch: "main",
+      })).rejects.toThrow(/truncated/i);
     });
   });
 });
