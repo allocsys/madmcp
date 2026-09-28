@@ -8,7 +8,7 @@
 // within a single tool call. A Jules session is asynchronous and can WRITE
 // arbitrary code across a whole repo over several minutes in its own
 // sandboxed VM, independent of this server's request lifecycle — you create
-// it, then check back with jules_get_session / jules_get_activities.
+// it, then check back with jules_inspect.
 //
 // jules_send_message adds a supervised escape hatch: nudge a still-running
 // session with extra instructions or a question. It only works on a LIVE
@@ -40,10 +40,29 @@ export function register(server) {
   );
 
   server.tool(
+    "jules_inspect",
+    "DOES: Read one Jules session by resource name. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'session' returns full details of the session — state, the original prompt, session URL, and (once available) outputs such as the created pull request's URL. Checking whether a specific fire-and-forget session has finished -> this, rather than jules_find action 'sessions', once you have its name.\n" +
+    "RULE: action 'activities' lists the activity timeline for the session — plan generation, progress updates, messages, completion, and (with full detail) failures — in chronological order. Failed activities include the failure reason; activities with artifacts include code diffs (git patch) and bash command output Jules produced. Want to see WHAT Jules actually did, why a session failed, or its resulting diff/output -> this, in addition to action 'session'.\n" +
+    "RULE: page_size and page_token (pagination) apply to action 'activities' only.",
+    {
+      action: z.enum(["session", "activities"]).describe("What to read: 'session' (details of one session) or 'activities' (its activity timeline)"),
+      session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567' (returned by jules_create_session or jules_find action 'sessions')"),
+      page_size: z.number().optional().describe("Max activities to return per page (default: server default). Used by 'activities' only."),
+      page_token: z.string().optional().describe("Pagination token from a previous call's response. Used by 'activities' only."),
+    },
+    async ({ action, session, page_size, page_token }) => {
+      const name = sessionName(session);
+      if (action === "session") return getSession(name);
+      return getActivities(name, { page_size, page_token });
+    }
+  );
+
+  server.tool(
     "jules_create_session",
     "DOES: Create a Jules session — hand off a coding task (prompt) against a connected repo to run autonomously in Jules's own sandboxed VM. Fire-and-forget by default: automation_mode defaults to AUTO_CREATE_PR and plans auto-approve, so the session runs unattended and opens a PR when done, with no approval step required from this tool.\n" +
     "RULE: need the source resource name first -> jules_find (action 'sources'), UNLESS you already know it (format: 'sources/github-owner-repo').\n" +
-    "RULE: this only STARTS the session — it does not wait for completion. Poll jules_get_session or jules_get_activities afterward to check progress and retrieve the resulting PR URL.",
+    "RULE: this only STARTS the session — it does not wait for completion. Poll jules_inspect (action 'session' or 'activities') afterward to check progress and retrieve the resulting PR URL.",
     {
       source: z.string().describe("Resource name of the source repo, e.g. 'sources/github-owner-repo' (from jules_find action 'sources')"),
       prompt: z.string().describe("The coding task for Jules to execute, described with enough detail to act on without further clarification (Jules cannot ask follow-up questions mid-session unless you send one via a later message)"),
@@ -58,7 +77,7 @@ export function register(server) {
       // optional, every real request sample (quickstart, sources, sessions pages)
       // always includes it. Always send it; when no starting_branch is given, send
       // an empty object so Jules falls back to the repo's own default branch rather
-      // than us needing to look that branch up ourselves via jules_list_sources.
+      // than us needing to look that branch up ourselves via jules_find.
       const body = {
         prompt,
         sourceContext: {
@@ -76,28 +95,7 @@ export function register(server) {
         session.title ? `Title: ${session.title}` : null,
         `State: ${session.state}`,
         session.url ? `View in Jules: ${session.url}` : null,
-        `Check back with jules_get_session (session: "${session.name}") or jules_get_activities to track progress.`,
-      ].filter(Boolean);
-      return { content: [{ type: "text", text: lines.join("\n") }] };
-    }
-  );
-
-  server.tool(
-    "jules_get_session",
-    "DOES: Get full details of one Jules session by resource name — state, the original prompt, session URL, and (once available) outputs such as the created pull request's URL.\n" +
-    "RULE: checking whether a specific fire-and-forget session has finished -> this, rather than jules_find action 'sessions', once you have its name.",
-    {
-      session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567' (returned by jules_create_session or jules_find action 'sessions')"),
-    },
-    async ({ session }) => {
-      const name = session.startsWith("sessions/") ? session : `sessions/${session}`;
-      const data = await julesRequest(`/${name}`);
-      const prs = (data.outputs || []).map((o) => o.pullRequest?.url).filter(Boolean);
-      const lines = [
-        `${data.name} — "${data.title || data.prompt}"`,
-        `State: ${data.state}`,
-        data.url ? `View in Jules: ${data.url}` : null,
-        prs.length ? `Pull request(s): ${prs.join(", ")}` : null,
+        `Check back with jules_inspect (action: "session", session: "${session.name}") or action "activities" to track progress.`,
       ].filter(Boolean);
       return { content: [{ type: "text", text: lines.join("\n") }] };
     }
@@ -106,40 +104,46 @@ export function register(server) {
   server.tool(
     "jules_send_message",
     "DOES: Send a message from the user into an active Jules session (extra instructions, an answer to a question Jules asked, or a course correction), via POST /sessions/{id}:sendMessage.\n" +
-    "RULE: only works while the session is still live (state RUNNING, AWAITING_PLAN_APPROVAL, or AWAITING_USER_FEEDBACK) -- once a session is COMPLETED or FAILED its sandbox is gone and there is no way to message it further; check jules_get_session first if you're unsure of the current state.\n" +
-    "RULE: this only sends the message -- it does not wait for a reply. Poll jules_get_activities afterward (look for a new agentMessaged entry) to see Jules's response.",
+    "RULE: only works while the session is still live (state RUNNING, AWAITING_PLAN_APPROVAL, or AWAITING_USER_FEEDBACK) -- once a session is COMPLETED or FAILED its sandbox is gone and there is no way to message it further; check jules_inspect (action 'session') first if you're unsure of the current state.\n" +
+    "RULE: this only sends the message -- it does not wait for a reply. Poll jules_inspect (action 'activities') afterward (look for a new agentMessaged entry) to see Jules's response.",
     {
       session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567'"),
       message: z.string().describe("The message to send to the session -- instructions, an answer, or feedback"),
     },
     async ({ session, message }) => {
-      const name = session.startsWith("sessions/") ? session : `sessions/${session}`;
+      const name = sessionName(session);
       await julesRequest(`/${name}:sendMessage`, { method: "POST", body: { prompt: message } });
-      return { content: [{ type: "text", text: `Message sent to ${name}. Check jules_get_activities shortly for Jules's response.` }] };
+      return { content: [{ type: "text", text: `Message sent to ${name}. Check jules_inspect (action: "activities") shortly for Jules's response.` }] };
     }
   );
+}
 
-  server.tool(
-    "jules_get_activities",
-    "DOES: List the activity timeline for a Jules session — plan generation, progress updates, messages, completion, and (with full detail) failures — in chronological order. Failed activities include the failure reason; activities with artifacts include code diffs (git patch) and bash command output Jules produced.\n" +
-    "RULE: want to see WHAT Jules actually did, why a session failed, or its resulting diff/output -> this, in addition to jules_get_session.",
-    {
-      session: z.string().describe("Resource name of the session, e.g. 'sessions/1234567'"),
-      page_size: z.number().optional().describe("Max activities to return per page (default: server default)"),
-      page_token: z.string().optional().describe("Pagination token from a previous call's response"),
-    },
-    async ({ session, page_size, page_token }) => {
-      const name = session.startsWith("sessions/") ? session : `sessions/${session}`;
-      const data = await julesRequest(`/${name}/activities`, { params: { pageSize: page_size, pageToken: page_token } });
-      const activities = data?.activities || [];
-      if (!activities.length) {
-        return { content: [{ type: "text", text: "No activities recorded yet for this session." }] };
-      }
-      const lines = activities.map((a) => `[${a.createTime}] ${a.originator}: ${describeActivity(a)}`);
-      const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
-      return { content: [{ type: "text", text: lines.join("\n") + more }] };
-    }
-  );
+// Bare id '42' -> 'sessions/42'; already-qualified names pass through.
+function sessionName(session) {
+  return session.startsWith("sessions/") ? session : `sessions/${session}`;
+}
+
+async function getSession(name) {
+  const data = await julesRequest(`/${name}`);
+  const prs = (data.outputs || []).map((o) => o.pullRequest?.url).filter(Boolean);
+  const lines = [
+    `${data.name} — "${data.title || data.prompt}"`,
+    `State: ${data.state}`,
+    data.url ? `View in Jules: ${data.url}` : null,
+    prs.length ? `Pull request(s): ${prs.join(", ")}` : null,
+  ].filter(Boolean);
+  return { content: [{ type: "text", text: lines.join("\n") }] };
+}
+
+async function getActivities(name, { page_size, page_token }) {
+  const data = await julesRequest(`/${name}/activities`, { params: { pageSize: page_size, pageToken: page_token } });
+  const activities = data?.activities || [];
+  if (!activities.length) {
+    return { content: [{ type: "text", text: "No activities recorded yet for this session." }] };
+  }
+  const lines = activities.map((a) => `[${a.createTime}] ${a.originator}: ${describeActivity(a)}`);
+  const more = data?.nextPageToken ? `\n\n(more available — next page_token: ${data.nextPageToken})` : "";
+  return { content: [{ type: "text", text: lines.join("\n") + more }] };
 }
 
 // Render the one populated event field on an Activity (per the API's
