@@ -242,9 +242,7 @@ Repo metadata (read-only): `repo_metadata` (`action`: `list` | `get` | `contribu
 
 Repo lifecycle (mutating): `repo_lifecycle` (`action`: `create` | `fork` | `sync_fork` | `delete` | `set_topics`), replacing `create_repo`, `fork_repo`, `sync_fork`, `delete_repo` and the topics write path. `delete` is permanent and requires `confirm: true`.
 
-Actions: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`
-
-CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`
+CI / Actions: `ci_manage` (`action`: `list` | `run_logs` | `job_logs` | `trigger` | `rerun` | `cancel` | `checks` | `status`), replacing `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`, `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`. `trigger`, `rerun` and `cancel` mutate; the rest are read-only. `list`, `checks` and `status` each carry their own sleep-and-recheck guidance while runs/checks are pending.
 
 Notifications: `list_notifications`
 
