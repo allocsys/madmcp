@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connectors/github/review_control.js — reviewer assignment, merge
-// readiness, inline review comments, branch protection (read), and
-// notifications. Complements prs.js (which submits whole-PR reviews but
+// readiness, inline review comments, and notifications. (Branch protection
+// read moved to repo_inspect's 'branch_protection' action.) Complements prs.js (which submits whole-PR reviews but
 // can't request reviewers or surface merge conflicts) and actions.js/
 // ci_control.js (commit-level CI state, not PR-level review state).
 // ---------------------------------------------------------------------------
@@ -142,46 +142,6 @@ export function register(server) {
       });
       const rangeDesc = start_line !== undefined ? `${start_line}-${line}` : `${line}`;
       return { content: [{ type: "text", text: `Added inline comment on ${path}:${rangeDesc} (PR #${pull_number}).\n${data.html_url}` }] };
-    }
-  );
-
-  server.tool(
-    "get_branch_protection",
-    "DOES: Read-only branch protection rules -- required checks/approvals, admin exemption, force-push/delete blocking.\n" +
-    "RULE: use this to see upfront why a PR might be gated, instead of discovering it from a rejected merge.",
-    {
-      owner:  z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:   z.string().describe("Repository name"),
-      branch: z.string().describe("Branch name, e.g. 'main'"),
-    },
-    async ({ owner = DEFAULT_OWNER, repo, branch }) => {
-      let data;
-      try {
-        data = await githubRequest(`/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}/protection`);
-      } catch (err) {
-        if (/\(404\)/.test(err.message)) {
-          return { content: [{ type: "text", text: `Branch '${branch}' has no protection rules configured.` }] };
-        }
-        if (/\(403\)/.test(err.message)) {
-          return { content: [{ type: "text", text: `Can't read branch protection for '${branch}': the token lacks permission (403). Branch protection reads require admin access on the repo, even though the rules themselves may be visible in the GitHub UI.` }] };
-        }
-        throw err;
-      }
-
-      const reviews = data.required_pull_request_reviews;
-      const checks  = data.required_status_checks;
-      const lines = [
-        `Branch protection for '${branch}':`,
-        `  Required approving reviews: ${reviews ? reviews.required_approving_review_count : 0}${reviews?.require_code_owner_reviews ? " (code owner review required)" : ""}`,
-        `  Dismiss stale reviews on new commits: ${reviews?.dismiss_stale_reviews ? "yes" : "no"}`,
-        `  Required status checks: ${checks?.contexts?.length ? checks.contexts.join(", ") : "(none)"}`,
-        `  Require branches up to date before merge: ${checks?.strict ? "yes" : "no"}`,
-        `  Enforce for admins: ${data.enforce_admins?.enabled ? "yes" : "no"}`,
-        `  Allow force pushes: ${data.allow_force_pushes?.enabled ? "yes" : "no"}`,
-        `  Allow deletions: ${data.allow_deletions?.enabled ? "yes" : "no"}`,
-        `  Linear history required: ${data.required_linear_history?.enabled ? "yes" : "no"}`,
-      ];
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     }
   );
 
