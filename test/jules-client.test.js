@@ -142,11 +142,71 @@ describe("Jules Connector - tools", () => {
     expect(result.content[0].text).toContain("sessions/42");
   });
 
-  it("jules_list_sources reports an empty account clearly", async () => {
+  it("jules_find sources reports an empty account clearly", async () => {
     fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ sources: [] }) });
 
-    const result = await server.tools.jules_list_sources({});
+    const result = await server.tools.jules_find({ action: "sources" });
     expect(result.content[0].text).toContain("No sources connected");
+  });
+
+  it("jules_find sources lists repos with privacy, default branch and pagination, passing params through", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        sources: [
+          { name: "sources/github-owner-repo", githubRepo: { owner: "owner", repo: "repo", isPrivate: true, defaultBranch: { displayName: "main" } } },
+          { name: "sources/other" },
+        ],
+        nextPageToken: "tok2",
+      }),
+    });
+
+    const result = await server.tools.jules_find({ action: "sources", page_size: 5, page_token: "tok1" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sources");
+    expect(url.searchParams.get("pageSize")).toBe("5");
+    expect(url.searchParams.get("pageToken")).toBe("tok1");
+    const text = result.content[0].text;
+    expect(text).toContain("sources/github-owner-repo — owner/repo (private), default branch: main");
+    expect(text).toContain("sources/other — (non-GitHub source)");
+    expect(text).toContain("(more available — next page_token: tok2)");
+  });
+
+  it("jules_find sessions reports no sessions clearly", async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({}) });
+
+    const result = await server.tools.jules_find({ action: "sessions" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.pathname).toBe("/v1alpha/sessions");
+    expect(result.content[0].text).toBe("No Jules sessions found.");
+  });
+
+  it("jules_find sessions shows title/prompt fallback, state, PR urls and pagination", async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        sessions: [
+          { name: "sessions/1", title: "Add rate limiting", state: "COMPLETED", outputs: [{ pullRequest: { url: "https://github.com/owner/repo/pull/9" } }, {}] },
+          { name: "sessions/2", prompt: "Fix the bug", state: "RUNNING" },
+        ],
+        nextPageToken: "next",
+      }),
+    });
+
+    const result = await server.tools.jules_find({ action: "sessions", page_size: 2 });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url.searchParams.get("pageSize")).toBe("2");
+    expect(url.searchParams.has("pageToken")).toBe(false);
+    const text = result.content[0].text;
+    expect(text).toContain('sessions/1 — "Add rate limiting" — COMPLETED — PR: https://github.com/owner/repo/pull/9');
+    expect(text).toContain('sessions/2 — "Fix the bug" — RUNNING');
+    expect(text).not.toContain("sessions/2 — \"Fix the bug\" — RUNNING — PR");
+    expect(text).toContain("(more available — next page_token: next)");
   });
 
   it("jules_get_activities surfaces the plan steps of a planGenerated event", async () => {
