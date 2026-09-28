@@ -120,13 +120,6 @@ export function register(server) {
     },
     async ({ action, owner: ownerArg, repo, path, commit, sha, branch, per_page, base_ref, head_ref, base_path, head_path, ref }) => {
 
-      // ── search (repo comes from the query's repo: qualifier) ──────────────
-      if (action === "search") {
-        if (!query) return fail("action 'search' requires query (include a repo:owner/name qualifier).");
-        if (!ref) return fail("action 'search' requires ref (branch, tag, or commit SHA). GitHub's search index only covers the default branch, so a specific ref plus a repo:owner/name qualifier in query is required for the branch-aware search.");
-        return runSearchCode({ query, per_page: per_page ?? 20, ref });
-      }
-
       if (!repo) return fail(`action '${action}' requires repo parameter.`);
 
       // These two originally required an explicit owner (no default); keep
