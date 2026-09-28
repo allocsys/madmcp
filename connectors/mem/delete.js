@@ -21,7 +21,7 @@ export function register(server) {
     "DOES: Permanently delete Mem0 memories. IRREVERSIBLE. Use `action` to pick.\n" +
     "RULE: action 'one' requires memory_id and deletes that single memory.\n" +
     "RULE: action 'batch' requires memory_ids (non-empty) and deletes each in parallel; returns a per-item success/failure report.\n" +
-    "RULE: action 'all' requires confirm: true and bulk-deletes every memory matching the filters in one server-side call (no IDs needed). At least one filter must resolve (defaults to your own user_id if none are given). Pass '*' as a filter value to match ALL entities of that type (e.g. user_id: '*' deletes memories for every user in the whole project) — combine all four id filters with '*' for a full project wipe.\n" +
+    "RULE: action 'all' requires confirm: true and bulk-deletes every memory matching the filters in one server-side call (no IDs needed). At least one filter must resolve (defaults to your own user_id ONLY if no filter at all is given). WARNING: filters are not implicitly combined with user_id — agent_id, app_id, run_id or metadata alone match across ALL users in the project, so pass user_id as well to stay within one user's memories. Pass '*' as a filter value to match ALL entities of that type (e.g. user_id: '*' deletes memories for every user in the whole project) — combine all four id filters with '*' for a full project wipe.\n" +
     "RULE: memory_id applies to 'one' only; memory_ids to 'batch' only; user_id/agent_id/app_id/run_id/metadata/confirm to 'all' only.",
     {
       action:     z.enum(["one", "batch", "all"]).describe("Which operation to perform"),
@@ -31,7 +31,7 @@ export function register(server) {
       agent_id:   z.string().optional().describe("Filter by agent ID. Pass '*' to delete memories for all agents. Used by 'all' only."),
       app_id:     z.string().optional().describe("Filter by app ID. Pass '*' to delete memories for all apps. Used by 'all' only."),
       run_id:     z.string().optional().describe("Filter by run ID. Pass '*' to delete memories for all runs. Used by 'all' only."),
-      metadata:   z.record(z.any()).optional().describe("Filter by metadata (exact match on the given key/value pairs). Used by 'all' only."),
+      metadata:   z.record(z.any()).optional().describe("Filter by metadata (sent as a JSON-encoded query param; exact-match semantics are up to Mem0 and not verified by this connector). Not user-scoped on its own — combine with user_id. Used by 'all' only."),
       confirm:    z.boolean().optional().describe("Must be explicitly set to true to execute the bulk deletion. Safety guard against accidental bulk wipes — 'all' refuses to run without it. Required for action 'all'."),
     },
     async ({ action, memory_id, memory_ids, user_id, agent_id, app_id, run_id, metadata, confirm }) => {
@@ -86,6 +86,7 @@ export function register(server) {
       if (metadata) params.set("metadata", JSON.stringify(metadata));
       const data = await mem0Request(`/v1/memories/?${params.toString()}`, { method: "DELETE" });
       const wildcardScope = [user_id, agent_id, app_id, run_id].includes("*");
+      const notUserScoped = !user_id;
       const scopeDesc = [
         user_id    && `user_id=${user_id}`,
         agent_id   && `agent_id=${agent_id}`,
@@ -96,7 +97,7 @@ export function register(server) {
       return {
         content: [{
           type: "text",
-          text: `${data?.message || "Memories deleted."} (scope: ${scopeDesc})${wildcardScope ? " — wildcard used, this may have affected multiple entities." : ""}`,
+          text: `${data?.message || "Memories deleted."} (scope: ${scopeDesc})${wildcardScope ? " — wildcard used, this may have affected multiple entities." : ""}${notUserScoped ? " — no user_id filter was given, so this was not restricted to a single user." : ""}`,
         }],
       };
     }
