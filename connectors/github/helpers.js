@@ -20,10 +20,18 @@ export async function getFileBlobSha(owner, repo, filePath, ref) {
   return { blobSha: entry.sha, treeSha };
 }
 
-export async function readFileViaBlob(owner, repo, filePath, ref) {
+// Returns the file's text AND the blob sha it was read at. Writers pass that
+// sha to the contents API PUT so a commit that lands between read and write
+// is rejected (409) instead of being silently overwritten.
+export async function readFileWithSha(owner, repo, filePath, ref) {
   const { blobSha } = await getFileBlobSha(owner, repo, filePath, ref);
   const blob = await githubRequest(`/repos/${owner}/${repo}/git/blobs/${blobSha}`);
-  return fromBase64(blob.content.replace(/\n/g, ""));
+  return { content: fromBase64(blob.content.replace(/\n/g, "")), blobSha };
+}
+
+export async function readFileViaBlob(owner, repo, filePath, ref) {
+  const { content } = await readFileWithSha(owner, repo, filePath, ref);
+  return content;
 }
 
 export const CHUNK_SIZE = 20000;
