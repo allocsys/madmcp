@@ -79,6 +79,11 @@ import { execFile } from "node:child_process";
 import { githubRequest } from "../connectors/github/client.js";
 import { register } from "../connectors/github/codespaces.js";
 
+// The remote command reaches ssh as ONE arg: `sh -c '<fullCommand>'` (POSIX
+// single-quoted), because ssh re-splits trailing args on the remote side.
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+const remoteArg = (fullCommand) => `sh -c ${shq(fullCommand)}`;
+
 // Minimal fake MCP server
 function makeFakeServer() {
   const tools = {};
@@ -124,7 +129,7 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile._lastFile).toBe("gh");
     expect(execFile._lastArgs).toEqual([
-      "codespace", "ssh", "-c", "cs-test", "--", "sh", "-c", "echo hello",
+      "codespace", "ssh", "-c", "cs-test", "--", remoteArg("echo hello"),
     ]);
   });
 
@@ -236,7 +241,7 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     // Single-quoted: the literal text is preserved verbatim inside '...',
     // so a shell will NOT expand it -- unlike double-quoting, where
     // $(...) is still evaluated.
-    expect(fullCommandArg).toBe(`cd '${maliciousCwd}' && ls`);
+    expect(fullCommandArg).toBe(remoteArg(`cd '${maliciousCwd}' && ls`));
   });
 
   it("single-quotes cwd containing backticks and embedded single quotes safely", async () => {
@@ -259,8 +264,24 @@ describe("connectors/github/codespaces.js — exec_in_codespace", () => {
     // never left as a bare unescaped quote that could terminate the
     // quoted string early.
     expect(fullCommandArg).toBe(
-      `cd 'a'\\''; touch /tmp/pwned; echo '\\''`+ "`whoami`" + `' && ls`
+      remoteArg(`cd 'a'\\''; touch /tmp/pwned; echo '\\''`+ "`whoami`" + `' && ls`)
     );
+  });
+
+  it("passes gh only an allowlisted env, not the server's other secrets", async () => {
+    githubRequest.mockResolvedValueOnce({ name: "cs-test", state: "Available" });
+    execFile.mockImplementation((file, args, opts, callback) => {
+      const cb = typeof opts === "function" ? opts : callback;
+      cb(null, "ok\n", "");
+    });
+    process.env.SOME_UNRELATED_SECRET = "s3cret";
+    try {
+      await server.tools.exec_in_codespace({ codespace_name: "cs-test", command: "ls" });
+    } finally {
+      delete process.env.SOME_UNRELATED_SECRET;
+    }
+    expect(execFile._lastOptions.env.SOME_UNRELATED_SECRET).toBeUndefined();
+    expect(execFile._lastOptions.env.PATH).toBe(process.env.PATH);
   });
 });
 

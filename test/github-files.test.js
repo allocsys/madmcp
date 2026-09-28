@@ -44,7 +44,7 @@ vi.mock("../connectors/github/helpers.js", () => ({
 }));
 
 import { githubRequest } from "../connectors/github/client.js";
-import { readFileWithSha } from "../connectors/github/helpers.js";
+import { readFileWithSha, readFileViaBlob } from "../connectors/github/helpers.js";
 import { register } from "../connectors/github/files.js";
 
 // Minimal fake MCP server: just captures the handler function for each
@@ -498,6 +498,106 @@ describe("connectors/github/files.js", () => {
       await expect(server.tools.rename_file({
         owner: "allocsys", repo: "madmcp", old_path: "deep/file.txt", new_path: "b.txt", branch: "main",
       })).rejects.toThrow(/truncated/i);
+    });
+
+    it("refuses to overwrite an existing destination, without creating a tree or commit", async () => {
+      githubRequest
+        .mockResolvedValueOnce({ object: { sha: "ref-sha" } })
+        .mockResolvedValueOnce({ tree: { sha: "base-tree-sha" } })
+        .mockResolvedValueOnce({
+          tree: [
+            { path: "a.txt", mode: "100644", type: "blob", sha: "a-sha" },
+            { path: "b.txt", mode: "100644", type: "blob", sha: "b-sha" },
+          ],
+          truncated: false,
+        });
+
+      await expect(server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", branch: "main",
+      })).rejects.toThrow(/Destination already exists: b\.txt/);
+
+      // ref + base commit + base tree only -- no tree POST, no commit, no ref PATCH.
+      expect(githubRequest).toHaveBeenCalledTimes(3);
+    });
+
+    it("rejects old_path === new_path before making any request", async () => {
+      await expect(server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "a.txt", branch: "main",
+      })).rejects.toThrow(/identical/i);
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it("defaults owner when omitted", async () => {
+      mockRenameRequests({ tree: [{ path: "a.txt", mode: "100644", type: "blob", sha: "blob-sha" }] });
+
+      await server.tools.rename_file({ repo: "madmcp", old_path: "a.txt", new_path: "b.txt", branch: "main" });
+
+      expect(githubRequest.mock.calls[0][0]).toMatch(/^\/repos\/allocsys\/madmcp\/git\/ref\/heads\/main$/);
+    });
+
+    it("keeps '/' literal in branch names for the ref lookup and ref update", async () => {
+      mockRenameRequests({ tree: [{ path: "a.txt", mode: "100644", type: "blob", sha: "blob-sha" }] });
+
+      await server.tools.rename_file({
+        owner: "allocsys", repo: "madmcp", old_path: "a.txt", new_path: "b.txt", branch: "feature/x y",
+      });
+
+      const refLookupCall = githubRequest.mock.calls.find((c) => c[0].includes("/git/ref/heads/"));
+      expect(refLookupCall[0]).toMatch(/\/git\/ref\/heads\/feature\/x%20y$/);
+      const refUpdateCall = githubRequest.mock.calls.find((c) => c[1]?.method === "PATCH");
+      expect(refUpdateCall[0]).toMatch(/\/git\/refs\/heads\/feature\/x%20y$/);
+    });
+  });
+
+  describe("overwrite_files — duplicate path guard", () => {
+    it("rejects duplicate paths before making any request", async () => {
+      await expect(server.tools.overwrite_files({
+        owner: "allocsys", repo: "madmcp", branch: "main", message: "m",
+        files: [
+          { path: "a.txt", content: "one" },
+          { path: "b.txt", content: "two" },
+          { path: "a.txt", content: "three" },
+        ],
+      })).rejects.toThrow(/Duplicate path in files: a\.txt/);
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("read_file — paging argument validation", () => {
+    beforeEach(() => {
+      readFileViaBlob.mockResolvedValue("l1\nl2\nl3\nl4\n");
+    });
+
+    it.each([
+      [{ char_offset: -5 }, /char_offset/],
+      [{ char_offset: 1.5 }, /char_offset/],
+      [{ char_offset: Number.NaN }, /char_offset/],
+      [{ char_limit: 0 }, /char_limit/],
+      [{ char_limit: -1 }, /char_limit/],
+      [{ line_start: 0 }, /line_start/],
+      [{ line_start: 2, line_end: 1 }, /line_end/],
+      [{ line_start: 1, line_end: 0 }, /line_end/],
+    ])("rejects %j without reading the file", async (args, pattern) => {
+      const result = await server.tools.read_file({
+        owner: "allocsys", repo: "madmcp", path: "a.txt", ref: "main", ...args,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(pattern);
+      expect(readFileViaBlob).not.toHaveBeenCalled();
+    });
+
+    it("still serves valid char and line windows", async () => {
+      const chars = await server.tools.read_file({
+        owner: "allocsys", repo: "madmcp", path: "a.txt", ref: "main", char_offset: 3, char_limit: 2,
+      });
+      expect(chars.isError).toBeUndefined();
+      expect(chars.content[0].text).toMatch(/Offset: 3 \| Returning: 2 chars/);
+
+      const lines = await server.tools.read_file({
+        owner: "allocsys", repo: "madmcp", path: "a.txt", ref: "main", line_start: 2, line_end: 3,
+      });
+      expect(lines.isError).toBeUndefined();
+      expect(lines.content[0].text).toMatch(/Showing: L2-3/);
     });
   });
 });

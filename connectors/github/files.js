@@ -29,6 +29,7 @@
 
 import { z } from "zod";
 import { githubRequest, toBase64 } from "./client.js";
+import { encodeRef } from "./encode.js";
 import { DEFAULT_OWNER } from "../../config.js";
 import { readFileViaBlob, readFileWithSha, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
 
@@ -89,6 +90,28 @@ function sliceFileContentByLine(content, path, { line_start, line_end }) {
   return { content: [{ type: "text", text: header + slice }] };
 }
 
+// Rejects paging args that would silently misbehave (a negative char_offset
+// makes String.slice count from the END of the file; NaN / fractions give
+// garbage windows). Returns an error string, or null when the args are fine.
+function validatePaging({ char_offset, char_limit, line_start, line_end }) {
+  if (char_offset !== undefined && (!Number.isInteger(char_offset) || char_offset < 0)) {
+    return `char_offset must be a non-negative integer (got ${char_offset}).`;
+  }
+  if (char_limit !== undefined && (!Number.isInteger(char_limit) || char_limit < 1)) {
+    return `char_limit must be a positive integer (got ${char_limit}).`;
+  }
+  if (line_start !== undefined && (!Number.isInteger(line_start) || line_start < 1)) {
+    return `line_start must be a positive integer, 1-indexed (got ${line_start}).`;
+  }
+  if (line_end !== undefined && (!Number.isInteger(line_end) || line_end < 1)) {
+    return `line_end must be a positive integer, 1-indexed (got ${line_end}).`;
+  }
+  if (line_start !== undefined && line_end !== undefined && line_end < line_start) {
+    return `line_end (${line_end}) must be >= line_start (${line_start}).`;
+  }
+  return null;
+}
+
 export function register(server) {
 
   server.tool(
@@ -113,6 +136,10 @@ export function register(server) {
       line_end:    z.number().optional().describe("1-indexed line number to stop at, inclusive (default: line_start + 200). Only used when line_start is given."),
     },
     async ({ owner = DEFAULT_OWNER, repo, path, ref, char_offset, char_limit, line_start, line_end }) => {
+      const problem = validatePaging({ char_offset, char_limit, line_start, line_end });
+      if (problem) {
+        return { content: [{ type: "text", text: problem }], isError: true };
+      }
       const content = await readFileViaBlob(owner, repo, path, ref);
       if (line_start !== undefined) {
         return sliceFileContentByLine(content, path, { line_start, line_end });
@@ -156,7 +183,7 @@ export function register(server) {
     async ({ owner, repo, ref }) => {
       let treeSha;
       try {
-        const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(ref)}`);
+        const refData = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeRef(ref)}`);
         treeSha = refData.object.sha;
       } catch { treeSha = ref; }
       const data  = await githubRequest(`/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`);
@@ -336,19 +363,22 @@ export function register(server) {
 
   server.tool(
     "rename_file",
-    "DOES: Rename/move a file in a repo.\n" +
+    "DOES: Rename/move a file in a repo. Fails (nothing is committed) if the destination path already exists or old_path equals new_path.\n" +
     "NOT: editing contents without moving -> edit_file (targeted or full rewrite). NOT: creating a new file -> create_repo_file.",
     {
-      owner:    z.string().describe("Repository owner (user or org)"),
+      owner:    z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
       repo:     z.string().describe("Repository name"),
       old_path: z.string().describe("Current file path"),
       new_path: z.string().describe("New file path / destination"),
       message:  z.string().optional().describe("Commit message (default: 'rename <old> to <new>')"),
       branch:   z.string().describe("Branch to commit to"),
     },
-    async ({ owner, repo, old_path, new_path, message, branch }) => {
+    async ({ owner = DEFAULT_OWNER, repo, old_path, new_path, message, branch }) => {
+      if (old_path === new_path) {
+        throw new Error(`old_path and new_path are identical: ${old_path}`);
+      }
       const commitMessage = message || `rename ${old_path} to ${new_path}`;
-      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeRef(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
       // Resolve the file from the SAME commit snapshot we build on, and reuse its
       // existing blob sha + mode. No text round-trip, so binary files stay intact
@@ -357,6 +387,10 @@ export function register(server) {
       const entry = baseTree.tree.find((item) => item.path === old_path && item.type === "blob");
       if (!entry) {
         throw new Error(`File not found in tree: ${old_path}${baseTree.truncated ? " (repository tree was truncated by GitHub; the file may exist beyond the limit)" : ""}`);
+      }
+      // Never silently clobber an existing file at the destination.
+      if (baseTree.tree.some((item) => item.path === new_path)) {
+        throw new Error(`Destination already exists: ${new_path}. Delete it first, or pick a different new_path.`);
       }
       const newTree = await githubRequest(`/repos/${owner}/${repo}/git/trees`, {
         method: "POST",
@@ -372,7 +406,7 @@ export function register(server) {
         method: "POST",
         body: { message: commitMessage, tree: newTree.sha, parents: [refData.object.sha] },
       });
-      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
+      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeRef(branch)}`, {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
@@ -395,7 +429,16 @@ export function register(server) {
       })).min(1).describe("Files to include in this commit"),
     },
     async ({ owner = DEFAULT_OWNER, repo, branch, message, files }) => {
-      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+      // Two entries for one path would make the tree ambiguous (GitHub keeps one
+      // of them and the other file's content is silently lost) -- reject up front.
+      const seen = new Set();
+      for (const f of files) {
+        if (seen.has(f.path)) {
+          throw new Error(`Duplicate path in files: ${f.path}. Each path may appear only once per commit.`);
+        }
+        seen.add(f.path);
+      }
+      const refData      = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeRef(branch)}`);
       const baseCommit   = await githubRequest(`/repos/${owner}/${repo}/git/commits/${refData.object.sha}`);
       const blobs        = await Promise.all(files.map((f) =>
         githubRequest(`/repos/${owner}/${repo}/git/blobs`, {
@@ -414,7 +457,7 @@ export function register(server) {
         method: "POST",
         body: { message, tree: newTree.sha, parents: [refData.object.sha] },
       });
-      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
+      await githubRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeRef(branch)}`, {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });

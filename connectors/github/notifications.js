@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { githubRequest } from "./client.js";
+import { encodeSegment } from "./encode.js";
 
 export function register(server) {
 
@@ -24,9 +25,10 @@ export function register(server) {
       if (repo && !owner) {
         return { content: [{ type: "text", text: "repo requires owner (owner/repo scope)." }], isError: true };
       }
-      const query = new URLSearchParams({ all: String(all), participating: String(participating), per_page: String(per_page) });
+      const pageSize = Number.isFinite(per_page) ? Math.min(100, Math.max(1, Math.trunc(per_page))) : 30;
+      const query = new URLSearchParams({ all: String(all), participating: String(participating), per_page: String(pageSize) });
       const endpoint = owner && repo
-        ? `/repos/${owner}/${repo}/notifications?${query}`
+        ? `/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/notifications?${query}`
         : `/notifications?${query}`;
       let data = await githubRequest(endpoint);
       if (owner && !repo) {

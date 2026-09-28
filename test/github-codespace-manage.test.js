@@ -92,9 +92,19 @@ describe("connectors/github/codespace_manage.js", () => {
 
       const result = await call({ action: "list" });
 
-      expect(githubRequest).toHaveBeenCalledWith("/user/codespaces");
+      expect(githubRequest).toHaveBeenCalledWith("/user/codespaces?per_page=100");
       expect(result.content[0].text).toMatch(/1 codespace\(s\)/);
       expect(result.content[0].text).toMatch(/curly-fiesta-abc123/);
+      expect(result.content[0].text).not.toMatch(/showing first/);
+    });
+
+    it("notes truncation when total_count exceeds the returned page", async () => {
+      const cs = { name: "cs-1", state: "Available", repository: { full_name: "allocsys/madmcp" }, git_status: { ref: "main" }, machine: null, web_url: "https://x" };
+      githubRequest.mockResolvedValueOnce({ total_count: 150, codespaces: [cs] });
+
+      const result = await call({ action: "list" });
+
+      expect(result.content[0].text).toMatch(/showing first 1 of 150/);
     });
 
     it("scopes to a repo via repository_id, defaulting owner", async () => {
@@ -105,7 +115,7 @@ describe("connectors/github/codespace_manage.js", () => {
       const result = await call({ action: "list", repo: "madmcp" });
 
       expect(githubRequest).toHaveBeenNthCalledWith(1, "/repos/allocsys/madmcp");
-      expect(githubRequest).toHaveBeenNthCalledWith(2, "/user/codespaces?repository_id=4242");
+      expect(githubRequest).toHaveBeenNthCalledWith(2, "/user/codespaces?per_page=100&repository_id=4242");
       expect(result.content[0].text).toMatch(/No codespaces found for allocsys\/madmcp/);
     });
 

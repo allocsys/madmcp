@@ -20,6 +20,14 @@ import { DEFAULT_OWNER } from "../../config.js";
 
 const fail = (text) => ({ content: [{ type: "text", text }], isError: true });
 
+// GitHub caps per_page at 100 and rejects/ignores nonsense values. Clamp to an
+// integer in 1..100 (fall back to the default for undefined / NaN) so an
+// oversized or negative value can't produce an unexpected request or response.
+function clampPerPage(value, fallback) {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(100, Math.max(1, Math.trunc(value)));
+}
+
 export function register(server) {
 
   server.tool(
@@ -68,7 +76,7 @@ export function register(server) {
 
       // ── list (was list_workflow_runs) ─────────────────────────────────────
       if (action === "list") {
-        const limit = per_page ?? 20;
+        const limit = clampPerPage(per_page, 20);
         const query = new URLSearchParams({ per_page: String(limit) });
         if (branch) query.set("branch", branch);
         if (status) query.set("status", status);
@@ -229,7 +237,7 @@ export function register(server) {
 
       // ── checks (was get_check_runs) ───────────────────────────────────────
       if (action === "checks") {
-        const limit = per_page ?? 30;
+        const limit = clampPerPage(per_page, 30);
         const data = await githubRequest(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=${limit}`);
         if (!data.check_runs?.length) return { content: [{ type: "text", text: `No check runs found for ${ref}.` }] };
         const icon = (s, c) => s !== "completed" ? "🔄" : c === "success" ? "✅" : c === "failure" ? "❌" : c === "skipped" ? "⏭️" : c === "cancelled" ? "🚫" : "⚪";

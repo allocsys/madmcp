@@ -9,6 +9,11 @@ import { z } from "zod";
 import { DEFAULT_OWNER } from "../../config.js";
 import { getCloneToken } from "./app_auth.js";
 
+// GitHub owner logins: alphanumerics and single hyphens; repo names: alphanumerics, '.', '_', '-'.
+// Rejecting anything else keeps odd input out of the request path and the clone URL.
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const REPO_RE = /^[A-Za-z0-9._-]+$/;
+
 export function register(server) {
   server.tool(
     "gh_token",
@@ -22,6 +27,9 @@ export function register(server) {
       repo:  z.string().describe("Repository name"),
     },
     async ({ owner = DEFAULT_OWNER, repo }) => {
+      if (!OWNER_RE.test(owner) || !REPO_RE.test(repo) || repo === "." || repo === "..") {
+        return { content: [{ type: "text", text: `Invalid owner/repo: "${owner}/${repo}".` }], isError: true };
+      }
       let result;
       try {
         result = await getCloneToken(owner, repo);
@@ -33,7 +41,8 @@ export function register(server) {
         `Freshly minted token (contents:write, ${owner}/${repo} only -- can push, not just clone), GitHub-issued expiry ${result.expiresAt} -- but this server will auto-revoke it a few minutes from now regardless, so it's single-use in practice, not just in intent.\n\n` +
         `Run this in your sandbox to clone:\n` +
         `git clone ${cloneUrl}\n\n` +
-        `It can also be used to push (e.g. via 'git remote set-url' then 'git push') before it's revoked. Use it now -- it won't be reusable shortly after, whether or not you reference it again.`;
+        `It can also be used to push (e.g. via 'git remote set-url' then 'git push') before it's revoked. Use it now -- it won't be reusable shortly after, whether or not you reference it again.\n\n` +
+        `Note: cloning with this URL stores the token in the clone's .git/config. It is revoked shortly anyway, but to remove it earlier run: git remote set-url origin https://github.com/${owner}/${repo}.git`;
       return { content: [{ type: "text", text }] };
     }
   );

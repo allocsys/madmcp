@@ -20,6 +20,7 @@
 import { z } from "zod";
 import { githubRequest } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
+import { encodeSegment } from "./encode.js";
 
 const fail = (text) => ({ content: [{ type: "text", text }], isError: true });
 
@@ -60,11 +61,12 @@ export function register(server) {
 
       // ── list (was list_codespaces) ────────────────────────────────────────
       if (action === "list") {
-        let path = "/user/codespaces";
+        // Ask for the max page size (GitHub default is 30); only the first page is fetched.
+        let path = "/user/codespaces?per_page=100";
         if (repo) {
           const repoOwner = owner || DEFAULT_OWNER;
-          const repoData = await githubRequest(`/repos/${repoOwner}/${repo}`);
-          path += `?repository_id=${repoData.id}`;
+          const repoData = await githubRequest(`/repos/${encodeSegment(repoOwner)}/${encodeSegment(repo)}`);
+          path += `&repository_id=${repoData.id}`;
         }
 
         const data = await githubRequest(path);
@@ -78,7 +80,8 @@ export function register(server) {
         return {
           content: [{
             type: "text",
-            text: `${data.total_count} codespace(s):\n${lines.join("\n")}`,
+            text: `${data.total_count} codespace(s):\n${lines.join("\n")}` +
+              (data.total_count > data.codespaces.length ? `\n(showing first ${data.codespaces.length} of ${data.total_count}; use codespace_name with 'get' for others)` : ""),
           }],
         };
       }
@@ -100,7 +103,7 @@ export function register(server) {
       // ── machines (was list_codespace_machines) ────────────────────────────
       if (action === "machines") {
         const machineOwner = owner || DEFAULT_OWNER;
-        let path = `/repos/${machineOwner}/${repo}/codespaces/machines`;
+        let path = `/repos/${encodeSegment(machineOwner)}/${encodeSegment(repo)}/codespaces/machines`;
         if (ref) path += `?ref=${encodeURIComponent(ref)}`;
 
         const data = await githubRequest(path);
@@ -127,7 +130,7 @@ export function register(server) {
         if (machine) body.machine = machine;
         if (devcontainer_path) body.devcontainer_path = devcontainer_path;
 
-        const cs = await githubRequest(`/repos/${createOwner}/${repo}/codespaces`, {
+        const cs = await githubRequest(`/repos/${encodeSegment(createOwner)}/${encodeSegment(repo)}/codespaces`, {
           method: "POST",
           body,
         });
