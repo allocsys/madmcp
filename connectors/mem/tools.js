@@ -161,6 +161,7 @@
 import { z } from "zod";
 import { mem0Request } from "./client.js";
 import { MEM0_USER_ID } from "../../config.js";
+import { register as registerDelete } from "./delete.js";
 
 const STATUS_VALUES = ["open", "resolved", "superseded"];
 // Hard-stop threshold for Tier 2 duplicate detection (2026-07-13, insert-
@@ -992,91 +993,7 @@ export function register(server) {
     }
   );
 
-  // ── Delete memory ────────────────────────────────────────────────────────
-  server.tool(
-    "mem0_delete",
-    "Permanently delete a specific Mem0 memory by ID.",
-    {
-      memory_id: z.string().describe("The memory ID to delete"),
-    },
-    async ({ memory_id }) => {
-      await mem0Request(`/v1/memories/${memory_id}/`, { method: "DELETE" });
-      return { content: [{ type: "text", text: `Deleted memory (ID: ${memory_id}).` }] };
-    }
-  );
-
-  // ── Bulk delete by filter (server-side, no IDs needed) ────────────────────
-  server.tool(
-    "mem0_delete_all",
-    "Bulk-delete every memory matching the given filters in a single server-side call (Mem0's DELETE /v1/memories) — no need to list or fetch IDs first. At least one filter must resolve (defaults to your own user_id if none are given). Pass '*' as a filter value to match ALL entities of that type (e.g. user_id: '*' deletes memories for every user in the whole project) — combine all four id filters with '*' for a full project wipe. Irreversible; requires confirm: true.",
-    {
-      user_id:    z.string().optional().describe(`Filter by user ID. Pass '*' to delete memories for all users. Defaults to ${MEM0_USER_ID} if no filters are given at all.`),
-      agent_id:   z.string().optional().describe("Filter by agent ID. Pass '*' to delete memories for all agents."),
-      app_id:     z.string().optional().describe("Filter by app ID. Pass '*' to delete memories for all apps."),
-      run_id:     z.string().optional().describe("Filter by run ID. Pass '*' to delete memories for all runs."),
-      metadata:   z.record(z.any()).optional().describe("Filter by metadata (exact match on the given key/value pairs)."),
-      confirm:    z.boolean().describe("Must be explicitly set to true to execute the deletion. Safety guard against accidental bulk wipes — the tool refuses to run without it."),
-    },
-    async ({ user_id, agent_id, app_id, run_id, metadata, confirm }) => {
-      if (!confirm) {
-        return {
-          content: [{ type: "text", text: "Refused: this would bulk-delete memories server-side and cannot be undone. Re-call with confirm: true to proceed." }],
-          isError: true,
-        };
-      }
-      // Mem0 itself rejects a filterless call, but fail fast with a clearer
-      // message and a safe default (caller's own scope) rather than letting
-      // an empty filter set fall through to an ambiguous 400 from the API.
-      if (!user_id && !agent_id && !app_id && !run_id && !metadata) {
-        user_id = MEM0_USER_ID;
-      }
-      const params = new URLSearchParams();
-      if (user_id) params.set("user_id", user_id);
-      if (agent_id) params.set("agent_id", agent_id);
-      if (app_id) params.set("app_id", app_id);
-      if (run_id) params.set("run_id", run_id);
-      if (metadata) params.set("metadata", JSON.stringify(metadata));
-      const data = await mem0Request(`/v1/memories/?${params.toString()}`, { method: "DELETE" });
-      const wildcardScope = [user_id, agent_id, app_id, run_id].includes("*");
-      const scopeDesc = [
-        user_id    && `user_id=${user_id}`,
-        agent_id   && `agent_id=${agent_id}`,
-        app_id     && `app_id=${app_id}`,
-        run_id     && `run_id=${run_id}`,
-        metadata   && `metadata=${JSON.stringify(metadata)}`,
-      ].filter(Boolean).join(", ");
-      return {
-        content: [{
-          type: "text",
-          text: `${data?.message || "Memories deleted."} (scope: ${scopeDesc})${wildcardScope ? " — wildcard used, this may have affected multiple entities." : ""}`,
-        }],
-      };
-    }
-  );
-
-  // ── Delete multiple memories in one call ─────────────────────────────────
-  server.tool(
-    "mem0_delete_batch",
-    "Permanently delete multiple Mem0 memories in a single call. Returns a per-item success/failure report.",
-    {
-      memory_ids: z.array(z.string()).min(1).describe("List of memory IDs to delete"),
-    },
-    async ({ memory_ids }) => {
-      const results = await Promise.allSettled(
-        memory_ids.map((id) => mem0Request(`/v1/memories/${id}/`, { method: "DELETE" }))
-      );
-      const lines = results.map((r, i) =>
-        r.status === "fulfilled"
-          ? `✓ Deleted: ${memory_ids[i]}`
-          : `✗ Failed:  ${memory_ids[i]} — ${r.reason?.message || r.reason}`
-      );
-      const deleted = results.filter((r) => r.status === "fulfilled").length;
-      return {
-        content: [{
-          type: "text",
-          text: `${deleted}/${memory_ids.length} deleted.\n\n${lines.join("\n")}`,
-        }],
-      };
-    }
-  );
-}
+  // ── Delete tools ─────────────────────────────────────────────────────────
+  // mem0_delete / mem0_delete_batch / mem0_delete_all were consolidated into
+  // one mem0_delete tool (action: one | batch | all) — see ./delete.js.
+  registerDelete(server);}
