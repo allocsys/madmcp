@@ -39,8 +39,8 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
     relations:  relationsSchema("Optional list of relations for this item — see the top-level relations param."),
     metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object for this memory"),
     infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content instead of storing it verbatim. Default: false."),
-    skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check for this item (only relevant when no entity_id is given). Default: false."),
-    duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) to flag an existing memory as a possible duplicate of this item. Default: 0.75."),
+    skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check for this item. Default: false — the check runs whether or not entity_id is given (an entity_id that doesn't exactly match an existing one still gets the semantic check)."),
+    duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) to flag an existing memory as a possible duplicate of this item. Default: 0.75. Candidates below this are not considered at all, so a value above 0.92 also raises the hard-block cutoff to that value."),
   });
 
   server.tool(
@@ -61,9 +61,9 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
       status:     z.enum(STATUS_VALUES).optional().describe("Lifecycle status (open/resolved/superseded). For 'add': left unset by default; memories marked \"superseded\" are hidden from mem0_find by default. For 'update': omit to leave status unchanged; existing tags/entity_id/other metadata are preserved regardless."),
       relations:  relationsSchema("For 'add': optional list of relations from this memory's entity to others, e.g. [{to_entity_id:'bug-4', relation:'blocks'}]. Stored under metadata.relations. Requires this memory's own entity_id to be set for self-loop protection. Dangling to_entity_id values (no matching entity_id found yet) are flagged non-blocking. For 'update': REPLACES the existing metadata.relations array whole (not merged); omit to leave relations unchanged; pass an empty array to clear all relations."),
       metadata:   z.record(z.any()).optional().describe("Optional arbitrary metadata object to attach (e.g. {project: 'manager.js'}). Used by 'add' only; use metadata_patch for 'update'."),
-      infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories. Used by 'add' only."),
+      infer:      z.boolean().optional().describe("If true, uses Mem0's LLM extraction to atomize/rephrase the content into inferred facts instead of storing it verbatim. Default: false (stores content verbatim as a 'direct import') to prevent extraction from scattering or restructuring stored memories. With infer:true the landed-check can't match rephrased content, so it only runs when an entity_id is given; otherwise the response says landing was not verified. Used by 'add' only."),
       skip_duplicate_check: z.boolean().optional().describe("If true, skip the Tier 2 similarity check against existing memories. Default: false — the check runs automatically, including when entity_id is given but doesn't exactly match anything existing. Set true for bulk/import scenarios where the extra search call's latency isn't worth it. Used by 'add' only."),
-      duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) for an existing memory to be flagged as a possible duplicate of this one. Default: 0.75. Note: regardless of this value, a candidate scoring >= 0.92 hard-blocks the add entirely (same as an exact entity_id match) rather than just flagging. Used by 'add' only."),
+      duplicate_threshold:  z.number().optional().describe("Minimum relevance score (0-1) for an existing memory to be flagged as a possible duplicate of this one. Default: 0.75. A candidate scoring >= 0.92 hard-blocks the add entirely (same as an exact entity_id match) rather than just flagging — but only candidates at or above this threshold are considered at all, so a threshold above 0.92 also raises the blocking cutoff to that value. Used by 'add' only."),
       items:      z.array(batchItemSchema).min(1).optional().describe("List of memories to add. Required (non-empty) for action 'add_batch'."),
       memory_id:  z.string().optional().describe("The memory ID to update. Required for action 'update'."),
       replacements: z.array(z.object({
@@ -141,10 +141,16 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
         if (Object.keys(meta).length) body.metadata = meta;
         const data = await mem0Request("/v3/memories/add/", { method: "POST", body });
         const eventId = data.event_id || data.id;
-        const landed = await verifyLanded({ user_id, agent_id, run_id, entity_id, content });
-        const landedNote = landed
-          ? ` Confirmed landed (id: ${landed.id}).`
-          : `\n\n⚠ Could not confirm this memory landed after several verification attempts — Mem0's async job may have silently failed (see madmcp-mem0-add-silent-failure-diagnostic). Re-run mem0_find shortly to check, and retry mem0_write (action 'add') if it's still missing.`;
+        // infer:true without an entity_id can't be verified: Mem0 may have
+        // rephrased the content, so the verbatim-content match would always
+        // report a false "could not confirm" after a wasted 3s wait + list call.
+        const verifiable = !(infer && !entity_id);
+        const landed = verifiable ? await verifyLanded({ user_id, agent_id, run_id, entity_id, content }) : null;
+        const landedNote = !verifiable
+          ? ` Landing not verified — infer:true lets Mem0 rephrase the content so it can't be matched verbatim (pass an entity_id to enable the check). Re-run mem0_find shortly to confirm.`
+          : landed
+            ? ` Confirmed landed (id: ${landed.id}).`
+            : `\n\n⚠ Could not confirm this memory landed after a single verification check (~3s wait; only the 20 most recent memories in scope are inspected) — Mem0's async job may have silently failed, or may just be slow (see madmcp-mem0-add-silent-failure-diagnostic). Re-run mem0_find shortly to check, and retry mem0_write (action 'add') if it's still missing.`;
         const relationNote = relationWarnings.length ? `\n\n⚠ Relations:\n${relationWarnings.map((w) => `  ${w}`).join("\n")}` : "";
         return {
           content: [{
@@ -161,7 +167,30 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
         if (!items?.length) {
           return { content: [{ type: "text", text: "action 'add_batch' requires items (at least one)." }], isError: true };
         }
-        const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, relations, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }) => {
+        // Items run concurrently and Mem0's add is async, so two items in ONE
+        // batch can't see each other through findByEntityId or the Tier 2
+        // search (neither has landed yet) and would both pass dedup. Catch the
+        // deterministic cases up front: same scope + same entity_id, or (unless
+        // skip_duplicate_check) same scope + identical trimmed/case-folded
+        // content. First occurrence wins; later ones are skipped. Similar but
+        // non-identical items inside one batch are still not caught here.
+        const scopeKey = (it) => [it.user_id ?? MEM0_USER_ID, it.agent_id ?? "", it.run_id ?? ""].join("|");
+        const seenBatchKeys = new Map();
+        const inBatchDuplicateOf = items.map((it, idx) => {
+          const keys = [];
+          if (it.entity_id) keys.push(`e|${scopeKey(it)}|${it.entity_id}`);
+          if (!it.skip_duplicate_check) keys.push(`c|${scopeKey(it)}|${(it.content || "").trim().toLowerCase()}`);
+          let dupOf = null;
+          for (const k of keys) {
+            if (seenBatchKeys.has(k)) dupOf = dupOf ?? seenBatchKeys.get(k);
+            else seenBatchKeys.set(k, idx);
+          }
+          return dupOf;
+        });
+        const results = await Promise.allSettled(items.map(async ({ content, user_id = MEM0_USER_ID, agent_id, run_id, categories, entity_id, status, relations, metadata, infer = false, skip_duplicate_check = false, duplicate_threshold = 0.75 }, idx) => {
+          if (inBatchDuplicateOf[idx] !== null) {
+            return { skipped: true, inBatch: true, ofIndex: inBatchDuplicateOf[idx] };
+          }
           if (entity_id) {
             const existing = await findByEntityId({ user_id, agent_id, run_id, entity_id });
             if (existing) {
@@ -196,13 +225,18 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
           if (run_id) body.run_id = run_id;
           if (Object.keys(meta).length) body.metadata = meta;
           const result = await mem0Request("/v3/memories/add/", { method: "POST", body });
-          const landed = await verifyLanded({ user_id, agent_id, run_id, entity_id, content });
-          return { ...result, duplicatesFlagged, relationWarnings, landed: !!landed, landedId: landed?.id };
+          // infer:true without an entity_id can't be matched verbatim -- see 'add'.
+          const verifiable = !(infer && !entity_id);
+          const landed = verifiable ? await verifyLanded({ user_id, agent_id, run_id, entity_id, content }) : null;
+          return { ...result, duplicatesFlagged, relationWarnings, landed: !!landed, landedId: landed?.id, unverifiable: !verifiable };
         }));
         const lines = results.map((r, i) => {
           const title = (items[i].content || "").split("\n")[0].slice(0, 60);
           if (r.status === "fulfilled") {
             if (r.value?.skipped) {
+              if (r.value.inBatch) {
+                return `⏭ [${i}] "${title}" — skipped, duplicate of item [${r.value.ofIndex}] in this same batch (same entity_id or identical content). Send one merged item instead.`;
+              }
               if (r.value.blocked) {
                 return `⛔ [${i}] "${title}" — blocked, near-identical (score ${r.value.existingScore.toFixed(2)}) to existing memory (id: ${r.value.existingId}). No duplicate created. Merge and call mem0_write (action 'update') yourself if this content adds anything new.`;
               }
@@ -211,7 +245,9 @@ export function register(server, { STATUS_VALUES, BLOCKING_DUPLICATE_THRESHOLD, 
             const eventId = r.value.event_id || r.value.id || "ok";
             const dupNote = r.value.duplicatesFlagged?.length ? ` ⚠ flagged as possible duplicate of ${r.value.duplicatesFlagged.join(", ")}` : "";
             const relNote = r.value.relationWarnings?.length ? ` ⚠ relations: ${r.value.relationWarnings.join("; ")}` : "";
-            const landedNote = r.value.landed ? ` — confirmed landed (id: ${r.value.landedId})` : ` — ⚠ could not confirm this landed, check manually`;
+            const landedNote = r.value.unverifiable
+              ? ` — landing not verified (infer:true without entity_id can't be matched verbatim)`
+              : r.value.landed ? ` — confirmed landed (id: ${r.value.landedId})` : ` — ⚠ could not confirm this landed, check manually`;
             return `✓ [${i}] "${title}" — event_id: ${eventId}${dupNote}${relNote}${landedNote}`;
           }
           return `✗ [${i}] "${title}" — error: ${r.reason?.message || r.reason}`;

@@ -139,6 +139,14 @@ describe("Mem0 connector - consolidated mem0_delete (one/batch/all)", () => {
       expect(mem0Request).toHaveBeenCalledWith("/v1/memories/?agent_id=a1", { method: "DELETE" });
     });
 
+    it("warns in the result when the scope has no user_id filter", async () => {
+      mem0Request.mockResolvedValueOnce({ message: "ok" });
+      const result = await server.tools.mem0_delete({ action: "all", confirm: true, agent_id: "a1" });
+      expect(result.content[0].text).toBe(
+        "ok (scope: agent_id=a1) — no user_id filter was given, so this was not restricted to a single user."
+      );
+    });
+
     it("adds the wildcard warning when '*' is used", async () => {
       mem0Request.mockResolvedValueOnce({ message: "done" });
       const result = await server.tools.mem0_delete({ action: "all", confirm: true, user_id: "*" });

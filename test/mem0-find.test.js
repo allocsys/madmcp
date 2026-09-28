@@ -40,22 +40,22 @@ describe("Mem0 connector - consolidated mem0_find (list/search)", () => {
   });
 
   describe("action 'list'", () => {
-    it("sends the default request (page 1, over-fetch 2x, user scope only)", async () => {
+    it("sends the default request (page 1, page_size = limit, user scope only)", async () => {
       mem0Request.mockResolvedValueOnce({ results: [] });
       const result = await server.tools.mem0_find({ action: "list" });
       expect(mem0Request).toHaveBeenCalledWith("/v3/memories/", {
         method: "POST",
-        body: { filters: { user_id: MEM0_USER_ID }, page: 1, page_size: 40 },
+        body: { filters: { user_id: MEM0_USER_ID }, page: 1, page_size: 20 },
       });
       expect(result.content[0].text).toBe("No memories found.");
     });
 
-    it("over-fetches limit+20 for small limits and passes page + a metadata-augmented fields projection", async () => {
+    it("uses page_size = limit (no over-fetch, so pages don't skip items) and passes page + a metadata-augmented fields projection", async () => {
       mem0Request.mockResolvedValueOnce({ results: [] });
       await server.tools.mem0_find({ action: "list", limit: 5, page: 3, fields: ["id", "memory"], user_id: "u1" });
       expect(mem0Request).toHaveBeenCalledWith("/v3/memories/", {
         method: "POST",
-        body: { filters: { user_id: "u1" }, page: 3, page_size: 25, fields: ["id", "memory", "metadata"] },
+        body: { filters: { user_id: "u1" }, page: 3, page_size: 5, fields: ["id", "memory", "metadata"] },
       });
     });
 
