@@ -304,18 +304,14 @@ export function register(server) {
     }
   );
 
-  server.tool(
-    "search_code",
-    "DOES: Search code across GitHub repos.\n" +
-    "RULE: `ref` (branch, tag, or commit SHA) is REQUIRED, alongside a repo:owner/name qualifier in the query -- GitHub's real /search/code index only ever covers a repo's default branch, so every call always uses the local content-search fallback directly instead (fetches the repo as a tarball at `ref` and greps it locally -- see fallbackCodeSearch; also handles GitHub's known private-repo search-index gap along the way).\n" +
-    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining this manually.\n" +
-    "RULE: query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map.query (mode: search) instead.",
-    {
-      query:    z.string().describe("Search query (e.g. 'VLESS filename:worker.js user:dumbCodesOnly')"),
-      per_page: z.number().optional().describe("Number of results to return, max 100 (default: 20)"),
-      ref:      z.string().describe("Branch, tag, or commit SHA to search. Requires a repo:owner/name qualifier in `query`. GitHub's search index only covers the default branch, so this always uses the local content-search fallback rather than the real API."),
-    },
-    async ({ query, per_page = 20, ref }) => {
+}
+
+// ---------------------------------------------------------------------------
+// search_code implementation. Exported so repo_inspect (action: 'search') can
+// call it; it is no longer registered as its own MCP tool. Behavior unchanged.
+// repo_inspect requires `ref` (branch, tag, or commit SHA) before calling.
+// ---------------------------------------------------------------------------
+export async function runSearchCode({ query, per_page = 20, ref }) {
       const scoped = extractRepoQualifier(query);
 
       if (ref) {
@@ -388,6 +384,4 @@ export function register(server) {
       }
 
       return { content: [{ type: "text", text: "No results found." }] };
-    }
-  );
 }
