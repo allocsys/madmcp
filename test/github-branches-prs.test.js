@@ -125,6 +125,7 @@ describe("GitHub Connector - Branches & Commits", () => {
         action: "list_commits",
         owner: "allocsys",
         repo: "madmcp",
+        branch: "main",
       });
 
       expect(result.content[0].text).toBe("(no commits)");
