@@ -271,7 +271,7 @@
 
     <div class="cards" id="cards">
       <div class="cards-head">Manifest log</div>
-      <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p><p class="tech">repo_inspect (search) · 1 file matched, no timeout set</p></div>
+      <div class="card active" data-id="0"><div class="tag-row"><span class="tag">Step 1 · GitHub</span><span class="metric">118ms</span></div><p>Finds the suspect code path in the real repo.</p><p class="tech">search_code · 1 file matched, no timeout set</p></div>
       <div class="card" data-id="1"><div class="tag-row"><span class="tag">Step 2 · Cloudflare</span><span class="metric">204ms</span></div><p>Pulls live Workers metrics to confirm the hunch.</p><p class="tech">cf_workers_observability_query · 0.93 correlation to traffic</p></div>
       <div class="card" data-id="2"><div class="tag-row"><span class="tag">Step 3 · GitHub</span><span class="metric">237ms</span></div><p>Commits the fix and opens a PR in the same turn.</p><p class="tech">overwrite_files + pr_write (create) · PR #482</p></div>
       <div class="card" data-id="3"><div class="tag-row"><span class="tag">Step 4 · Notion</span><span class="metric">312ms</span></div><p>Updates the incident doc to match reality.</p><p class="tech">notion_update · status → In review</p></div>
@@ -302,7 +302,7 @@
     { id:'gh', label:'GITHUB · SEARCH', lines:[
       ['prompt','> edge-router is slow under load — find the suspect code'],
       ['why','Why: checkout latency usually traces to an unbounded downstream call, not the router itself — search the code before touching infra.'],
-      ['call','→ repo_inspect({ action: "search", ref: "main", query: "legacyPricingService repo:acme-labs/edge-router", per_page: 10 })'],
+      ['call','→ search_code({ ref: "main", query: "legacyPricingService repo:acme-labs/edge-router", per_page: 10 })'],
       ['result','checkout.js:142  await legacyPricingService.call(req.body)\ncheckout.js:143  // TODO: no timeout — revisit before GA\n1 file matched · 0 other callers found'],
       ['stamped','✓ stamped · 118ms · 1 match, no timeout set']
     ], ms:118},

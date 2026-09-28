@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commons%20Clause-blue?style=flat-square)](./LICENSE)
 
 <a href="https://allocsys.github.io/madmcp/demo.html">
-  <img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&size=15&duration=2600&pause=900&color=E8A33D&center=true&vCenter=true&width=580&lines=%E2%86%92+tool_call+repo_inspect(%7B+action%3A+%22search%22+%7D);%E2%9C%93+200+%C2%B7+118ms+%C2%B7+1+match%2C+no+timeout+set;%E2%86%92+tool_call+pr_write(%7B+action%3A+%22create%22+%7D);%E2%9C%93+PR+%23482+opened+against+main;%E2%86%92+tool_call+mem0_add(%7B+entity_id%3A+%22edge-router-incident%22+%7D)" alt="typing animation of a madmcp tool-call trace" />
+  <img src="https://readme-typing-svg.demolab.com?font=IBM+Plex+Mono&size=15&duration=2600&pause=900&color=E8A33D&center=true&vCenter=true&width=580&lines=%E2%86%92+tool_call+search_code(%7B+ref%3A+%22main%22+%7D);%E2%9C%93+200+%C2%B7+118ms+%C2%B7+1+match%2C+no+timeout+set;%E2%86%92+tool_call+pr_write(%7B+action%3A+%22create%22+%7D);%E2%9C%93+PR+%23482+opened+against+main;%E2%86%92+tool_call+mem0_add(%7B+entity_id%3A+%22edge-router-incident%22+%7D)" alt="typing animation of a madmcp tool-call trace" />
 </a>
 
 **[▶ Watch the live protocol trace](https://allocsys.github.io/madmcp/demo.html)**
@@ -228,7 +228,11 @@ File/repo ops: `read_file` (accepts optional `char_offset`/`char_limit` to page 
 `get_file_tree`, `create_repo_file`, `edit_file`, `overwrite_files`, `rename_file`,
 `delete_file`
 
-Repo inspection: `repo_inspect` — one tool, selected by `action`: `at_commit` (file contents at a commit SHA), `diff`, `search` (code search; requires `ref` and a `repo:owner/name` qualifier in `query`), `branch_protection`, `list_branches`, `create_branch`, `list_commits`, `get_commit`. Only `create_branch` mutates. Consolidated from the former `get_file_at_commit`, `diff_files`, `search_code`, `get_branch_protection`, `list_branches`, `create_branch`, `list_commits`, and `get_commit` tools.
+Repo inspection (read-only): `repo_inspect` — one tool, selected by `action`: `at_commit` (file contents at a commit SHA), `diff`, `branch_protection`, `list_branches`, `list_commits`, `get_commit`. Consolidated from the former `get_file_at_commit`, `diff_files`, `get_branch_protection`, `list_branches`, `list_commits`, and `get_commit` tools.
+
+Code search: `search_code` — standalone; requires `ref` and a `repo:owner/name` qualifier in `query`. The rest of the query is matched as one literal string (no OR; `filename:`/`extension:` qualifiers are stripped).
+
+Branch creation (mutating): `create_branch` — standalone; requires `owner`, `repo` and the new `branch` name, with optional `from_branch`.
 
 Issues: `issue_manage` (`action`: `get` | `list` | `create` | `update` | `comment` | `search`), replacing `get_issue`, `list_issues`, `create_issue`, `update_issue`, `add_issue_comment`, `search_issues`. `search` is cross-repo and ignores `owner`/`repo` (scope it with qualifiers in `query`); `comment` works on PRs too.
 

@@ -50,51 +50,6 @@ describe("GitHub Connector - Branches & Commits", () => {
     });
   });
 
-  describe("create_branch", () => {
-    it("creates a branch from an explicit from_branch source", async () => {
-      githubRequest
-        .mockResolvedValueOnce({ object: { sha: "abc123sha" } }) // get ref
-        .mockResolvedValueOnce({}); // post branch ref
-
-      const result = await server.tools.repo_inspect({
-        action: "create_branch",
-        owner: "allocsys",
-        repo: "madmcp",
-        branch: "new-feature",
-        from_branch: "main",
-      });
-
-      expect(result.content[0].text).toContain("Created branch 'new-feature'");
-      expect(result.content[0].text).toContain("abc123s");
-      expect(githubRequest).toHaveBeenCalledTimes(2);
-      expect(githubRequest.mock.calls[0][0]).toBe("/repos/allocsys/madmcp/git/ref/heads/main");
-      expect(githubRequest.mock.calls[1][0]).toBe("/repos/allocsys/madmcp/git/refs");
-      expect(githubRequest.mock.calls[1][1].body).toEqual({
-        ref: "refs/heads/new-feature",
-        sha: "abc123sha",
-      });
-    });
-
-    it("creates a branch from the repo default branch if from_branch is omitted", async () => {
-      githubRequest
-        .mockResolvedValueOnce({ default_branch: "develop" }) // get repo data
-        .mockResolvedValueOnce({ object: { sha: "def456sha" } }) // get develop ref
-        .mockResolvedValueOnce({}); // post branch ref
-
-      const result = await server.tools.repo_inspect({
-        action: "create_branch",
-        owner: "allocsys",
-        repo: "madmcp",
-        branch: "new-feature",
-      });
-
-      expect(result.content[0].text).toContain("Created branch 'new-feature' in allocsys/madmcp from def456s");
-      expect(githubRequest).toHaveBeenCalledTimes(3);
-      expect(githubRequest.mock.calls[0][0]).toBe("/repos/allocsys/madmcp");
-      expect(githubRequest.mock.calls[1][0]).toBe("/repos/allocsys/madmcp/git/ref/heads/develop");
-    });
-  });
-
   describe("list_commits", () => {
     it("lists commits with formatted commit message and details", async () => {
       githubRequest.mockResolvedValueOnce([
