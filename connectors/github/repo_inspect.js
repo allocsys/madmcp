@@ -98,7 +98,8 @@ export function register(server) {
   server.tool(
     "repo_inspect",
     "DOES: Inspect a GitHub repository's branches, commit history, file contents at a point in time, diffs, and branch protection. Use `action` to pick. READ-ONLY (creating a branch is create_branch; code search is search_code).\n" +
-    "RULE: 'list_branches' needs repo.\n" +
+    "RULE: repo is required for every action. owner defaults to 'allocsys' EXCEPT for 'list_commits' and 'get_commit', where it is required.\n" +
+    "RULE: 'list_branches' needs only repo.\n" +
     "RULE: 'list_commits' needs owner + repo + branch. 'get_commit' needs owner + repo + sha.\n" +
     "RULE: 'branch_protection' needs repo + branch (e.g. 'main'). Use it to see upfront why a PR might be gated, instead of discovering it from a rejected merge. Reading protection requires admin access on the repo.\n" +
     "RULE: 'at_commit' needs repo + path + commit, where commit MUST be a commit SHA (not a branch/tag). Equivalent concept to read_file's `ref`, which also accepts branch/tag names.\n" +
