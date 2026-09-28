@@ -9,48 +9,83 @@ function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
+function errorResult(text) {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
 export function register(server) {
+  // Replaces the former cf_kv_namespace (get | list). Requests and output are
+  // unchanged.
   server.tool(
-    "cf_kv_namespace",
-    "DOES: Get a single KV namespace (pass namespace_id), OR list all KV namespaces in your Cloudflare account (omit namespace_id).\n" +
-    "RULE: namespace_id set -> page/per_page/order/direction ignored.",
+    "cf_kv_read",
+    "DOES: Read KV namespaces in your Cloudflare account. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'get' requires namespace_id and returns that single namespace.\n" +
+    "RULE: action 'list' lists all KV namespaces; optional page, per_page, order, direction.\n" +
+    "RULE: page/per_page/order/direction apply to 'list' only.",
     {
-      namespace_id: z.string().optional().describe("If provided, fetch this single namespace instead of listing."),
-      page: z.number().optional().describe("Page number when listing. Ignored if namespace_id is given."),
-      per_page: z.number().optional().describe("Results per page when listing. Ignored if namespace_id is given."),
-      order: z.enum(["id", "title"]).optional().describe("Sort field when listing. Ignored if namespace_id is given."),
-      direction: z.enum(["asc", "desc"]).optional().describe("Sort direction when listing. Ignored if namespace_id is given."),
+      action: z.enum(["get", "list"]).describe("Which operation to perform"),
+      namespace_id: z.string().optional().describe("The namespace ID. Required for action 'get'."),
+      page: z.number().optional().describe("Page number. Used by 'list' only."),
+      per_page: z.number().optional().describe("Results per page. Used by 'list' only."),
+      order: z.enum(["id", "title"]).optional().describe("Sort field. Used by 'list' only."),
+      direction: z.enum(["asc", "desc"]).optional().describe("Sort direction. Used by 'list' only."),
     },
-    async ({ namespace_id, page, per_page, order, direction }) => {
-      if (namespace_id) {
+    async ({ action, namespace_id, page, per_page, order, direction }) => {
+      if (action === "get") {
+        if (!namespace_id) return errorResult("action 'get' requires namespace_id.");
         return textResult(await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`));
       }
-      const params = new URLSearchParams();
-      if (page) params.set("page", String(page));
-      if (per_page) params.set("per_page", String(per_page));
-      if (order) params.set("order", order);
-      if (direction) params.set("direction", direction);
-      const qs = params.toString() ? `?${params.toString()}` : "";
-      return textResult(await cfAccountRequest(`/storage/kv/namespaces${qs}`));
+
+      if (action === "list") {
+        const params = new URLSearchParams();
+        if (page) params.set("page", String(page));
+        if (per_page) params.set("per_page", String(per_page));
+        if (order) params.set("order", order);
+        if (direction) params.set("direction", direction);
+        const qs = params.toString() ? `?${params.toString()}` : "";
+        return textResult(await cfAccountRequest(`/storage/kv/namespaces${qs}`));
+      }
+
+      return errorResult(`Unknown action '${action}'.`);
     }
   );
 
+  // Replaces the former cf_kv_namespace_create and cf_kv_namespace_update.
+  // Deletion is intentionally not part of this tool (it will move to a
+  // separate guarded delete tool).
   server.tool(
-    "cf_kv_namespace_create",
-    "Create a new kv namespace in your Cloudflare account",
-    { title: z.string() },
-    async ({ title }) =>
-      textResult(await cfAccountRequest("/storage/kv/namespaces", { method: "POST", body: { title } }))
+    "cf_kv_manage",
+    "DOES: Create or rename KV namespaces in your Cloudflare account. MUTATES Cloudflare state. Use `action` to pick.\n" +
+    "RULE: action 'create' requires title and creates a new namespace.\n" +
+    "RULE: action 'update' requires namespace_id and title and renames that namespace.\n" +
+    "RULE: namespace_id applies to 'update' only.\n" +
+    "NOT: deleting a namespace -> cf_kv_namespace_delete.",
+    {
+      action: z.enum(["create", "update"]).describe("Which operation to perform"),
+      namespace_id: z.string().optional().describe("The namespace ID. Required for action 'update'."),
+      title: z.string().optional().describe("Namespace title. Required for actions 'create' and 'update'."),
+    },
+    async ({ action, namespace_id, title }) => {
+      if (action === "create") {
+        if (title === undefined) return errorResult("action 'create' requires title.");
+        return textResult(await cfAccountRequest("/storage/kv/namespaces", { method: "POST", body: { title } }));
+      }
+
+      if (action === "update") {
+        const missing = [];
+        if (namespace_id === undefined) missing.push("namespace_id");
+        if (title === undefined) missing.push("title");
+        if (missing.length) return errorResult(`action 'update' requires ${missing.join(" and ")}.`);
+        return textResult(
+          await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`, { method: "PUT", body: { title } })
+        );
+      }
+
+      return errorResult(`Unknown action '${action}'.`);
+    }
   );
 
-  server.tool(
-    "cf_kv_namespace_update",
-    "Update the title of a kv namespace in your Cloudflare account",
-    { namespace_id: z.string(), title: z.string() },
-    async ({ namespace_id, title }) =>
-      textResult(await cfAccountRequest(`/storage/kv/namespaces/${namespace_id}`, { method: "PUT", body: { title } }))
-  );
-
+  // Kept until the guarded delete tool lands (last group of the overhaul).
   server.tool(
     "cf_kv_namespace_delete",
     "Delete a kv namespace in your Cloudflare account",

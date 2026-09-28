@@ -255,7 +255,7 @@ Codespaces: `codespace_manage` (`action`: `list` | `get` | `machines` | `create`
 ### Cloudflare
 D1: `cf_d1_read` (action: get | list), `cf_d1_manage` (action: create), `cf_d1_query`, `cf_d1_database_delete` (to move into a guarded delete tool)
 
-KV: `cf_kv_namespace` (list/get), `cf_kv_namespace_create/update/delete`
+KV: `cf_kv_read` (action: get | list), `cf_kv_manage` (action: create | update), `cf_kv_namespace_delete` (to move into a guarded delete tool)
 
 R2: `cf_r2_bucket` (list/get), `cf_r2_bucket_create/delete`
 
