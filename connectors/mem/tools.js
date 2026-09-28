@@ -717,7 +717,7 @@ export function register(server) {
     }
   );
 
-  // ── Add multiple memories in one call ──────────────────────────────────────
+  // REMOVE-START
   server.tool(
     "mem0_add_batch",
     "Add multiple memories to your Mem0 workspace in a single call, to reduce round trips. Each item is submitted as its own extraction request.",
