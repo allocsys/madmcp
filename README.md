@@ -41,7 +41,7 @@ of relying on manual copy/paste between tabs.
 
 `DEFAULT_OWNER` defaults to `your forked repo`, and the GitHub connector exposes
 full read/write/PR tooling (`read_file`, `edit_file`,
-`create_pull_request`, `merge_pull_request`, etc.) — not a read-only subset.
+`pr_write` with `create` / `merge`, etc.) — not a read-only subset.
 That combination means an agent connected to this server has direct write
 access to this very repo: it can read its own source, diagnose a bug or a
 gap in the docs, and commit the fix — or open a PR against itself — through
@@ -52,7 +52,7 @@ way. Worth being precise about what this is *not*: the server doesn't
 modify itself unprompted on some schedule — every change still starts with
 an agent invoked by a person. What's notable is that there's no separate
 admin path or special-cased self-access; a connected agent uses the exact
-same `edit_file`/`create_pull_request` tools on this repo as on any
+same `edit_file`/`pr_write` tools on this repo as on any
 other repo it has a token for.
 
 ## Live demo
@@ -230,8 +230,9 @@ File/repo ops: `read_file` (accepts optional `char_offset`/`char_limit` to page 
 
 Repo inspection: `repo_inspect` — one tool, selected by `action`: `at_commit` (file contents at a commit SHA), `diff`, `search` (code search; requires `ref` and a `repo:owner/name` qualifier in `query`), `branch_protection`, `list_branches`, `create_branch`, `list_commits`, `get_commit`. Only `create_branch` mutates. Consolidated from the former `get_file_at_commit`, `diff_files`, `search_code`, `get_branch_protection`, `list_branches`, `create_branch`, `list_commits`, and `get_commit` tools.
 
-Issues & PRs: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`,
-`create_pull_request`, `update_pull_request`, `review_pull_request`, `merge_pull_request`
+Issues: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`
+
+Pull request writes (mutating): `pr_write` (`action`: `create` | `update` | `merge` | `review` | `request_reviewers` | `remove_reviewers` | `inline_comment`), replacing `create_pull_request`, `update_pull_request`, `merge_pull_request`, `review_pull_request`, `request_reviewers`, `remove_requested_reviewers`, `add_review_comment`. `merge` is irreversible via this tool.
 
 Pull request reads: `pr_read` (`action`: `list` | `get` | `activity` | `mergeability`), read-only, replacing `get_pull_requests`, `get_pr_activity`, `get_pr_mergeability`. `mergeability` polls server-side (up to 4 tries) since GitHub computes it async.
 
@@ -245,7 +246,7 @@ Actions & search: `list_workflow_runs`, `get_workflow_run_logs`, `get_job_logs`,
 
 CI control: `trigger_workflow`, `rerun_workflow`, `cancel_workflow_run`, `get_check_runs`, `get_combined_status`
 
-Review control: `request_reviewers`, `remove_requested_reviewers`, `add_review_comment`, `list_notifications`
+Notifications: `list_notifications`
 
 Codespaces: `list_codespaces`, `get_codespace`, `list_codespace_machines`, `create_codespace`, `start_codespace`, `stop_codespace`, `delete_codespace` (requires the `codespace` PAT scope on `GITHUB_TOKEN` — see [API_KEYS.md](./docs/API_KEYS.md)). **Runtime requirement:** `exec_in_codespace` requires the GitHub CLI (`gh`) to be installed and authenticated on the server running this MCP instance.
 

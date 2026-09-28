@@ -9,7 +9,7 @@ vi.mock("../connectors/github/client.js", () => ({
 import { githubRequest, githubGraphQL } from "../connectors/github/client.js";
 import { register as registerRepoInspect } from "../connectors/github/repo_inspect.js";
 import { register as registerPRRead } from "../connectors/github/pr_read.js";
-import { register as registerPRs } from "../connectors/github/prs.js";
+import { register as registerPRWrite } from "../connectors/github/pr_write.js";
 
 function makeFakeServer() {
   const tools = {};
@@ -171,7 +171,7 @@ describe("GitHub Connector - Pull Requests", () => {
     vi.clearAllMocks();
     server = makeFakeServer();
     registerPRRead(server);
-    registerPRs(server);
+    registerPRWrite(server);
   });
 
   describe("get_pull_requests — list mode", () => {
@@ -367,7 +367,8 @@ describe("GitHub Connector - Pull Requests", () => {
         html_url: "https://github.com/allocsys/madmcp/pull/50",
       });
 
-      const result = await server.tools.create_pull_request({
+      const result = await server.tools.pr_write({
+        action: "create",
         owner: "allocsys",
         repo: "madmcp",
         title: "New awesome branch",
@@ -387,7 +388,8 @@ describe("GitHub Connector - Pull Requests", () => {
 
   describe("update_pull_request", () => {
     it("returns descriptive message if no fields are specified", async () => {
-      const result = await server.tools.update_pull_request({
+      const result = await server.tools.pr_write({
+        action: "update",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -401,7 +403,8 @@ describe("GitHub Connector - Pull Requests", () => {
         html_url: "https://github.com/allocsys/madmcp/pull/42",
       });
 
-      const result = await server.tools.update_pull_request({
+      const result = await server.tools.pr_write({
+        action: "update",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -426,7 +429,8 @@ describe("GitHub Connector - Pull Requests", () => {
 
       githubGraphQL.mockResolvedValueOnce({});
 
-      const result = await server.tools.update_pull_request({
+      const result = await server.tools.pr_write({
+        action: "update",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -447,7 +451,8 @@ describe("GitHub Connector - Pull Requests", () => {
           draft: false,
         });
 
-      const result = await server.tools.update_pull_request({
+      const result = await server.tools.pr_write({
+        action: "update",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -466,7 +471,8 @@ describe("GitHub Connector - Pull Requests", () => {
         sha: "mergecommitsha123",
       });
 
-      const result = await server.tools.merge_pull_request({
+      const result = await server.tools.pr_write({
+        action: "merge",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -490,7 +496,8 @@ describe("GitHub Connector - Pull Requests", () => {
         id: 112233,
       });
 
-      const result = await server.tools.review_pull_request({
+      const result = await server.tools.pr_write({
+        action: "review",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
