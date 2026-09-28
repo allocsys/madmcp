@@ -15,6 +15,7 @@ import { register as registerCiManage  } from "./ci_manage.js";
 import { register as registerReviewControl } from "./review_control.js";
 import { register as registerRepoMgmt } from "./repo_mgmt.js";
 import { register as registerCloneToken } from "./clone_token.js";
+import { register as registerCodespaceManage } from "./codespace_manage.js";
 import { register as registerCodespaces } from "./codespaces.js";
 import { register as registerEditor     } from "../delegate/editor/editor_tools.js";
 
@@ -30,6 +31,7 @@ export function register(server) {
   registerReviewControl(server);
   registerRepoMgmt(server);
   registerCloneToken(server);
+  registerCodespaceManage(server);
   registerCodespaces(server);
   // Self-gates on EDITOR_AGENT_ENABLED -- a no-op call unless the flag 
   // is on, so delegate_editor doesn't appear on the MCP surface until a 

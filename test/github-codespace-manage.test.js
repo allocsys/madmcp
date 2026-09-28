@@ -1,9 +1,10 @@
 // ---------------------------------------------------------------------------
-// test/github-codespaces.test.js
+// test/github-codespace-manage.test.js
 //
-// Direct unit coverage for connectors/github/codespaces.js: list_codespaces,
-// get_codespace, list_codespace_machines, create_codespace, start_codespace,
-// stop_codespace, delete_codespace.
+// Direct unit coverage for connectors/github/codespace_manage.js: the
+// codespace_manage tool (list | get | machines | create | start | stop |
+// delete). Retargeted from the former per-tool tests in
+// github-codespaces.test.js.
 //
 // githubRequest is mocked -- this is a handler unit test, not a live-network
 // test (see mcp-integration.test.js / server-e2e.test.js for tests that go
@@ -17,7 +18,7 @@ vi.mock("../connectors/github/client.js", () => ({
 }));
 
 import { githubRequest } from "../connectors/github/client.js";
-import { register } from "../connectors/github/codespaces.js";
+import { register } from "../connectors/github/codespace_manage.js";
 
 // Minimal fake MCP server: just captures the handler function for each
 // registered tool name so tests can call it directly.
@@ -31,16 +32,51 @@ function makeFakeServer() {
   };
 }
 
-describe("connectors/github/codespaces.js", () => {
+describe("connectors/github/codespace_manage.js", () => {
   let server;
+  const call = (args) => server.tools.codespace_manage(args);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    githubRequest.mockReset();
     server = makeFakeServer();
     register(server);
   });
 
-  describe("list_codespaces", () => {
+  it("registers a single codespace_manage tool and none of the old names", () => {
+    expect(Object.keys(server.tools)).toEqual(["codespace_manage"]);
+  });
+
+  describe("validation", () => {
+    it.each(["get", "start", "stop", "delete"])("requires codespace_name for %s", async (action) => {
+      const r = await call({ action });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("requires codespace_name");
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it.each(["machines", "create"])("requires repo for %s", async (action) => {
+      const r = await call({ action, ref: "main" });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("requires repo");
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it.each(["machines", "create"])("requires ref for %s", async (action) => {
+      const r = await call({ action, repo: "madmcp" });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("requires ref");
+      expect(githubRequest).not.toHaveBeenCalled();
+    });
+
+    it("list needs no params", async () => {
+      githubRequest.mockResolvedValueOnce({ total_count: 0, codespaces: [] });
+      const r = await call({ action: "list" });
+      expect(r.isError).toBeUndefined();
+    });
+  });
+
+  describe("list", () => {
     it("lists codespaces across all repos when no repo is given", async () => {
       githubRequest.mockResolvedValueOnce({
         total_count: 1,
@@ -54,7 +90,7 @@ describe("connectors/github/codespaces.js", () => {
         }],
       });
 
-      const result = await server.tools.list_codespaces({});
+      const result = await call({ action: "list" });
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces");
       expect(result.content[0].text).toMatch(/1 codespace\(s\)/);
@@ -66,7 +102,7 @@ describe("connectors/github/codespaces.js", () => {
         .mockResolvedValueOnce({ id: 4242 })
         .mockResolvedValueOnce({ total_count: 0, codespaces: [] });
 
-      const result = await server.tools.list_codespaces({ repo: "madmcp" });
+      const result = await call({ action: "list", repo: "madmcp" });
 
       expect(githubRequest).toHaveBeenNthCalledWith(1, "/repos/allocsys/madmcp");
       expect(githubRequest).toHaveBeenNthCalledWith(2, "/user/codespaces?repository_id=4242");
@@ -76,7 +112,7 @@ describe("connectors/github/codespaces.js", () => {
     it("reports no codespaces found when the list is empty (no repo scope)", async () => {
       githubRequest.mockResolvedValueOnce({ total_count: 0, codespaces: [] });
 
-      const result = await server.tools.list_codespaces({});
+      const result = await call({ action: "list" });
 
       expect(result.content[0].text).toBe("No codespaces found.");
     });
@@ -86,11 +122,11 @@ describe("connectors/github/codespaces.js", () => {
         new Error("GitHub API error (403): Resource not accessible by personal access token")
       );
 
-      await expect(server.tools.list_codespaces({})).rejects.toThrow(/403/);
+      await expect(call({ action: "list" })).rejects.toThrow(/403/);
     });
   });
 
-  describe("get_codespace", () => {
+  describe("get", () => {
     it("returns formatted details for a codespace", async () => {
       githubRequest.mockResolvedValueOnce({
         name: "curly-fiesta-abc123",
@@ -103,7 +139,7 @@ describe("connectors/github/codespaces.js", () => {
         web_url: "https://github.com/codespaces/curly-fiesta-abc123",
       });
 
-      const result = await server.tools.get_codespace({ codespace_name: "curly-fiesta-abc123" });
+      const result = await call({ action: "get", codespace_name: "curly-fiesta-abc123" });
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123");
       expect(result.content[0].text).toMatch(/curly-fiesta-abc123 \[Available\]/);
@@ -113,13 +149,13 @@ describe("connectors/github/codespaces.js", () => {
     it("surfaces a 404 when the codespace doesn't exist", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
-      await expect(server.tools.get_codespace({ codespace_name: "does-not-exist" }))
+      await expect(call({ action: "get", codespace_name: "does-not-exist" }))
         .rejects.toThrow(/404/);
     });
   });
 
-  describe("list_codespace_machines", () => {
-    it("lists available machine types for a repo", async () => {
+  describe("machines", () => {
+    it("lists available machine types for a repo at a ref", async () => {
       githubRequest.mockResolvedValueOnce({
         machines: [{
           name: "basicLinux32gb",
@@ -131,40 +167,40 @@ describe("connectors/github/codespaces.js", () => {
         }],
       });
 
-      const result = await server.tools.list_codespace_machines({ repo: "madmcp" });
+      const result = await call({ action: "machines", repo: "madmcp", ref: "main" });
 
-      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/codespaces/machines");
+      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/codespaces/machines?ref=main");
       expect(result.content[0].text).toMatch(/basicLinux32gb/);
       expect(result.content[0].text).toMatch(/2 vCPU, 8GB RAM, 32GB storage/);
       expect(result.content[0].text).toMatch(/\[prebuild: ready\]/);
     });
 
-    it("appends ref as a query param when given", async () => {
+    it("url-encodes ref in the query param", async () => {
       githubRequest.mockResolvedValueOnce({ machines: [] });
 
-      const result = await server.tools.list_codespace_machines({ repo: "madmcp", ref: "feature-x" });
+      const result = await call({ action: "machines", repo: "madmcp", ref: "feature/x" });
 
-      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/codespaces/machines?ref=feature-x");
-      expect(result.content[0].text).toMatch(/No available machine types for allocsys\/madmcp@feature-x/);
+      expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/codespaces/machines?ref=feature%2Fx");
+      expect(result.content[0].text).toMatch(/No available machine types for allocsys\/madmcp@feature\/x/);
     });
 
     it("uses the given owner instead of the default", async () => {
       githubRequest.mockResolvedValueOnce({ machines: [] });
 
-      await server.tools.list_codespace_machines({ owner: "someoneelse", repo: "theirrepo" });
+      await call({ action: "machines", owner: "someoneelse", repo: "theirrepo", ref: "main" });
 
-      expect(githubRequest).toHaveBeenCalledWith("/repos/someoneelse/theirrepo/codespaces/machines");
+      expect(githubRequest).toHaveBeenCalledWith("/repos/someoneelse/theirrepo/codespaces/machines?ref=main");
     });
 
     it("propagates the error when the repo doesn't exist", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
-      await expect(server.tools.list_codespace_machines({ repo: "does-not-exist" }))
+      await expect(call({ action: "machines", repo: "does-not-exist", ref: "main" }))
         .rejects.toThrow(/404/);
     });
   });
 
-  describe("create_codespace", () => {
+  describe("create", () => {
     it("sends only the params that were actually passed (no undefined keys)", async () => {
       githubRequest.mockResolvedValueOnce({
         name: "new-codespace-xyz",
@@ -172,11 +208,11 @@ describe("connectors/github/codespaces.js", () => {
         web_url: "https://github.com/codespaces/new-codespace-xyz",
       });
 
-      const result = await server.tools.create_codespace({ repo: "madmcp" });
+      const result = await call({ action: "create", repo: "madmcp", ref: "main" });
 
       expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/codespaces", {
         method: "POST",
-        body: {},
+        body: { ref: "main" },
       });
       expect(result.content[0].text).toMatch(/Created codespace: new-codespace-xyz \[Provisioning\]/);
     });
@@ -188,7 +224,8 @@ describe("connectors/github/codespaces.js", () => {
         web_url: "https://github.com/codespaces/new-codespace-xyz",
       });
 
-      await server.tools.create_codespace({
+      await call({
+        action: "create",
         repo: "madmcp",
         ref: "feature-x",
         machine: "basicLinux32gb",
@@ -210,27 +247,27 @@ describe("connectors/github/codespaces.js", () => {
         name: "new-codespace-xyz", state: "Provisioning", web_url: "https://x",
       });
 
-      await server.tools.create_codespace({ owner: "someoneelse", repo: "theirrepo" });
+      await call({ action: "create", owner: "someoneelse", repo: "theirrepo", ref: "main" });
 
       expect(githubRequest).toHaveBeenCalledWith("/repos/someoneelse/theirrepo/codespaces", {
         method: "POST",
-        body: {},
+        body: { ref: "main" },
       });
     });
 
     it("propagates the error when the requested machine type is invalid", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (422): Unprocessable Entity"));
 
-      await expect(server.tools.create_codespace({ repo: "madmcp", machine: "not-a-real-machine" }))
+      await expect(call({ action: "create", repo: "madmcp", ref: "main", machine: "not-a-real-machine" }))
         .rejects.toThrow(/422/);
     });
   });
 
-  describe("start_codespace", () => {
+  describe("start", () => {
     it("starts a codespace and reports its new state", async () => {
       githubRequest.mockResolvedValueOnce({ name: "curly-fiesta-abc123", state: "Starting" });
 
-      const result = await server.tools.start_codespace({ codespace_name: "curly-fiesta-abc123" });
+      const result = await call({ action: "start", codespace_name: "curly-fiesta-abc123" });
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123/start", { method: "POST" });
       expect(result.content[0].text).toMatch(/curly-fiesta-abc123 — state: Starting/);
@@ -239,16 +276,16 @@ describe("connectors/github/codespaces.js", () => {
     it("propagates the error when the codespace doesn't exist", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
-      await expect(server.tools.start_codespace({ codespace_name: "does-not-exist" }))
+      await expect(call({ action: "start", codespace_name: "does-not-exist" }))
         .rejects.toThrow(/404/);
     });
   });
 
-  describe("stop_codespace", () => {
+  describe("stop", () => {
     it("stops a codespace and reports its new state", async () => {
       githubRequest.mockResolvedValueOnce({ name: "curly-fiesta-abc123", state: "Shutdown" });
 
-      const result = await server.tools.stop_codespace({ codespace_name: "curly-fiesta-abc123" });
+      const result = await call({ action: "stop", codespace_name: "curly-fiesta-abc123" });
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123/stop", { method: "POST" });
       expect(result.content[0].text).toMatch(/curly-fiesta-abc123 — state: Shutdown/);
@@ -257,16 +294,16 @@ describe("connectors/github/codespaces.js", () => {
     it("propagates the error when the codespace doesn't exist", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
-      await expect(server.tools.stop_codespace({ codespace_name: "does-not-exist" }))
+      await expect(call({ action: "stop", codespace_name: "does-not-exist" }))
         .rejects.toThrow(/404/);
     });
   });
 
-  describe("delete_codespace", () => {
+  describe("delete", () => {
     it("deletes a codespace and returns a confirmation", async () => {
       githubRequest.mockResolvedValueOnce({});
 
-      const result = await server.tools.delete_codespace({ codespace_name: "curly-fiesta-abc123" });
+      const result = await call({ action: "delete", codespace_name: "curly-fiesta-abc123" });
 
       expect(githubRequest).toHaveBeenCalledWith("/user/codespaces/curly-fiesta-abc123", { method: "DELETE" });
       expect(result.content[0].text).toMatch(/🗑️ Deleted codespace curly-fiesta-abc123 permanently\./);
@@ -275,7 +312,7 @@ describe("connectors/github/codespaces.js", () => {
     it("propagates the error when the codespace doesn't exist", async () => {
       githubRequest.mockRejectedValueOnce(new Error("GitHub API error (404): Not Found"));
 
-      await expect(server.tools.delete_codespace({ codespace_name: "does-not-exist" }))
+      await expect(call({ action: "delete", codespace_name: "does-not-exist" }))
         .rejects.toThrow(/404/);
     });
   });

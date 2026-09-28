@@ -281,17 +281,20 @@ describe("register() -- CODE_EXEC_ENABLED gate", () => {
     };
   }
 
-  it("does not register exec_in_codespace when the flag is unset (default off), but still registers the other codespace tools", async () => {
+  it("does not register exec_in_codespace when the flag is unset (default off); codespaces.js then registers nothing, and codespace_manage is unaffected", async () => {
     delete process.env.CODE_EXEC_ENABLED;
     vi.resetModules();
     const { register } = await import("../connectors/github/codespaces.js");
+    const { register: registerManage } = await import("../connectors/github/codespace_manage.js");
 
     const server = fakeServerWithTools();
     register(server);
-
     expect(server.tools.exec_in_codespace).toBeUndefined();
-    expect(server.tools.list_codespaces).toBeDefined();
-    expect(server.tools.create_codespace).toBeDefined();
+    expect(Object.keys(server.tools)).toEqual([]);
+
+    // codespace_manage is always registered, independent of the gate.
+    registerManage(server);
+    expect(server.tools.codespace_manage).toBeDefined();
   });
 
   it("registers exec_in_codespace when the flag is the literal string \"true\"", async () => {
