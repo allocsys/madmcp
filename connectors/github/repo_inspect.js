@@ -3,21 +3,17 @@
 //
 // Consolidated per plan-madmcp-github-tools-overhaul (group 3): merges
 //   get_file_at_commit (was repo_mgmt.js), diff_files (was diff.js),
-//   search_code (was search.js), get_branch_protection (was review_control.js),
-//   list_branches / create_branch / list_commits / get_commit (was branches.js)
-// into one repo_inspect tool dispatched on `action`.
+//   get_branch_protection (was review_control.js),
+//   list_branches / list_commits / get_commit (was branches.js)
+// into one READ-ONLY repo_inspect tool dispatched on `action`.
 //
-// NOTE: search_code's implementation (fallbackCodeSearch, tarball parsing,
-// GraphQL line resolution) lives in code_search.js (renamed from search.js in
-// group 6), exported as runSearchCode(). It is also imported by
-// agent_delegate.js and test/github-search.test.js, so the helpers were not
-// copied.
+// search_code and create_branch were split out into their own standalone
+// tools (search_code.js, create_branch.js) so this tool stays read-only.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
 import { githubRequest, fromBase64 } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
-import { runSearchCode } from "./code_search.js";
 
 // ---------------------------------------------------------------------------
 // diff helpers (moved verbatim from diff.js)
@@ -101,32 +97,28 @@ export function register(server) {
 
   server.tool(
     "repo_inspect",
-    "DOES: Inspect a GitHub repository's branches, commit history, file contents at a point in time, diffs, code search, and branch protection. Use `action` to pick. READ-ONLY except action 'create_branch'.\n" +
-    "RULE: 'list_branches' needs repo. 'create_branch' needs owner + repo + branch (the NEW branch's name) and takes optional from_branch (branch, tag, or SHA to branch from; default: repo default branch) -- it is the only mutating action here.\n" +
+    "DOES: Inspect a GitHub repository's branches, commit history, file contents at a point in time, diffs, and branch protection. Use `action` to pick. READ-ONLY (creating a branch is create_branch; code search is search_code).\n" +
+    "RULE: 'list_branches' needs repo.\n" +
     "RULE: 'list_commits' needs owner + repo + branch. 'get_commit' needs owner + repo + sha.\n" +
     "RULE: 'branch_protection' needs repo + branch (e.g. 'main'). Use it to see upfront why a PR might be gated, instead of discovering it from a rejected merge. Reading protection requires admin access on the repo.\n" +
     "RULE: 'at_commit' needs repo + path + commit, where commit MUST be a commit SHA (not a branch/tag). Equivalent concept to read_file's `ref`, which also accepts branch/tag names.\n" +
-    "RULE: 'diff' needs repo plus EITHER (a) path + head_ref [+ base_ref] to compare one file across two refs, OR (b) base_path + head_path [+ ref] to compare two different files. Returns a unified diff.\n" +
-    "RULE: 'search' needs query AND ref (branch, tag, or commit SHA), and query MUST contain a repo:owner/name qualifier -- the owner/repo params are IGNORED by 'search'. GitHub's real /search/code index only ever covers a repo's default branch, so every call uses the local content-search fallback directly instead (fetches the repo as a tarball at `ref` and greps it locally; also sidesteps GitHub's known private-repo search-index gap).\n" +
-    "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining 'search' manually. Query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map.query (mode: search) instead.",
+    "RULE: 'diff' needs repo plus EITHER (a) path + head_ref [+ base_ref] to compare one file across two refs, OR (b) base_path + head_path [+ ref] to compare two different files. Returns a unified diff.",
     {
-      action:      z.enum(["at_commit", "diff", "search", "branch_protection", "list_branches", "create_branch", "list_commits", "get_commit"]).describe("Which operation to perform."),
-      owner:       z.string().optional().describe(`Repository owner. REQUIRED for 'create_branch', 'list_commits', and 'get_commit'; for all other actions defaults to "${DEFAULT_OWNER}" if omitted. Ignored by 'search' (use a repo: qualifier in query).`),
-      repo:        z.string().optional().describe("Repository name. Required for every action except 'search'."),
+      action:      z.enum(["at_commit", "diff", "branch_protection", "list_branches", "list_commits", "get_commit"]).describe("Which operation to perform."),
+      owner:       z.string().optional().describe(`Repository owner. REQUIRED for 'list_commits' and 'get_commit'; for all other actions defaults to "${DEFAULT_OWNER}" if omitted.`),
+      repo:        z.string().optional().describe("Repository name. Required for every action."),
       path:        z.string().optional().describe("File path within the repo. Required for 'at_commit'. For 'diff', the file to compare across two refs (use with head_ref, optionally base_ref)."),
       commit:      z.string().optional().describe("Commit SHA to read the file from. Required for 'at_commit'."),
       sha:         z.string().optional().describe("Commit SHA. Required for 'get_commit'."),
-      branch:      z.string().optional().describe("Branch name. 'create_branch': the NEW branch to create (required). 'list_commits': branch to list commits on (required). 'branch_protection': branch to read rules for (required)."),
-      from_branch: z.string().optional().describe("Branch, tag, or SHA to branch from (default: repo default branch). Used by 'create_branch' only."),
-      per_page:    z.number().optional().describe("Number of results to return, max 100 (default: 20). Used by 'list_commits' and 'search'."),
+      branch:      z.string().optional().describe("Branch name. 'list_commits': branch to list commits on (required). 'branch_protection': branch to read rules for (required)."),
+      per_page:    z.number().optional().describe("Number of results to return, max 100 (default: 20). Used by 'list_commits' only."),
       base_ref:    z.string().optional().describe("Base ref (branch, tag, or SHA) for a same-file diff. Defaults to repo default branch. Used by 'diff' only."),
       head_ref:    z.string().optional().describe("Head ref to compare against base_ref. Used by 'diff' (same-file mode) only."),
       base_path:   z.string().optional().describe("Path of the base file (use with head_path for cross-file diff). Used by 'diff' only."),
       head_path:   z.string().optional().describe("Path of the head file (use with base_path for cross-file diff). Used by 'diff' only."),
-      ref:         z.string().optional().describe("For 'diff' (cross-file mode): ref both files are read at (default: default branch). For 'search': branch, tag, or commit SHA to search -- REQUIRED there, and query must contain a repo:owner/name qualifier."),
-      query:       z.string().optional().describe("Search query for 'search' (e.g. 'createServer repo:owner/name'). Must include a repo:owner/name qualifier. Other qualifiers (filename:, extension:, language:) are stripped and the remaining text is matched as one literal string (no OR)."),
+      ref:         z.string().optional().describe("For 'diff' (cross-file mode): ref both files are read at (default: default branch). Used by 'diff' only."),
     },
-    async ({ action, owner: ownerArg, repo, path, commit, sha, branch, from_branch, per_page, base_ref, head_ref, base_path, head_path, ref, query }) => {
+    async ({ action, owner: ownerArg, repo, path, commit, sha, branch, per_page, base_ref, head_ref, base_path, head_path, ref }) => {
 
       // ── search (repo comes from the query's repo: qualifier) ──────────────
       if (action === "search") {
@@ -137,9 +129,9 @@ export function register(server) {
 
       if (!repo) return fail(`action '${action}' requires repo parameter.`);
 
-      // These three originally required an explicit owner (no default); keep
+      // These two originally required an explicit owner (no default); keep
       // that rather than silently targeting DEFAULT_OWNER.
-      if ((action === "create_branch" || action === "list_commits" || action === "get_commit") && !ownerArg) {
+      if ((action === "list_commits" || action === "get_commit") && !ownerArg) {
         return fail(`action '${action}' requires owner (the repository owner, a user or org).`);
       }
       const owner = ownerArg ?? DEFAULT_OWNER;
