@@ -5,6 +5,11 @@
 // data backing the Observability dashboard's Overview/Invocations/Events tabs
 // and the Query Builder.
 //
+// Registers ONE tool, cf_workers_observability, with action: query | keys |
+// values | compare. It consolidates the former cf_workers_observability_query,
+// _keys, _values and _compare. Requests and output are unchanged; required-ness
+// of per-action params moved from zod into the handler.
+//
 // Docs: https://developers.cloudflare.com/workers/observability/query-builder/
 // API:  POST /accounts/{account_id}/workers/observability/telemetry/{query,keys,values}
 //
@@ -16,6 +21,7 @@
 
 import { z } from "zod";
 import { cfAccountRequest } from "./client.js";
+import { compareScripts } from "./observability_compare.js";
 
 function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -53,14 +59,14 @@ function normalizeFilter(f) {
 }
 
 const filterSchema = z.object({
-  key: z.string().describe("Field to filter on, e.g. '$workers.event.response.status' or '$metadata.service'. Use cf_workers_observability_keys to discover valid keys."),
+  key: z.string().describe("Field to filter on, e.g. '$workers.event.response.status' or '$metadata.service'. Use action 'keys' to discover valid keys."),
   operator: z.string().describe("Comparison operator, e.g. 'eq', 'neq', 'gt', 'lt', 'includes'"),
   value: z.union([z.string(), z.number(), z.boolean()]).describe("Value to compare against"),
 }).passthrough();
 
-// Shared query function — used directly by cf_workers_observability_query
-// and reused by cf_workers_observability_compare so both tools stay in sync
-// on filter-normalization and timeframe handling.
+// Shared query function — used directly by action 'query' and reused by
+// action 'compare' (via compareScripts) so both stay in sync on
+// filter-normalization and timeframe handling.
 export async function queryTelemetry({
   timeframe_from,
   timeframe_to,
@@ -89,60 +95,83 @@ export async function queryTelemetry({
   return cfAccountRequest("/workers/observability/telemetry/query", { method: "POST", body });
 }
 
+// Params each action needs (zod marks them all optional so one schema can serve
+// every action; required-ness is enforced here). Only `undefined` counts as
+// missing, so an empty string still reaches toEpochMillis and throws exactly
+// as it did before consolidation.
+const REQUIRED = {
+  query: ["timeframe_from", "timeframe_to"],
+  keys: ["timeframe_from", "timeframe_to"],
+  values: ["key", "timeframe_from", "timeframe_to"],
+  compare: ["script_a", "script_b", "timeframe_from", "timeframe_to"],
+};
+
 export function register(server) {
   server.tool(
-    "cf_workers_observability_keys",
-    "DOES: List all keys available in Workers Observability telemetry (logs/traces/events) -- what fields you can filter/group by.\n" +
-    "RULE: call this before cf_workers_observability_query if you don't already know the field names to filter on.",
+    "cf_workers_observability",
+    "DOES: Query Workers Observability telemetry (invocation logs, console.log output, exceptions, request/response metadata, trace spans) -- same data as the Observability dashboard's Overview/Invocations/Events tabs. READ-ONLY. Use `action` to pick.\n" +
+    "RULE: action 'keys' needs timeframe_from + timeframe_to and lists the field names you can filter/group by. Call it before 'query' if you don't already know the field names.\n" +
+    "RULE: action 'values' needs key + timeframe_from + timeframe_to and lists distinct values seen for that key (e.g. all $workers.event.response.status values), for building filters. Optional type (default 'string').\n" +
+    "RULE: action 'query' needs timeframe_from + timeframe_to; optional script_name, view, filters, limit, query_id. Returns the matching events.\n" +
+    "RULE: action 'compare' needs script_a + script_b + timeframe_from + timeframe_to and compares TWO scripts over the SAME timeframe: normalized rates (events/sec, loadShed/sec, error/sec), not raw counts, plus a 'stuck socket' heuristic (high wall-time vs low CPU-time) with example events per side. Use it for a deploy vs baseline instead of two separate 'query' calls -- raw counts aren't comparable across differing sample time-spans. NOT a controlled A/B: traffic mix, client geography and time-of-day aren't normalized (the output includes that caveat).\n" +
+    "RULE: dataset (default 'cloudflare-workers') applies to every action; view applies to 'query' and 'compare'; limit applies to 'query' (server default) and 'compare' (default 1000, applied to both scripts).",
     {
-      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
-      timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis"),
-      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
+      action: z.enum(["query", "keys", "values", "compare"]).describe("Which operation to perform"),
+      timeframe_from: z.string().optional().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis. Required for every action; for 'compare' it is applied identically to both scripts."),
+      timeframe_to: z.string().optional().describe("End of time range, ISO 8601 or epoch millis. Required for every action."),
+      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers'). For 'compare', pass 'otel' to compare span/exception data instead."),
+      key: z.string().optional().describe("'values' only (required): the telemetry key to list values for, e.g. '$workers.event.response.status'"),
+      type: z.enum(["string", "boolean", "number"]).optional().describe("'values' only: the value type of the key being listed (required by the Cloudflare API). Default: 'string'."),
+      script_name: z.string().optional().describe("'query' only: convenience filter scoping results to one Worker script. Adds a filter on '$metadata.service' -- if that key doesn't match your account's schema, use 'filters' directly instead (check action 'keys')."),
+      view: z.string().optional().describe("'query' and 'compare': result grouping mode, e.g. 'events' (raw event stream) or 'invocations' (grouped by invocation). Default: 'events'."),
+      filters: z.array(filterSchema).optional().describe("'query' only: additional structured filters, e.g. [{key: '$workers.event.response.status', operator: 'gt', value: 500}]"),
+      limit: z.number().optional().describe("'query': max number of results (default: server default, typically 100). 'compare': max events fetched per script (default: 1000)."),
+      query_id: z.string().optional().describe("'query' only: optional query identifier for the request (any string); Cloudflare uses this to tag/save the query"),
+      script_a: z.string().optional().describe("'compare' only (required): first Worker script name, e.g. the post-deploy / current version"),
+      script_b: z.string().optional().describe("'compare' only (required): second Worker script name, e.g. the pre-deploy / baseline version"),
     },
-    async ({ dataset = "cloudflare-workers", timeframe_from, timeframe_to }) =>
-      textResult(await cfAccountRequest("/workers/observability/telemetry/keys", {
-        method: "POST",
-        body: { dataset, timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) } },
-      }))
-  );
+    async (args) => {
+      const { action } = args;
+      const required = REQUIRED[action];
+      if (!required) {
+        return { content: [{ type: "text", text: `Unknown action '${action}'.` }], isError: true };
+      }
+      const missing = required.filter((name) => args[name] === undefined);
+      if (missing.length) {
+        return { content: [{ type: "text", text: `action '${action}' requires ${missing.join(", ")}.` }], isError: true };
+      }
 
-  server.tool(
-    "cf_workers_observability_values",
-    "DOES: List unique values seen for a given telemetry key in range (e.g. all distinct $workers.event.response.status values) -- for building filters.",
-    {
-      key: z.string().describe("The telemetry key to list values for, e.g. '$workers.event.response.status'"),
-      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
-      timeframe_from: z.string().describe("Start of time range, ISO 8601 or epoch millis"),
-      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
-      type: z.enum(["string", "boolean", "number"]).optional().describe("The value type of the key being listed (required by the Cloudflare API). Default: 'string'."),
-    },
-    async ({ key, dataset = "cloudflare-workers", timeframe_from, timeframe_to, type = "string" }) =>
-      textResult(await cfAccountRequest("/workers/observability/telemetry/values", {
-        method: "POST",
-        body: {
-          datasets: [dataset],
-          key,
-          type,
-          timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },
-        },
-      }))
-  );
+      const { timeframe_from, timeframe_to } = args;
 
-  server.tool(
-    "cf_workers_observability_query",
-    "DOES: Query Workers logs/traces/events (invocation logs, console.log output, exceptions, request/response metadata, trace spans) -- same data as the Observability dashboard's Overview/Invocations/Events tabs.\n" +
-    "RULE: comparing two scripts over the same timeframe -> use cf_workers_observability_compare instead (normalizes rates, not raw counts).\n" +
-    "RULE: don't know filterable field names -> cf_workers_observability_keys first.",
-    {
-      timeframe_from: z.string().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis"),
-      timeframe_to: z.string().describe("End of time range, ISO 8601 or epoch millis"),
-      script_name: z.string().optional().describe("Convenience filter: scope results to one Worker script. Adds a filter on '$metadata.service' — if that key doesn't match your account's schema, use the 'filters' param directly instead (check cf_workers_observability_keys)."),
-      view: z.string().optional().describe("Result grouping mode, e.g. 'events' (raw event stream) or 'invocations' (grouped by invocation). Default: 'events'."),
-      dataset: z.string().optional().describe("Telemetry dataset (default: 'cloudflare-workers')"),
-      filters: z.array(filterSchema).optional().describe("Additional structured filters, e.g. [{key: '$workers.event.response.status', operator: 'gt', value: 500}]"),
-      limit: z.number().optional().describe("Max number of results (default: server default, typically 100)"),
-      query_id: z.string().optional().describe("Optional query identifier for the request (any string); Cloudflare uses this to tag/save the query"),
-    },
-    async (args) => textResult(await queryTelemetry(args))
+      if (action === "keys") {
+        const { dataset = "cloudflare-workers" } = args;
+        return textResult(await cfAccountRequest("/workers/observability/telemetry/keys", {
+          method: "POST",
+          body: { dataset, timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) } },
+        }));
+      }
+
+      if (action === "values") {
+        const { key, dataset = "cloudflare-workers", type = "string" } = args;
+        return textResult(await cfAccountRequest("/workers/observability/telemetry/values", {
+          method: "POST",
+          body: {
+            datasets: [dataset],
+            key,
+            type,
+            timeframe: { from: toEpochMillis(timeframe_from), to: toEpochMillis(timeframe_to) },
+          },
+        }));
+      }
+
+      if (action === "query") {
+        const { script_name, view, dataset, filters, limit, query_id } = args;
+        return textResult(await queryTelemetry({ timeframe_from, timeframe_to, script_name, view, dataset, filters, limit, query_id }));
+      }
+
+      // action === "compare"
+      const { script_a, script_b, dataset, view, limit } = args;
+      return textResult(await compareScripts({ script_a, script_b, timeframe_from, timeframe_to, dataset, view, limit }));
+    }
   );
 }
