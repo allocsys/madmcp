@@ -34,7 +34,7 @@ export function register(server) {
     "issue_manage",
     "DOES: Read, create, update, comment on and search GitHub issues. Use `action` to pick. get/list/search are READ-ONLY; create/update/comment MUTATE GitHub state.\n" +
     "RULE: 'get' needs repo + issue_number (owner defaults) and returns full details of a single issue -- complete body text + comment thread. Optional include_comments (default true), max_comments (default 20, max 100, most recent first). Use it first when assessing whether an issue is a good, well-scoped contribution candidate. If the number is a PR it says so instead (use pr_read 'get').\n" +
-    "RULE: 'list' needs repo (owner defaults) and lists issues in a single known repo (title/metadata only, no body/comments -> use 'get' for full detail). Optional state (open|closed|all, default open), labels (a comma-separated STRING), assignee, per_page (max 100, default 20).\n" +
+    "RULE: 'list' needs repo (owner defaults) and lists issues in a single known repo (title/metadata only, no body/comments -> use 'get' for full detail). Optional state (open|closed|all, default open), labels (a comma-separated STRING), assignee, per_page (max 100, default 20). Pull requests are excluded; up to 5 pages are scanned to fill per_page.\n" +
     "RULE: 'create' needs repo + title (owner defaults); optional body (markdown), labels (an ARRAY of strings), assignees (array of usernames).\n" +
     "RULE: 'update' needs repo + issue_number (owner defaults) and edits an existing issue (close, reopen, retitle, relabel, reassign). Optional title, body, state (open|closed only), labels (ARRAY, replaces the existing label list), assignees (array, replaces the existing assignee list).\n" +
     "RULE: 'comment' needs repo + issue_number + body (owner defaults) and posts a comment on an issue OR pull request (markdown supported). This is the general conversation comment for PRs too; a diff-anchored comment is pr_write 'inline_comment', a formal review verdict is pr_write 'review'.\n" +
@@ -106,17 +106,31 @@ export function register(server) {
           // NOTE: the issue-comments endpoint does NOT support sort/direction
           // query params (unlike PR review-comments) -- it always returns
           // oldest-first. To show the most recent `max_comments` when a issue
-          // has more comments than that, we must fetch the last page rather
-          // than the first.
+          // has more comments than that, we must fetch the tail of the list
+          // rather than the first page (see the page math below).
           const perPage = Math.min(Math.max(max_comments, 1), 100);
-          let page = 1;
-          if (data.comments > perPage) {
-            const totalPages = Math.ceil(data.comments / perPage);
-            page = totalPages; // last page = most recent comments
+          let commentsData;
+          if (data.comments <= perPage) {
+            commentsData = await githubRequest(
+              `/repos/${owner}/${repo}/issues/${issue_number}/comments?per_page=${perPage}&page=1`
+            );
+          } else {
+            // Pages are oldest-first, so the newest `perPage` comments span at
+            // most two 100-item pages. Fetch those and keep the tail; fetching
+            // just the last page returned fewer than max_comments (e.g. 21
+            // comments -> 1 shown).
+            const startIdx  = data.comments - perPage;
+            const firstPage = Math.floor(startIdx / 100) + 1;
+            const lastPage  = Math.ceil(data.comments / 100);
+            const all = [];
+            for (let p = firstPage; p <= lastPage; p++) {
+              const chunk = await githubRequest(
+                `/repos/${owner}/${repo}/issues/${issue_number}/comments?per_page=100&page=${p}`
+              );
+              all.push(...chunk);
+            }
+            commentsData = all.slice(-perPage);
           }
-          const commentsData = await githubRequest(
-            `/repos/${owner}/${repo}/issues/${issue_number}/comments?per_page=${perPage}&page=${page}`
-          );
           lines.push("", `--- comments (${commentsData.length} most recent of ${data.comments} shown) ---`);
           for (const c of commentsData) {
             lines.push("", `[${c.user.login} | ${c.created_at.slice(0, 10)}]`, c.body || "(empty)");
@@ -134,18 +148,35 @@ export function register(server) {
           return fail("action 'list' takes labels as a comma-separated string (e.g. \"bug,help wanted\"), not an array.");
         }
         const listState = state ?? "open";
-        const q = new URLSearchParams({ state: listState, per_page: String(per_page ?? 20) });
-        if (labels)   q.set("labels",   labels);
-        if (assignee) q.set("assignee", assignee);
-        const data   = await githubRequest(`/repos/${owner}/${repo}/issues?${q}`);
-        const issues = data.filter((i) => !i.pull_request);
-        if (!issues.length) return { content: [{ type: "text", text: `No ${listState} issues found.` }] };
+        const want = per_page ?? 20;
+        // The issues endpoint also returns PRs, and per_page counts them, so a
+        // single page can come back short (or empty) after filtering. Keep
+        // paging (same per_page) until `want` issues are collected, the last
+        // page is short, or MAX_PAGES is hit. Page 1's request is unchanged.
+        const MAX_PAGES = 5;
+        const collected = [];
+        let capped = false;
+        for (let page = 1; page <= MAX_PAGES; page++) {
+          const q = new URLSearchParams({ state: listState, per_page: String(want) });
+          if (labels)   q.set("labels",   labels);
+          if (assignee) q.set("assignee", assignee);
+          if (page > 1) q.set("page", String(page));
+          const data = await githubRequest(`/repos/${owner}/${repo}/issues?${q}`);
+          collected.push(...data.filter((i) => !i.pull_request));
+          if (collected.length >= want || data.length < want) break;
+          if (page === MAX_PAGES) capped = true;
+        }
+        const issues = collected.slice(0, want);
+        const cappedNote = capped && issues.length < want
+          ? `\n\n(Scanned the first ${MAX_PAGES * want} items only; more issues may exist beyond pull requests.)`
+          : "";
+        if (!issues.length) return { content: [{ type: "text", text: `No ${listState} issues found.${cappedNote}` }] };
         const lines = issues.map((i) =>
           `#${i.number} [${i.state}] ${i.title}\n  by ${i.user.login} | ${i.created_at.slice(0, 10)}` +
           `${i.labels.length ? ` | labels: ${i.labels.map((l) => l.name).join(", ")}` : ""}` +
           `${i.assignee ? ` | assigned: ${i.assignee.login}` : ""}\n  ${i.html_url}`
         );
-        return { content: [{ type: "text", text: lines.join("\n\n") }] };
+        return { content: [{ type: "text", text: lines.join("\n\n") + cappedNote }] };
       }
 
       // ── create (was create_issue) / update (was update_issue) ─────────────

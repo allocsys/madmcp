@@ -105,16 +105,42 @@ describe("pr_write", () => {
   });
 
   describe("update", () => {
-    it("runs the GraphQL ready branch and the PATCH in one call", async () => {
+    it("runs the PATCH first, then the GraphQL ready conversion, in one call", async () => {
       githubRequest
-        .mockResolvedValueOnce({ node_id: "N", draft: true })
-        .mockResolvedValueOnce({ html_url: "https://x/pull/9" });
+        .mockResolvedValueOnce({ html_url: "https://x/pull/9" })
+        .mockResolvedValueOnce({ node_id: "N", draft: true });
       githubGraphQL.mockResolvedValueOnce({});
       const r = await server.tools.pr_write({ action: "update", owner: "o", repo: "r", pull_number: 9, ready: true, title: "T" });
       expect(githubGraphQL).toHaveBeenCalledTimes(1);
-      expect(githubRequest).toHaveBeenNthCalledWith(2, "/repos/o/r/pulls/9", { method: "PATCH", body: { title: "T" } });
+      expect(githubRequest).toHaveBeenNthCalledWith(1, "/repos/o/r/pulls/9", { method: "PATCH", body: { title: "T" } });
       expect(r.content[0].text).toContain("converted from draft to ready for review.");
       expect(r.content[0].text).toContain("Updated PR #9 (title).");
+      expect(r.content[0].text.indexOf("converted from draft")).toBeLessThan(r.content[0].text.indexOf("Updated PR #9"));
+    });
+
+    it("does not convert to ready when the PATCH fails", async () => {
+      githubRequest.mockRejectedValueOnce(new Error("422 bad base"));
+      await expect(server.tools.pr_write({ action: "update", owner: "o", repo: "r", pull_number: 9, ready: true, base: "nope" }))
+        .rejects.toThrow("422 bad base");
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+      expect(githubGraphQL).not.toHaveBeenCalled();
+    });
+
+    it("reports the applied PATCH when the ready conversion then fails", async () => {
+      githubRequest
+        .mockResolvedValueOnce({ html_url: "https://x/pull/9" })
+        .mockResolvedValueOnce({ node_id: "N", draft: true });
+      githubGraphQL.mockRejectedValueOnce(new Error("graphql boom"));
+      await expect(server.tools.pr_write({ action: "update", owner: "o", repo: "r", pull_number: 9, ready: true, title: "T" }))
+        .rejects.toThrow(/Updated PR #9 \(title\)\.[\s\S]*converting the PR to ready for review failed: graphql boom/);
+    });
+
+    it("ready: true alone on a non-draft PR makes no PATCH and says so", async () => {
+      githubRequest.mockResolvedValueOnce({ node_id: "N", draft: false });
+      const r = await server.tools.pr_write({ action: "update", owner: "o", repo: "r", pull_number: 9, ready: true });
+      expect(githubRequest).toHaveBeenCalledTimes(1);
+      expect(githubGraphQL).not.toHaveBeenCalled();
+      expect(r.content[0].text).toContain("already ready for review");
     });
 
     it("ready: false alone makes no requests and explains it is a no-op", async () => {
@@ -153,9 +179,10 @@ describe("pr_write", () => {
       expect(r.content[0].text).toContain("Teams: (none)");
     });
 
-    it.each(["request_reviewers", "remove_reviewers"])("%s throws when neither reviewers nor team_reviewers is given", async (action) => {
-      await expect(server.tools.pr_write({ action, owner: "o", repo: "r", pull_number: 5, reviewers: [] }))
-        .rejects.toThrow("Provide at least one of reviewers or team_reviewers.");
+    it.each(["request_reviewers", "remove_reviewers"])("%s returns an error result when neither reviewers nor team_reviewers is given", async (action) => {
+      const r = await server.tools.pr_write({ action, owner: "o", repo: "r", pull_number: 5, reviewers: [] });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("Provide at least one of reviewers or team_reviewers.");
       expect(githubRequest).not.toHaveBeenCalled();
     });
 
@@ -194,9 +221,10 @@ describe("pr_write", () => {
       expect(githubRequest.mock.calls[0][1].body.start_side).toBe("LEFT");
     });
 
-    it("throws when start_line is not less than line", async () => {
-      await expect(server.tools.pr_write({ action: "inline_comment", owner: "o", repo: "r", pull_number: 4, commit_id: "sha", path: "a.js", line: 5, start_line: 5, body: "b" }))
-        .rejects.toThrow("start_line must be less than line for a multi-line comment.");
+    it("returns an error result when start_line is not less than line", async () => {
+      const r = await server.tools.pr_write({ action: "inline_comment", owner: "o", repo: "r", pull_number: 4, commit_id: "sha", path: "a.js", line: 5, start_line: 5, body: "b" });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("start_line must be less than line for a multi-line comment.");
       expect(githubRequest).not.toHaveBeenCalled();
     });
   });

@@ -24,7 +24,8 @@ export function register(server) {
     "RULE: action 'fork' requires owner AND repo (the SOURCE repo to fork). Forking is async on GitHub's side — the returned repo may take a few seconds to become fully clone-able.\n" +
     "RULE: action 'sync_fork' requires repo and branch (owner defaults if omitted). Only works on actual forks, and only fast-forwards (no conflict resolution) — if the branch has diverged with local commits ahead of upstream, it reports that a merge is needed instead.\n" +
     "RULE: action 'delete' PERMANENTLY and IRREVERSIBLY deletes the repository (all code, issues, PRs, history). Requires repo AND confirm: true; without confirm: true nothing is deleted.\n" +
-    "RULE: action 'set_topics' requires repo and topics, and REPLACES all existing topics (pass [] to clear). Reading topics is repo_metadata's 'topics' action.",
+    "RULE: action 'set_topics' requires repo and topics, and REPLACES all existing topics (pass [] to clear). Reading topics is repo_metadata's 'topics' action.\n" +
+    "PARAM WARNING: owner/repo mean the SOURCE repo being forked for 'fork', but the TARGET repo for 'sync_fork', 'delete' and 'set_topics'; 'create' ignores both (use name + org). A fork's destination is `organization` (not `org`, which is create-only), and `name` is the new repo's name for 'create' but only an optional rename for 'fork'.",
     {
       action:              z.enum(["create", "fork", "sync_fork", "delete", "set_topics"]).describe("Which operation to perform."),
       owner:               z.string().optional().describe(`Repository owner. Required for 'fork' (owner of the repo being forked). For 'sync_fork', 'delete', and 'set_topics', defaults to "${DEFAULT_OWNER}" if omitted. Ignored by 'create' (use org).`),
@@ -33,8 +34,8 @@ export function register(server) {
       description:         z.string().optional().describe("Short description of the repository. Used by 'create' only."),
       private:             z.boolean().optional().describe("Whether the new repo is private (default: false). Used by 'create' only."),
       auto_init:           z.boolean().optional().describe("Initialize with a README (default: false). Used by 'create' only."),
-      org:                 z.string().optional().describe("Organization to create the repo under. Omit to create under the authenticated user. Used by 'create' only."),
-      organization:        z.string().optional().describe("Org to fork into. Omit to fork into the authenticated user's account. Used by 'fork' only."),
+      org:                 z.string().optional().describe("Organization to create the repo under (create only; fork uses `organization`). Omit to create under the authenticated user. Used by 'create' only."),
+      organization:        z.string().optional().describe("Org to fork INTO, i.e. the fork's destination (fork only; create uses `org`). Omit to fork into the authenticated user's account. Used by 'fork' only."),
       default_branch_only: z.boolean().optional().describe("Fork only the default branch (default: false — forks all branches). Used by 'fork' only."),
       branch:              z.string().optional().describe("Branch to sync. Required for 'sync_fork'; ignored otherwise."),
       confirm:             z.boolean().optional().describe("Must be explicitly true for 'delete' to proceed. Safety guard against accidental deletion — deletion is irreversible and cannot be undone. Ignored by other actions."),

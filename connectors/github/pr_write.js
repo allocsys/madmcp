@@ -108,31 +108,40 @@ export function register(server) {
           return { content: [{ type: "text", text: ready === false ? "Nothing to update: ready: false is a no-op (no API path converts a PR back to draft). Pass at least one of title, body, state, base, or ready: true." : "No fields provided to update — pass at least one of title, body, state, base, or ready." }] };
         }
 
-        const results = [];
-
-        if (ready === true) {
-          const pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
-          if (!pr.draft) {
-            results.push(`PR #${pull_number} is already ready for review (not a draft) — no change made.`);
-          } else {
-            await githubGraphQL(
-              `mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { number isDraft } } }`,
-              { id: pr.node_id }
-            );
-            results.push(`PR #${pull_number} converted from draft to ready for review.`);
-          }
-        }
-
+        // Order matters: converting draft -> ready cannot be undone (no API
+        // path back to draft), so it runs LAST. If the PATCH fails, nothing
+        // has been converted; if the conversion fails, the (reversible) PATCH
+        // is reported as applied instead of being silently half-done.
+        let patchMsg = "";
         if (Object.keys(patch).length > 0) {
           const data = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`, {
             method: "PATCH",
             body: patch,
           });
           const updated = Object.keys(patch).join(", ");
-          results.push(`Updated PR #${pull_number} (${updated}).\n${data.html_url}`);
+          patchMsg = `Updated PR #${pull_number} (${updated}).\n${data.html_url}`;
         }
 
-        return { content: [{ type: "text", text: results.join("\n\n") }] };
+        let readyMsg = "";
+        if (ready === true) {
+          try {
+            const pr = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}`);
+            if (!pr.draft) {
+              readyMsg = `PR #${pull_number} is already ready for review (not a draft) — no change made.`;
+            } else {
+              await githubGraphQL(
+                `mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { number isDraft } } }`,
+                { id: pr.node_id }
+              );
+              readyMsg = `PR #${pull_number} converted from draft to ready for review.`;
+            }
+          } catch (e) {
+            if (patchMsg) throw new Error(`${patchMsg}\nHowever, converting the PR to ready for review failed: ${e.message}`, { cause: e });
+            throw e;
+          }
+        }
+
+        return { content: [{ type: "text", text: [readyMsg, patchMsg].filter(Boolean).join("\n\n") }] };
       }
 
       // ── merge (was merge_pull_request) ────────────────────────────────────
@@ -157,7 +166,7 @@ export function register(server) {
       // ── request_reviewers (was request_reviewers) ─────────────────────────
       if (action === "request_reviewers") {
         if (!reviewers?.length && !team_reviewers?.length) {
-          throw new Error("Provide at least one of reviewers or team_reviewers.");
+          return fail("Provide at least one of reviewers or team_reviewers.");
         }
         const data = await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/requested_reviewers`, {
           method: "POST",
@@ -178,7 +187,7 @@ export function register(server) {
       // ── remove_reviewers (was remove_requested_reviewers) ─────────────────
       if (action === "remove_reviewers") {
         if (!reviewers?.length && !team_reviewers?.length) {
-          throw new Error("Provide at least one of reviewers or team_reviewers.");
+          return fail("Provide at least one of reviewers or team_reviewers.");
         }
         await githubRequest(`/repos/${owner}/${repo}/pulls/${pull_number}/requested_reviewers`, {
           method: "DELETE",
@@ -199,7 +208,7 @@ export function register(server) {
       const payload = { commit_id, path, line, side: commentSide, body };
       if (start_line !== undefined) {
         if (start_line >= line) {
-          throw new Error("start_line must be less than line for a multi-line comment.");
+          return fail("start_line must be less than line for a multi-line comment.");
         }
         payload.start_line = start_line;
         payload.start_side = start_side || commentSide;
