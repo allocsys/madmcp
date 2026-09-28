@@ -257,7 +257,7 @@ D1: `cf_d1_read` (action: get | list), `cf_d1_manage` (action: create), `cf_d1_q
 
 KV: `cf_kv_read` (action: get | list), `cf_kv_manage` (action: create | update), `cf_kv_namespace_delete` (to move into a guarded delete tool)
 
-R2: `cf_r2_bucket` (list/get), `cf_r2_bucket_create/delete`
+R2: `cf_r2_read` (action: get | list), `cf_r2_manage` (action: create), `cf_r2_bucket_delete` (to move into a guarded delete tool)
 
 Hyperdrive: `cf_hyperdrive_config` (list/get), `cf_hyperdrive_config_create/update/delete`
 
