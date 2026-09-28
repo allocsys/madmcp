@@ -1,11 +1,7 @@
 // ---------------------------------------------------------------------------
-// connectors/github/review_control.js — now holds only list_notifications.
-// (Branch protection read moved to repo_inspect's 'branch_protection' action;
-// merge-readiness read moved to pr_read's 'mergeability' action; reviewer
-// assignment and inline review comments moved to pr_write's
-// 'request_reviewers' / 'remove_reviewers' / 'inline_comment' actions.)
-// list_notifications relocates to notifications.js in group 9, after which
-// this file is deleted.
+// connectors/github/notifications.js — standalone list_notifications tool.
+// (Relocated unchanged from review_control.js in group 9; the rest of that
+// file's tools moved into repo_inspect / pr_read / pr_write earlier.)
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
