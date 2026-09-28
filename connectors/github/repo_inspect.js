@@ -102,8 +102,8 @@ export function register(server) {
   server.tool(
     "repo_inspect",
     "DOES: Inspect a GitHub repository's branches, commit history, file contents at a point in time, diffs, code search, and branch protection. Use `action` to pick. READ-ONLY except action 'create_branch'.\n" +
-    "RULE: 'list_branches' needs repo. 'create_branch' needs repo + branch (the NEW branch's name) and takes optional from_branch (branch, tag, or SHA to branch from; default: repo default branch) -- it is the only mutating action here.\n" +
-    "RULE: 'list_commits' needs repo; branch is optional (default branch if omitted). 'get_commit' needs repo + sha.\n" +
+    "RULE: 'list_branches' needs repo. 'create_branch' needs owner + repo + branch (the NEW branch's name) and takes optional from_branch (branch, tag, or SHA to branch from; default: repo default branch) -- it is the only mutating action here.\n" +
+    "RULE: 'list_commits' needs owner + repo + branch. 'get_commit' needs owner + repo + sha.\n" +
     "RULE: 'branch_protection' needs repo + branch (e.g. 'main'). Use it to see upfront why a PR might be gated, instead of discovering it from a rejected merge. Reading protection requires admin access on the repo.\n" +
     "RULE: 'at_commit' needs repo + path + commit, where commit MUST be a commit SHA (not a branch/tag). Equivalent concept to read_file's `ref`, which also accepts branch/tag names.\n" +
     "RULE: 'diff' needs repo plus EITHER (a) path + head_ref [+ base_ref] to compare one file across two refs, OR (b) base_path + head_path [+ ref] to compare two different files. Returns a unified diff.\n" +
@@ -111,12 +111,12 @@ export function register(server) {
     "RULE: tracing something across many back-to-back searches (e.g. a symbol across a codebase) -> delegate_agent instead of chaining 'search' manually. Query is conceptual/semantic (\"where is X handled\") rather than a known literal string -> map.query (mode: search) instead.",
     {
       action:      z.enum(["at_commit", "diff", "search", "branch_protection", "list_branches", "create_branch", "list_commits", "get_commit"]).describe("Which operation to perform."),
-      owner:       z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted. Ignored by 'search' (use a repo: qualifier in query).`),
+      owner:       z.string().optional().describe(`Repository owner. REQUIRED for 'create_branch', 'list_commits', and 'get_commit'; for all other actions defaults to "${DEFAULT_OWNER}" if omitted. Ignored by 'search' (use a repo: qualifier in query).`),
       repo:        z.string().optional().describe("Repository name. Required for every action except 'search'."),
       path:        z.string().optional().describe("File path within the repo. Required for 'at_commit'. For 'diff', the file to compare across two refs (use with head_ref, optionally base_ref)."),
       commit:      z.string().optional().describe("Commit SHA to read the file from. Required for 'at_commit'."),
       sha:         z.string().optional().describe("Commit SHA. Required for 'get_commit'."),
-      branch:      z.string().optional().describe("Branch name. 'create_branch': the NEW branch to create (required). 'list_commits': branch to list commits on (optional, defaults to the repo default branch). 'branch_protection': branch to read rules for (required)."),
+      branch:      z.string().optional().describe("Branch name. 'create_branch': the NEW branch to create (required). 'list_commits': branch to list commits on (required). 'branch_protection': branch to read rules for (required)."),
       from_branch: z.string().optional().describe("Branch, tag, or SHA to branch from (default: repo default branch). Used by 'create_branch' only."),
       per_page:    z.number().optional().describe("Number of results to return, max 100 (default: 20). Used by 'list_commits' and 'search'."),
       base_ref:    z.string().optional().describe("Base ref (branch, tag, or SHA) for a same-file diff. Defaults to repo default branch. Used by 'diff' only."),
@@ -126,7 +126,7 @@ export function register(server) {
       ref:         z.string().optional().describe("For 'diff' (cross-file mode): ref both files are read at (default: default branch). For 'search': branch, tag, or commit SHA to search -- REQUIRED there, and query must contain a repo:owner/name qualifier."),
       query:       z.string().optional().describe("Search query for 'search' (e.g. 'VLESS filename:worker.js repo:owner/name'). Must include a repo:owner/name qualifier."),
     },
-    async ({ action, owner = DEFAULT_OWNER, repo, path, commit, sha, branch, from_branch, per_page, base_ref, head_ref, base_path, head_path, ref, query }) => {
+    async ({ action, owner: ownerArg, repo, path, commit, sha, branch, from_branch, per_page, base_ref, head_ref, base_path, head_path, ref, query }) => {
 
       // ── search (repo comes from the query's repo: qualifier) ──────────────
       if (action === "search") {
@@ -136,6 +136,13 @@ export function register(server) {
       }
 
       if (!repo) return fail(`action '${action}' requires repo parameter.`);
+
+      // These three originally required an explicit owner (no default); keep
+      // that rather than silently targeting DEFAULT_OWNER.
+      if ((action === "create_branch" || action === "list_commits" || action === "get_commit") && !ownerArg) {
+        return fail(`action '${action}' requires owner (the repository owner, a user or org).`);
+      }
+      const owner = ownerArg ?? DEFAULT_OWNER;
 
       // ── list_branches ─────────────────────────────────────────────────────
       if (action === "list_branches") {
@@ -165,10 +172,8 @@ export function register(server) {
 
       // ── list_commits ──────────────────────────────────────────────────────
       if (action === "list_commits") {
-        const params = new URLSearchParams({ per_page: String(per_page ?? 20) });
-        // Original tool required `branch` and would have sent sha=undefined if
-        // omitted; omitting sha entirely makes GitHub use the default branch.
-        if (branch) params.set("sha", branch);
+        if (!branch) return fail("action 'list_commits' requires branch (the branch to list commits on).");
+        const params = new URLSearchParams({ per_page: String(per_page ?? 20), sha: branch });
         const data  = await githubRequest(`/repos/${owner}/${repo}/commits?${params}`);
         const lines = data.map((c) =>
           `${c.sha.slice(0, 7)} — ${c.commit.message.split("\n")[0]} (${c.commit.author.name}, ${c.commit.author.date.slice(0, 10)})`
