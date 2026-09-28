@@ -1,16 +1,16 @@
 // ---------------------------------------------------------------------------
-// connectors/github/repo_mgmt.js — repo lifecycle + file-at-commit tools
+// connectors/github/repo_mgmt.js — repo lifecycle tool
 //
 // Consolidated per plan-madmcp-github-tools-overhaul: create_repo, fork_repo,
 // sync_fork, delete_repo (and the set_topics write path moved over from
 // repo_metadata) merged into one repo_lifecycle tool, dispatched on `action`.
 //
-// get_file_at_commit stays as its own tool in this file for now; it moves to
-// repo_inspect in group 3. gh_token lives in clone_token.js and is untouched.
+// get_file_at_commit moved to repo_inspect ('at_commit' action). gh_token
+// lives in clone_token.js and is untouched.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { githubRequest, fromBase64 } from "./client.js";
+import { githubRequest } from "./client.js";
 import { DEFAULT_OWNER } from "../../config.js";
 
 export function register(server) {
@@ -134,36 +134,6 @@ export function register(server) {
           text: `🗑️ Deleted ${targetOwner}/${repo} permanently.`,
         }],
       };
-    }
-  );
-
-  // ── Get file at commit (moves to repo_inspect in group 3) ────────────────
-
-  server.tool(
-    "get_file_at_commit",
-    "Read a file's contents as it existed at a specific commit SHA. Equivalent concept to read_file's `ref` param, but here it's required and must be a commit SHA (not a branch/tag).",
-    {
-      owner:  z.string().optional().describe(`Repository owner. Defaults to "${DEFAULT_OWNER}" if omitted.`),
-      repo:   z.string().describe("Repository name"),
-      path:   z.string().describe("File path within the repo"),
-      commit: z.string().describe("Commit SHA to read the file from"),
-    },
-    async ({ owner = DEFAULT_OWNER, repo, path, commit }) => {
-      // Walk the tree at the given commit SHA
-      const commitData = await githubRequest(`/repos/${owner}/${repo}/commits/${commit}`);
-      const treeSha    = commitData.commit.tree.sha;
-      const tree       = await githubRequest(`/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`);
-      const entry      = tree.tree.find((item) => item.path === path && item.type === "blob");
-      if (!entry) {
-        return {
-          content: [{ type: "text", text: `File not found at commit ${commit.slice(0, 7)}: ${path}` }],
-          isError: true,
-        };
-      }
-      const blob    = await githubRequest(`/repos/${owner}/${repo}/git/blobs/${entry.sha}`);
-      const content = fromBase64(blob.content.replace(/\n/g, ""));
-      const header  = `[${path} @ ${commit.slice(0, 7)} | ${commitData.commit.author.date.slice(0, 10)} | ${content.length} chars]\n\n`;
-      return { content: [{ type: "text", text: header + content }] };
     }
   );
 }

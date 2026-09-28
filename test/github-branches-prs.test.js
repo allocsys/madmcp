@@ -7,7 +7,7 @@ vi.mock("../connectors/github/client.js", () => ({
 }));
 
 import { githubRequest, githubGraphQL } from "../connectors/github/client.js";
-import { register as registerBranches } from "../connectors/github/branches.js";
+import { register as registerRepoInspect } from "../connectors/github/repo_inspect.js";
 import { register as registerPRs } from "../connectors/github/prs.js";
 
 function makeFakeServer() {
@@ -26,7 +26,7 @@ describe("GitHub Connector - Branches & Commits", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     server = makeFakeServer();
-    registerBranches(server);
+    registerRepoInspect(server);
   });
 
   describe("list_branches", () => {
@@ -36,7 +36,7 @@ describe("GitHub Connector - Branches & Commits", () => {
         { name: "feature-xyz", protected: false },
       ]);
 
-      const result = await server.tools.list_branches({ repo: "madmcp" });
+      const result = await server.tools.repo_inspect({ action: "list_branches", repo: "madmcp" });
       expect(result.content[0].text).toBe("main (protected)\nfeature-xyz");
       expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/madmcp/branches");
     });
@@ -44,7 +44,7 @@ describe("GitHub Connector - Branches & Commits", () => {
     it("returns empty placeholder when no branches found", async () => {
       githubRequest.mockResolvedValueOnce([]);
 
-      const result = await server.tools.list_branches({ repo: "madmcp" });
+      const result = await server.tools.repo_inspect({ action: "list_branches", repo: "madmcp" });
       expect(result.content[0].text).toBe("(no branches)");
     });
   });
@@ -55,7 +55,8 @@ describe("GitHub Connector - Branches & Commits", () => {
         .mockResolvedValueOnce({ object: { sha: "abc123sha" } }) // get ref
         .mockResolvedValueOnce({}); // post branch ref
 
-      const result = await server.tools.create_branch({
+      const result = await server.tools.repo_inspect({
+        action: "create_branch",
         owner: "allocsys",
         repo: "madmcp",
         branch: "new-feature",
@@ -79,7 +80,8 @@ describe("GitHub Connector - Branches & Commits", () => {
         .mockResolvedValueOnce({ object: { sha: "def456sha" } }) // get develop ref
         .mockResolvedValueOnce({}); // post branch ref
 
-      const result = await server.tools.create_branch({
+      const result = await server.tools.repo_inspect({
+        action: "create_branch",
         owner: "allocsys",
         repo: "madmcp",
         branch: "new-feature",
@@ -104,7 +106,8 @@ describe("GitHub Connector - Branches & Commits", () => {
         },
       ]);
 
-      const result = await server.tools.list_commits({
+      const result = await server.tools.repo_inspect({
+        action: "list_commits",
         owner: "allocsys",
         repo: "madmcp",
         branch: "main",
@@ -118,9 +121,11 @@ describe("GitHub Connector - Branches & Commits", () => {
     it("returns placeholder when no commits found", async () => {
       githubRequest.mockResolvedValueOnce([]);
 
-      const result = await server.tools.list_commits({
+      const result = await server.tools.repo_inspect({
+        action: "list_commits",
         owner: "allocsys",
         repo: "madmcp",
+        branch: "main",
       });
 
       expect(result.content[0].text).toBe("(no commits)");
@@ -141,7 +146,8 @@ describe("GitHub Connector - Branches & Commits", () => {
         ],
       });
 
-      const result = await server.tools.get_commit({
+      const result = await server.tools.repo_inspect({
+        action: "get_commit",
         owner: "allocsys",
         repo: "madmcp",
         sha: "abcdef1",
