@@ -8,6 +8,7 @@ vi.mock("../connectors/github/client.js", () => ({
 
 import { githubRequest, githubGraphQL } from "../connectors/github/client.js";
 import { register as registerRepoInspect } from "../connectors/github/repo_inspect.js";
+import { register as registerPRRead } from "../connectors/github/pr_read.js";
 import { register as registerPRs } from "../connectors/github/prs.js";
 
 function makeFakeServer() {
@@ -169,6 +170,7 @@ describe("GitHub Connector - Pull Requests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     server = makeFakeServer();
+    registerPRRead(server);
     registerPRs(server);
   });
 
@@ -187,7 +189,8 @@ describe("GitHub Connector - Pull Requests", () => {
         },
       ]);
 
-      const result = await server.tools.get_pull_requests({
+      const result = await server.tools.pr_read({
+        action: "list",
         owner: "allocsys",
         repo: "madmcp",
         state: "open",
@@ -213,7 +216,8 @@ describe("GitHub Connector - Pull Requests", () => {
         },
       ]);
 
-      const result = await server.tools.get_pull_requests({
+      const result = await server.tools.pr_read({
+        action: "list",
         owner: "allocsys",
         repo: "madmcp",
         state: "closed",
@@ -225,7 +229,8 @@ describe("GitHub Connector - Pull Requests", () => {
     it("returns placeholder when no PRs are found", async () => {
       githubRequest.mockResolvedValueOnce([]);
 
-      const result = await server.tools.get_pull_requests({
+      const result = await server.tools.pr_read({
+        action: "list",
         owner: "allocsys",
         repo: "madmcp",
       });
@@ -279,7 +284,8 @@ describe("GitHub Connector - Pull Requests", () => {
           },
         ]);
 
-      const result = await server.tools.get_pull_requests({
+      const result = await server.tools.pr_read({
+        action: "get",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -309,7 +315,8 @@ describe("GitHub Connector - Pull Requests", () => {
         html_url: "https://github.com/allocsys/madmcp/pull/42",
       });
 
-      const result = await server.tools.get_pull_requests({
+      const result = await server.tools.pr_read({
+        action: "get",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
@@ -338,7 +345,8 @@ describe("GitHub Connector - Pull Requests", () => {
           { user: { login: "user2" }, state: "COMMENTED", submitted_at: "2026-08-01T13:00:00Z", body: "review text", html_url: "r-url" },
         ]);
 
-      const result = await server.tools.get_pr_activity({
+      const result = await server.tools.pr_read({
+        action: "activity",
         owner: "allocsys",
         repo: "madmcp",
         pull_number: 42,
