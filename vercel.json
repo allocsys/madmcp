@@ -12,5 +12,10 @@
       "debug/*": false
     }
   },
+  "functions": {
+    "server.js": {
+      "maxDuration": 60
+    }
+  },
   "ignoreCommand": "bash -c '! git diff --name-only HEAD^ HEAD | grep -qvE \"^(.*\\.md|demo\\.html|test/.*|\\.github/.*)$\"'"
 }
