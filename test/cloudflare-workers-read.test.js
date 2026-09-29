@@ -93,6 +93,32 @@ describe("Cloudflare connector - consolidated cf_workers_read (list/get/code)", 
       expect(result.content[0].text).toBe(source);
     });
 
+    it("pages large source with offset/limit and reports the next offset", async () => {
+      const source = "a".repeat(25000) + "b".repeat(5000);
+      cfAccountRequest.mockResolvedValueOnce(source);
+      let text = (await server.tools.cf_workers_read({ action: "code", scriptName: "w" })).content[0].text;
+      expect(text.startsWith("a".repeat(20000))).toBe(true);
+      expect(text).toContain("showing characters 0-20000 of 30000");
+      expect(text).toContain("offset=20000");
+
+      cfAccountRequest.mockResolvedValueOnce(source);
+      text = (await server.tools.cf_workers_read({ action: "code", scriptName: "w", offset: 20000 })).content[0].text;
+      expect(text.startsWith("a".repeat(5000) + "b".repeat(5000))).toBe(true);
+      expect(text).toContain("showing characters 20000-30000 of 30000");
+      expect(text).toContain("End of content");
+    });
+
+    it("honours a custom limit and reports an offset past the end", async () => {
+      cfAccountRequest.mockResolvedValueOnce("0123456789");
+      let text = (await server.tools.cf_workers_read({ action: "code", scriptName: "w", limit: 4 })).content[0].text;
+      expect(text.startsWith("0123\n")).toBe(true);
+      expect(text).toContain("offset=4");
+
+      cfAccountRequest.mockResolvedValueOnce("0123456789");
+      text = (await server.tools.cf_workers_read({ action: "code", scriptName: "w", offset: 50 })).content[0].text;
+      expect(text).toContain("past the end");
+    });
+
     it("JSON-stringifies non-string responses", async () => {
       const data = { result: "x" };
       cfAccountRequest.mockResolvedValueOnce(data);
