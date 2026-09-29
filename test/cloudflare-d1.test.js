@@ -130,6 +130,27 @@ describe("Cloudflare connector - consolidated D1 tools", () => {
       expect(out[0].rows_omitted).toBeUndefined();
     });
 
+    it("count_only returns row_count per statement and no rows", async () => {
+      const rows = Array.from({ length: 120 }, (_, i) => ({ id: i }));
+      cfAccountRequest.mockResolvedValueOnce([
+        { results: rows, success: true, meta: { duration: 1 } },
+        { results: [], success: true },
+      ]);
+      const result = await server.tools.cf_d1_query({ database_id: "abc", sql: "x", count_only: true });
+      const out = JSON.parse(result.content[0].text);
+      expect(out).toEqual([
+        { success: true, meta: { duration: 1 }, row_count: 120 },
+        { success: true, row_count: 0 },
+      ]);
+    });
+
+    it("count_only leaves non-row statements untouched", async () => {
+      const data = [{ success: true, meta: { changes: 3 } }];
+      cfAccountRequest.mockResolvedValueOnce(data);
+      const result = await server.tools.cf_d1_query({ database_id: "abc", sql: "UPDATE t SET a=1", count_only: true });
+      expect(result.content[0].text).toBe(JSON.stringify(data));
+    });
+
     it("leaves small results untouched", async () => {
       const data = [{ results: [{ id: 1 }], success: true }];
       cfAccountRequest.mockResolvedValueOnce(data);
