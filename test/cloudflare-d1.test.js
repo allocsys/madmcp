@@ -44,12 +44,12 @@ describe("Cloudflare connector - consolidated D1 tools", () => {
       expect(cfAccountRequest).not.toHaveBeenCalled();
     });
 
-    it("requests /d1/database/{id} and returns pretty-printed JSON", async () => {
+    it("requests /d1/database/{id} and returns compact JSON", async () => {
       const data = { uuid: "abc", name: "db" };
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_d1_read({ action: "get", database_id: "abc" });
       expect(cfAccountRequest).toHaveBeenCalledWith("/d1/database/abc");
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {
@@ -94,7 +94,7 @@ describe("Cloudflare connector - consolidated D1 tools", () => {
         method: "POST",
         body: { name: "db", primary_location_hint: "weur" },
       });
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
   });
 
@@ -106,6 +106,35 @@ describe("Cloudflare connector - consolidated D1 tools", () => {
         method: "POST",
         body: { sql: "SELECT ?", params: ["1"] },
       });
+    });
+
+    it("caps rows per statement at 50 by default and reports what was omitted", async () => {
+      const rows = Array.from({ length: 120 }, (_, i) => ({ id: i }));
+      cfAccountRequest.mockResolvedValueOnce([{ results: rows, success: true }]);
+      const result = await server.tools.cf_d1_query({ database_id: "abc", sql: "SELECT id FROM t" });
+      const out = JSON.parse(result.content[0].text);
+      expect(out[0].results).toHaveLength(50);
+      expect(out[0].rows_omitted).toBe(70);
+      expect(out[0].note).toContain("50 of 120");
+    });
+
+    it("honours max_rows, and 0 disables the row cap", async () => {
+      const rows = Array.from({ length: 120 }, (_, i) => ({ id: i }));
+      cfAccountRequest.mockResolvedValueOnce([{ results: rows }]);
+      let out = JSON.parse((await server.tools.cf_d1_query({ database_id: "abc", sql: "x", max_rows: 5 })).content[0].text);
+      expect(out[0].results).toHaveLength(5);
+
+      cfAccountRequest.mockResolvedValueOnce([{ results: rows }]);
+      out = JSON.parse((await server.tools.cf_d1_query({ database_id: "abc", sql: "x", max_rows: 0 })).content[0].text);
+      expect(out[0].results).toHaveLength(120);
+      expect(out[0].rows_omitted).toBeUndefined();
+    });
+
+    it("leaves small results untouched", async () => {
+      const data = [{ results: [{ id: 1 }], success: true }];
+      cfAccountRequest.mockResolvedValueOnce(data);
+      const result = await server.tools.cf_d1_query({ database_id: "abc", sql: "x" });
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {
