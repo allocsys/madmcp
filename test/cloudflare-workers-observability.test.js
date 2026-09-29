@@ -72,7 +72,7 @@ describe("Cloudflare connector - consolidated cf_workers_observability", () => {
         method: "POST",
         body: { dataset: "cloudflare-workers", timeframe: { from: FROM_MS, to: TO_MS } },
       });
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("passes a custom dataset and accepts epoch-millis strings", async () => {
@@ -128,7 +128,7 @@ describe("Cloudflare connector - consolidated cf_workers_observability", () => {
       expect(cfAccountRequest).not.toHaveBeenCalled();
     });
 
-    it("sends defaults: events view, default dataset, no filters, generated queryId, no limit", async () => {
+    it("sends defaults: events view, default dataset, no filters, generated queryId, default limit 20", async () => {
       cfAccountRequest.mockResolvedValueOnce({ events: [] });
       await call({ action: "query", timeframe_from: FROM, timeframe_to: TO });
       const [path, opts] = cfAccountRequest.mock.calls[0];
@@ -141,7 +141,7 @@ describe("Cloudflare connector - consolidated cf_workers_observability", () => {
         timeframe: { from: FROM_MS, to: TO_MS },
         parameters: { filters: [] },
       });
-      expect(opts.body).not.toHaveProperty("limit");
+      expect(opts.body.limit).toBe(20);
     });
 
     it("prepends the script_name filter and normalizes filters (operator->operation, inferred type)", async () => {
@@ -172,11 +172,27 @@ describe("Cloudflare connector - consolidated cf_workers_observability", () => {
       });
     });
 
-    it("returns pretty-printed JSON and lets API errors throw", async () => {
+    it("projects events to `fields` when given", async () => {
+      const data = { events: { events: [{ timestamp: 1, "$metadata": { level: "error" }, big: { x: "y".repeat(100) } }] }, count: 1 };
+      cfAccountRequest.mockResolvedValueOnce(data);
+      const result = await call({ action: "query", timeframe_from: FROM, timeframe_to: TO, fields: ["timestamp", "$metadata"] });
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        events: { events: [{ timestamp: 1, "$metadata": { level: "error" } }] },
+        count: 1,
+      });
+    });
+
+    it("truncates oversized output with a notice", async () => {
+      cfAccountRequest.mockResolvedValueOnce({ events: { events: [{ blob: "z".repeat(50000) }] } });
+      const result = await call({ action: "query", timeframe_from: FROM, timeframe_to: TO });
+      expect(result.content[0].text).toContain("[truncated: showing 20000 of");
+    });
+
+    it("returns compact JSON and lets API errors throw", async () => {
       const data = { events: { events: [{ a: 1 }] } };
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await call({ action: "query", timeframe_from: FROM, timeframe_to: TO });
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
       cfAccountRequest.mockRejectedValueOnce(new Error("500 boom"));
       await expect(call({ action: "query", timeframe_from: FROM, timeframe_to: TO })).rejects.toThrow("500 boom");
     });
