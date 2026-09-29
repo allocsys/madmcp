@@ -82,7 +82,7 @@ describe("Cloudflare connector - guarded cf_delete", () => {
         const result = await server.tools.cf_delete({ resource, id, confirm: true });
         expect(cfAccountRequest).toHaveBeenCalledTimes(1);
         expect(cfAccountRequest).toHaveBeenCalledWith(path, { method: "DELETE" });
-        expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+        expect(result.content[0].text).toBe(JSON.stringify(data));
       });
 
       it("lets API errors throw", async () => {

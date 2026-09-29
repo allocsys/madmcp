@@ -44,12 +44,12 @@ describe("Cloudflare connector - consolidated R2 tools", () => {
       expect(cfAccountRequest).not.toHaveBeenCalled();
     });
 
-    it("requests /r2/buckets/{name} and returns pretty-printed JSON", async () => {
+    it("requests /r2/buckets/{name} and returns compact JSON", async () => {
       const data = { name: "b1" };
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_r2_read({ action: "get", name: "b1" });
       expect(cfAccountRequest).toHaveBeenCalledWith("/r2/buckets/b1");
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {
@@ -103,7 +103,7 @@ describe("Cloudflare connector - consolidated R2 tools", () => {
         method: "POST",
         body: { name: "new" },
       });
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {

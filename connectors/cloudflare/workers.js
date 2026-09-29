@@ -4,11 +4,8 @@
 
 import { z } from "zod";
 import { cfAccountRequest } from "./client.js";
+import { textResult } from "../output.js";
 
-function textResult(data) {
-  const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-  return { content: [{ type: "text", text }] };
-}
 
 export function register(server) {
   // Consolidates the former cf_workers_list, cf_workers_get_worker and

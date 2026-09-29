@@ -37,13 +37,13 @@ describe("Cloudflare connector - consolidated cf_workers_read (list/get/code)", 
   });
 
   describe("action 'list'", () => {
-    it("requests /workers/scripts and returns pretty-printed JSON", async () => {
+    it("requests /workers/scripts and returns compact JSON", async () => {
       const data = [{ id: "a" }, { id: "b" }];
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_workers_read({ action: "list" });
       expect(cfAccountRequest).toHaveBeenCalledTimes(1);
       expect(cfAccountRequest).toHaveBeenCalledWith("/workers/scripts");
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
       expect(result.isError).toBeUndefined();
     });
 
@@ -66,7 +66,7 @@ describe("Cloudflare connector - consolidated cf_workers_read (list/get/code)", 
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_workers_read({ action: "get", scriptName: "my-worker" });
       expect(cfAccountRequest).toHaveBeenCalledWith("/workers/scripts/my-worker/settings");
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {
@@ -97,7 +97,7 @@ describe("Cloudflare connector - consolidated cf_workers_read (list/get/code)", 
       const data = { result: "x" };
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_workers_read({ action: "code", scriptName: "w" });
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
   });
 });
