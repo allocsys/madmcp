@@ -44,12 +44,12 @@ describe("Cloudflare connector - consolidated Hyperdrive tools", () => {
       expect(cfAccountRequest).not.toHaveBeenCalled();
     });
 
-    it("requests /hyperdrive/configs/{id} and returns pretty-printed JSON", async () => {
+    it("requests /hyperdrive/configs/{id} and returns compact JSON", async () => {
       const data = { id: "h1" };
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_hyperdrive_read({ action: "get", hyperdrive_id: "h1" });
       expect(cfAccountRequest).toHaveBeenCalledWith("/hyperdrive/configs/h1");
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {

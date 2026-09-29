@@ -5,9 +5,7 @@
 import { z } from "zod";
 import { cfAccountRequest } from "./client.js";
 
-function textResult(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-}
+import { textResult } from "../output.js";
 
 function errorResult(text) {
   return { content: [{ type: "text", text }], isError: true };

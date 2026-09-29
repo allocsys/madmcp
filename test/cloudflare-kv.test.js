@@ -44,12 +44,12 @@ describe("Cloudflare connector - consolidated KV tools", () => {
       expect(cfAccountRequest).not.toHaveBeenCalled();
     });
 
-    it("requests /storage/kv/namespaces/{id} and returns pretty-printed JSON", async () => {
+    it("requests /storage/kv/namespaces/{id} and returns compact JSON", async () => {
       const data = { id: "ns1", title: "t" };
       cfAccountRequest.mockResolvedValueOnce(data);
       const result = await server.tools.cf_kv_read({ action: "get", namespace_id: "ns1" });
       expect(cfAccountRequest).toHaveBeenCalledWith("/storage/kv/namespaces/ns1");
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
 
     it("lets API errors throw", async () => {
@@ -96,7 +96,7 @@ describe("Cloudflare connector - consolidated KV tools", () => {
         method: "POST",
         body: { title: "my-ns" },
       });
-      expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+      expect(result.content[0].text).toBe(JSON.stringify(data));
     });
   });
 

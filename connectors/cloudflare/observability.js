@@ -22,9 +22,80 @@
 import { z } from "zod";
 import { cfAccountRequest } from "./client.js";
 import { compareScripts } from "./observability_compare.js";
+import { textResult, pickFields } from "../output.js";
 
-function textResult(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+// Default number of events returned by action 'query'. Raw event streams are
+// large (each event is a nested JSON object) so callers must opt in to more.
+export const DEFAULT_QUERY_LIMIT = 20;
+
+// Keep only the listed top-level keys of each event (e.g. ['timestamp', '$metadata'])
+// in a telemetry query result. Result shape: { events: { events: [...] }, ... }.
+export function projectEventFields(result, fields) {
+  if (!Array.isArray(fields) || fields.length === 0) return result;
+  const events = result?.events?.events;
+  if (!Array.isArray(events)) return result;
+  return { ...result, events: { ...result.events, events: pickFields(events, fields) } };
+}
+
+// Default number of events fetched when action 'query' runs with summarize.
+// Only aggregates are returned, so a larger window is cheap for the caller.
+export const DEFAULT_SUMMARIZE_LIMIT = 200;
+
+const TOP_N = 5;
+const MAX_MESSAGE_CHARS = 120;
+
+function bump(map, key) {
+  if (key === undefined || key === null || key === "") return;
+  const k = String(key);
+  map.set(k, (map.get(k) || 0) + 1);
+}
+
+function topEntries(map, n) {
+  return [...map.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([value, count]) => ({ value, count }));
+}
+
+// Collapse a telemetry query result into aggregates instead of raw events:
+// count, time range, and top levels / statuses / errors / messages.
+// Result shape: { events: { events: [...] }, ... }.
+export function summarizeEvents(result) {
+  const events = result?.events?.events;
+  if (!Array.isArray(events)) return result;
+
+  const levels = new Map();
+  const statuses = new Map();
+  const errors = new Map();
+  const messages = new Map();
+  let first;
+  let last;
+
+  for (const ev of events) {
+    const meta = ev?.$metadata || {};
+    bump(levels, meta.level);
+    bump(statuses, ev?.$workers?.event?.response?.status);
+    bump(errors, meta.error);
+    const msg = meta.message;
+    if (typeof msg === "string") bump(messages, msg.slice(0, MAX_MESSAGE_CHARS));
+    const ts = ev?.timestamp;
+    if (typeof ts === "number") {
+      if (first === undefined || ts < first) first = ts;
+      if (last === undefined || ts > last) last = ts;
+    }
+  }
+
+  return {
+    summary: {
+      event_count: events.length,
+      ...(first !== undefined ? { first_timestamp: first, last_timestamp: last } : {}),
+      levels: topEntries(levels, TOP_N),
+      statuses: topEntries(statuses, TOP_N),
+      errors: topEntries(errors, TOP_N),
+      top_messages: topEntries(messages, TOP_N),
+    },
+    note: `Aggregated over ${events.length} fetched events (no raw events returned). Raise limit for a wider sample, or rerun without summarize to see events.`,
+  };
 }
 
 // Cloudflare's telemetry query/values endpoints require timeframe bounds as
@@ -114,7 +185,8 @@ export function register(server) {
     "RULE: action 'values' needs key + timeframe_from + timeframe_to and lists distinct values seen for that key (e.g. all $workers.event.response.status values), for building filters. Optional type (default 'string').\n" +
     "RULE: action 'query' needs timeframe_from + timeframe_to; optional script_name, view, filters, limit, query_id. Returns the matching events.\n" +
     "RULE: action 'compare' needs script_a + script_b + timeframe_from + timeframe_to and compares TWO scripts over the SAME timeframe: normalized rates (events/sec, loadShed/sec, error/sec), not raw counts, plus a 'stuck socket' heuristic (high wall-time vs low CPU-time) with example events per side. Use it for a deploy vs baseline instead of two separate 'query' calls -- raw counts aren't comparable across differing sample time-spans. NOT a controlled A/B: traffic mix, client geography and time-of-day aren't normalized (the output includes that caveat).\n" +
-    "RULE: dataset (default 'cloudflare-workers') applies to every action; view applies to 'query' and 'compare'; limit applies to 'query' (server default) and 'compare' (default 1000, applied to both scripts).",
+    "RULE: dataset (default 'cloudflare-workers') applies to every action; view applies to 'query' and 'compare'; limit applies to 'query' (default 20) and 'compare' (default 1000, applied to both scripts). fields (top-level event keys, e.g. ['timestamp','$metadata']) applies to 'query' and trims each event. summarize (boolean) applies to 'query': returns aggregates (event count, time range, top levels/statuses/errors/messages) instead of raw events, fetching up to 200 events by default; use it first to see what is happening, then query narrowly. Output is compact JSON, capped in size with a truncation notice -- prefer small limits, filters and fields over raising the cap.",
+
     {
       action: z.enum(["query", "keys", "values", "compare"]).describe("Which operation to perform"),
       timeframe_from: z.string().optional().describe("Start of time range, ISO 8601 (e.g. '2026-07-01T00:00:00Z') or epoch millis. Required for every action; for 'compare' it is applied identically to both scripts."),
@@ -125,7 +197,9 @@ export function register(server) {
       script_name: z.string().optional().describe("'query' only: convenience filter scoping results to one Worker script. Adds a filter on '$metadata.service' -- if that key doesn't match your account's schema, use 'filters' directly instead (check action 'keys')."),
       view: z.string().optional().describe("'query' and 'compare': result grouping mode, e.g. 'events' (raw event stream) or 'invocations' (grouped by invocation). Default: 'events'."),
       filters: z.array(filterSchema).optional().describe("'query' only: additional structured filters, e.g. [{key: '$workers.event.response.status', operator: 'gt', value: 500}]"),
-      limit: z.number().optional().describe("'query': max number of results (default: server default, typically 100). 'compare': max events fetched per script (default: 1000)."),
+      limit: z.number().optional().describe("'query': max number of results (default: 20). 'compare': max events fetched per script (default: 1000)."),
+      fields: z.array(z.string()).optional().describe("'query' only: keep only these top-level keys of each event (e.g. ['timestamp','$metadata']) to shrink the output."),
+      summarize: z.boolean().optional().describe("'query' only: if true, return aggregate counts (event count, time range, top levels/statuses/errors/messages) instead of raw events. Default limit becomes 200. Ignores fields."),
       query_id: z.string().optional().describe("'query' only: optional query identifier for the request (any string); Cloudflare uses this to tag/save the query"),
       script_a: z.string().optional().describe("'compare' only (required): first Worker script name, e.g. the post-deploy / current version"),
       script_b: z.string().optional().describe("'compare' only (required): second Worker script name, e.g. the pre-deploy / baseline version"),
@@ -165,8 +239,11 @@ export function register(server) {
       }
 
       if (action === "query") {
-        const { script_name, view, dataset, filters, limit, query_id } = args;
-        return textResult(await queryTelemetry({ timeframe_from, timeframe_to, script_name, view, dataset, filters, limit, query_id }));
+        const { script_name, view, dataset, filters, summarize, query_id, fields } = args;
+        const limit = args.limit ?? (summarize ? DEFAULT_SUMMARIZE_LIMIT : DEFAULT_QUERY_LIMIT);
+        const result = await queryTelemetry({ timeframe_from, timeframe_to, script_name, view, dataset, filters, limit, query_id });
+        if (summarize) return textResult(summarizeEvents(result));
+        return textResult(projectEventFields(result, fields));
       }
 
       // action === "compare"

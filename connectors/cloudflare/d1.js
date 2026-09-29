@@ -4,9 +4,38 @@
 
 import { z } from "zod";
 import { cfAccountRequest } from "./client.js";
+import { textResult, capArray } from "../output.js";
 
-function textResult(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+// Default cap on rows returned per statement by cf_d1_query. Large result sets
+// are pasted into the model's context, so callers must opt in to more.
+export const DEFAULT_MAX_ROWS = 50;
+
+// D1 responds with an array of statement results: [{ results: [...rows], success, meta }].
+// Truncate each statement's rows and say how many were omitted.
+export function capD1Rows(data, maxRows) {
+  if (!maxRows || !Array.isArray(data)) return data;
+  return data.map((stmt) => {
+    if (!stmt || !Array.isArray(stmt.results)) return stmt;
+    const { items, omitted } = capArray(stmt.results, maxRows);
+    if (!omitted) return stmt;
+    return {
+      ...stmt,
+      results: items,
+      rows_omitted: omitted,
+      note: `Showing ${items.length} of ${stmt.results.length} rows. Add LIMIT/OFFSET or a WHERE clause, or raise max_rows (0 = no row cap).`,
+    };
+  });
+}
+
+// Replace each statement's rows with just a row count (plus success/meta), so
+// callers can size a result set without pulling any rows into context.
+export function countD1Rows(data) {
+  if (!Array.isArray(data)) return data;
+  return data.map((stmt) => {
+    if (!stmt || !Array.isArray(stmt.results)) return stmt;
+    const { results, ...rest } = stmt;
+    return { ...rest, row_count: results.length };
+  });
 }
 
 function errorResult(text) {
@@ -76,13 +105,20 @@ export function register(server) {
   // Renamed from cf_d1_database_query; behavior unchanged.
   server.tool(
     "cf_d1_query",
-    "Run a SQL query against a D1 database in your Cloudflare account. NOTE: executes the SQL as given, so it can modify data.",
+    "Run a SQL query against a D1 database in your Cloudflare account. NOTE: executes the SQL as given, so it can modify data.\n" +
+    "RULE: results are capped to max_rows rows per statement (default 50) to keep output small; prefer selecting only the columns you need and using LIMIT/WHERE. Pass max_rows 0 to disable the row cap.\n" +
+    "RULE: pass count_only true to get only a row_count (and meta) per statement with no rows; use it to size a result set before fetching it.",
     {
       database_id: z.string(),
       sql: z.string(),
       params: z.array(z.string()).optional(),
+      max_rows: z.number().optional().describe(`Max rows returned per statement (default ${DEFAULT_MAX_ROWS}; 0 = no row cap). Truncated output says how many rows were omitted.`),
+      count_only: z.boolean().optional().describe("If true, return only a row_count per statement instead of the rows (default false). Ignores max_rows."),
     },
-    async ({ database_id, sql, params }) =>
-      textResult(await cfAccountRequest(`/d1/database/${database_id}/query`, { method: "POST", body: { sql, params } }))
+    async ({ database_id, sql, params, max_rows, count_only }) => {
+      const data = await cfAccountRequest(`/d1/database/${database_id}/query`, { method: "POST", body: { sql, params } });
+      if (count_only) return textResult(countD1Rows(data));
+      return textResult(capD1Rows(data, max_rows ?? DEFAULT_MAX_ROWS));
+    }
   );
 }
