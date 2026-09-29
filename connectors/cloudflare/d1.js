@@ -27,6 +27,17 @@ export function capD1Rows(data, maxRows) {
   });
 }
 
+// Replace each statement's rows with just a row count (plus success/meta), so
+// callers can size a result set without pulling any rows into context.
+export function countD1Rows(data) {
+  if (!Array.isArray(data)) return data;
+  return data.map((stmt) => {
+    if (!stmt || !Array.isArray(stmt.results)) return stmt;
+    const { results, ...rest } = stmt;
+    return { ...rest, row_count: results.length };
+  });
+}
+
 function errorResult(text) {
   return { content: [{ type: "text", text }], isError: true };
 }
@@ -95,15 +106,18 @@ export function register(server) {
   server.tool(
     "cf_d1_query",
     "Run a SQL query against a D1 database in your Cloudflare account. NOTE: executes the SQL as given, so it can modify data.\n" +
-    "RULE: results are capped to max_rows rows per statement (default 50) to keep output small; prefer selecting only the columns you need and using LIMIT/WHERE. Pass max_rows 0 to disable the row cap.",
+    "RULE: results are capped to max_rows rows per statement (default 50) to keep output small; prefer selecting only the columns you need and using LIMIT/WHERE. Pass max_rows 0 to disable the row cap.\n" +
+    "RULE: pass count_only true to get only a row_count (and meta) per statement with no rows; use it to size a result set before fetching it.",
     {
       database_id: z.string(),
       sql: z.string(),
       params: z.array(z.string()).optional(),
       max_rows: z.number().optional().describe(`Max rows returned per statement (default ${DEFAULT_MAX_ROWS}; 0 = no row cap). Truncated output says how many rows were omitted.`),
+      count_only: z.boolean().optional().describe("If true, return only a row_count per statement instead of the rows (default false). Ignores max_rows."),
     },
-    async ({ database_id, sql, params, max_rows }) => {
+    async ({ database_id, sql, params, max_rows, count_only }) => {
       const data = await cfAccountRequest(`/d1/database/${database_id}/query`, { method: "POST", body: { sql, params } });
+      if (count_only) return textResult(countD1Rows(data));
       return textResult(capD1Rows(data, max_rows ?? DEFAULT_MAX_ROWS));
     }
   );
