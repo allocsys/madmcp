@@ -30,6 +30,26 @@ export function capText(text, maxChars = DEFAULT_MAX_OUTPUT_CHARS) {
   );
 }
 
+// Return one page of a large text (e.g. worker source) instead of truncating it.
+// `offset` and `limit` are in characters. A text that fits in a single page from
+// offset 0 is returned untouched; otherwise a footer says which range was shown
+// and the offset to request next, so the caller can read the rest page by page.
+export function paginateText(text, { offset = 0, limit = DEFAULT_MAX_OUTPUT_CHARS } = {}) {
+  const total = text.length;
+  const start = Number.isInteger(offset) && offset > 0 ? offset : 0;
+  const size = Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_MAX_OUTPUT_CHARS;
+  if (start === 0 && total <= size) return text;
+  if (start >= total) {
+    return `…[offset ${start} is past the end: total ${total} characters.]`;
+  }
+  const end = Math.min(start + size, total);
+  const page = text.slice(start, end);
+  const footer = end < total
+    ? `\n…[showing characters ${start}-${end} of ${total}. Call again with offset=${end} for the next page.]`
+    : `\n…[showing characters ${start}-${end} of ${total}. End of content.]`;
+  return page + footer;
+}
+
 export function textResult(data, { maxChars } = {}) {
   return { content: [{ type: "text", text: capText(toCompactText(data), maxChars) }] };
 }
