@@ -256,7 +256,9 @@ describe("agent_tools.js — delegate_agent async branching", () => {
     expect(mockRunInvestigation).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toMatch(/stalled/);
-    expect(result.content[0].text).toContain("3 step(s)");
+    // stepsDone 3 -> stalled while on step 4; no transcript by default.
+    expect(result.content[0].text).toContain("stalled on step 4");
+    expect(result.content[0].text).not.toContain("Tool calls so far");
     expect(result.content[0].text).toMatch(/explicit max_steps/);
     // Stalled polls are quiet too: no transcript unless show_transcript is set.
     expect(result.content[0].text).not.toContain("github_get_repo_topics(a, b)");
