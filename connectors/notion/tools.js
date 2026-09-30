@@ -718,7 +718,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
             }
           }
         }
-      } catch (_) {}
+      } catch { /* best-effort: commit log must never break checkpoint save/load */ }
     }
 
     return `Checkpoint saved successfully.\nURL: ${existing.url}${logWarning}`;
