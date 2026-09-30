@@ -157,7 +157,7 @@ export function register(server) {
         if (COMMIT_LOG_ENABLED && data.sha) {
           try {
             waitUntil(recordCommit({ sha: data.sha, message: commit_title || `Merge PR #${pull_number} (${repo})`, files: [`PR #${pull_number}`], branch: "merge", ts: new Date().toISOString() }));
-          } catch (_) {}
+          } catch { /* best-effort logging: never affect the tool result */ }
         }
         return { content: [{ type: "text", text: `Merged PR #${pull_number}: ${data.message}\nCommit: ${data.sha?.slice(0, 7) ?? "n/a"}` }] };
       }
