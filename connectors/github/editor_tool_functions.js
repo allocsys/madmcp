@@ -28,13 +28,16 @@
 //                     buildUnifiedDiff itself is unchanged and still exported.
 // ---------------------------------------------------------------------------
 
+import { waitUntil } from "@vercel/functions";
 import { githubRequest, toBase64, fromBase64 } from "./client.js";
 import { isWriteAllowed } from "./editor_policy.js";
 import {
   EDITOR_ALLOWED_EXTENSIONS,
   EDITOR_ALLOWED_PATH_PREFIXES,
   EDITOR_DENY_PATH_PATTERNS,
+  COMMIT_LOG_ENABLED,
 } from "../../config.js";
+import { recordCommit } from "../notion/commit_log.js";
 
 const POLICY_OPTIONS = {
   allowedExtensions: EDITOR_ALLOWED_EXTENSIONS,
@@ -324,7 +327,7 @@ export async function writeFile(owner, repo, path, options = {}) {
     throw err;
   }
 
-  return {
+  const commitRes = {
     path,
     content: afterContent,
     sha: result.content.sha,
@@ -333,4 +336,12 @@ export async function writeFile(owner, repo, path, options = {}) {
     created: existingSha === undefined,
     noop: false,
   };
+
+  if (COMMIT_LOG_ENABLED && commitRes.commitSha) {
+    try {
+      waitUntil(recordCommit({ sha: commitRes.commitSha, message: message || `edit ${path}`, files: [path], branch, ts: new Date().toISOString() }));
+    } catch (_) {}
+  }
+
+  return commitRes;
 }
