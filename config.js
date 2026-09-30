@@ -355,6 +355,13 @@ export const EDITOR_MAX_VALIDATE_CALLS   = Number(process.env.EDITOR_MAX_VALIDAT
 export const EDITOR_DEFAULT_STEPS  = Number(process.env.EDITOR_DEFAULT_STEPS) || 20;
 export const EDITOR_HARD_MAX_STEPS = Number(process.env.EDITOR_HARD_MAX_STEPS) || 30;
 export const EDITOR_AGENT_ENABLED = process.env.EDITOR_AGENT_ENABLED !== "false";
+// Commit log in the Notion "Session Checkpoint" page (connectors/notion/commit_log.js).
+// DEFAULT ON. Each successful GitHub write (edit_file, overwrite_files,
+// create_repo_file, delete_file, rename_file, delegate_editor writes, PR merge)
+// appends one short line above the checkpoint start marker, best-effort and
+// off the response path (waitUntil). Only the default 'checkpoint-latest' key
+// is logged. Set COMMIT_LOG_ENABLED=false to turn every hook into a no-op and
+// make checkpoint save/load behave exactly as before.
 export const COMMIT_LOG_ENABLED = process.env.COMMIT_LOG_ENABLED !== "false";
 
 // exec_in_codespace is currently broken -- gated behind an explicit opt-in
