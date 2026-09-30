@@ -255,7 +255,8 @@ describe("editor_tools.js — delegate_editor async branching", () => {
     expect(mockRunEditorAgent).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toMatch(/stalled/);
-    expect(result.content[0].text).toContain("3 step(s)");
+    // stepsDone 3 -> stalled while on step 4.
+    expect(result.content[0].text).toContain("stalled on step 4");
     expect(result.content[0].text).toMatch(/explicit max_steps/);
     // Quiet by default: written files only with show_transcript.
     expect(result.content[0].text).not.toContain("a.md");
