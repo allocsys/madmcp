@@ -1,25 +1,10 @@
 import { z } from "zod";
 import { runInvestigation, seedRun } from "./agent_delegate.js";
 import { loadCheckpoint } from "./agent_checkpoint.js";
+import { pollStepLabel, pollTranscriptBlock } from "../poll_format.js";
 import { publishAgentStep, isQStashConfigured } from "../qstash_client.js";
 import { doCreatePage } from "../../notion/tools.js";
 import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS, AGENT_ASYNC_STEP_DEAD_SECONDS } from "../../../config.js";
-
-// Mid-run poll formatting. A poll of a still-running async run reports ONLY
-// that it is running and which step it is on -- no transcript, no per-call
-// detail -- until the run finishes. The transcript is opt-in via
-// show_transcript, same as it already is for final/failed results.
-export function pollStepLabel(checkpoint) {
-  const current = (checkpoint?.stepsDone || 0) + 1;
-  const max = checkpoint?.overallMaxSteps;
-  return max ? `step ${current} of ${max}` : `step ${current}`;
-}
-
-export function pollTranscriptBlock(checkpoint, showTranscript) {
-  return showTranscript && checkpoint?.transcript?.length
-    ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}`
-    : "";
-}
 
 export function register(server) {
 
