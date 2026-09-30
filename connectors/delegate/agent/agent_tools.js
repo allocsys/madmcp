@@ -189,7 +189,7 @@ export function register(server) {
           if (!maxStepsProvided) {
             return {
               content: [{ type: "text", text:
-                `Investigation appears stalled (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
+                `Investigation appears stalled (run_id: ${resume_run_id}) -- stalled on ${pollStepLabel(checkpoint)}, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
                 `Call delegate_agent again with resume_run_id: "${resume_run_id}" and an explicit max_steps to resume the investigation synchronously from where it left off.` +
                 pollTranscriptBlock(checkpoint, show_transcript) }],
             };
