@@ -193,7 +193,7 @@ export function register(server) {
           if (!maxStepsProvided) {
             return {
               content: [{ type: "text", text:
-                `Run appears stalled (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
+                `Run appears stalled (run_id: ${resume_run_id}) -- stalled on ${pollStepLabel(checkpoint)}, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
                 `Call delegate_editor again with resume_run_id: "${resume_run_id}" and an explicit max_steps to resume synchronously from where it left off.${pollDetail}` }],
             };
           }
