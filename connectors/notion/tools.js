@@ -652,9 +652,12 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     const existing = await findPageByEntityId(key);
     const notesLines = (notes || "").split("\n");
     const updated_at = new Date().toISOString();
+    // recordCommit only ever writes to the default key's page (hooks don't know
+    // the session key), so other keys get no log marker at all.
+    const logForKey = COMMIT_LOG_ENABLED && key === "checkpoint-latest";
 
     if (!existing) {
-      const contentLines = COMMIT_LOG_ENABLED
+      const contentLines = logForKey
         ? [COMMIT_LOG_MARKER_TEXT, buildCheckpointStartText(updated_at), ...notesLines, "\u2705 End synced checkpoint"]
         : [buildCheckpointStartText(updated_at), ...notesLines, "\u2705 End synced checkpoint"];
       const contentText = contentLines.join("\n");
@@ -671,7 +674,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
 
     let logWarning = "";
-    if (COMMIT_LOG_ENABLED) {
+    if (logForKey) {
       try {
         const blocks = await readAllBlocks(existing.pageId);
         const range = findCheckpointRange(blocks);
