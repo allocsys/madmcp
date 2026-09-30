@@ -22,8 +22,10 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
+import { waitUntil } from "@vercel/functions";
 import { githubRequest, githubGraphQL } from "./client.js";
-import { DEFAULT_OWNER } from "../../config.js";
+import { DEFAULT_OWNER, COMMIT_LOG_ENABLED } from "../../config.js";
+import { recordCommit } from "../notion/commit_log.js";
 
 const fail = (text) => ({ content: [{ type: "text", text }], isError: true });
 
@@ -150,6 +152,13 @@ export function register(server) {
           method: "PUT",
           body: { merge_method: merge_method ?? "merge", commit_title, commit_message },
         });
+        // Commit log (best-effort, never affects the merge result). The merge
+        // response carries no branch/file info, so log the PR number instead.
+        if (COMMIT_LOG_ENABLED && data.sha) {
+          try {
+            waitUntil(recordCommit({ sha: data.sha, message: commit_title || `Merge PR #${pull_number} (${repo})`, files: [`PR #${pull_number}`], branch: "merge", ts: new Date().toISOString() }));
+          } catch (_) {}
+        }
         return { content: [{ type: "text", text: `Merged PR #${pull_number}: ${data.message}\nCommit: ${data.sha?.slice(0, 7) ?? "n/a"}` }] };
       }
 
