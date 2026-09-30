@@ -28,10 +28,12 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
+import { waitUntil } from "@vercel/functions";
 import { githubRequest, toBase64 } from "./client.js";
 import { encodeRef } from "./encode.js";
-import { DEFAULT_OWNER } from "../../config.js";
+import { DEFAULT_OWNER, COMMIT_LOG_ENABLED } from "../../config.js";
 import { readFileViaBlob, readFileWithSha, CHUNK_SIZE, CHUNK_THRESHOLD } from "./helpers.js";
+import { recordCommit } from "../notion/commit_log.js";
 
 // True only for a GitHub 404 (githubRequest throws "GitHub API error (404): ...").
 // Used where 404 legitimately means "path is free / new file" -- any other
@@ -222,6 +224,11 @@ export function register(server) {
         method: "PUT",
         body: { message, content: toBase64(content), branch },
       });
+      if (COMMIT_LOG_ENABLED) {
+        try {
+          waitUntil(recordCommit({ sha: result.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
+        } catch { /* best-effort logging: never affect the tool result */ }
+      }
       return { content: [{ type: "text", text: `Created ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
     }
   );
@@ -277,6 +284,12 @@ export function register(server) {
           method: "PUT",
           body: { message, content: toBase64(updated), branch, sha: blobSha },
         });
+
+        if (COMMIT_LOG_ENABLED) {
+          try {
+            waitUntil(recordCommit({ sha: result.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
+          } catch { /* best-effort logging: never affect the tool result */ }
+        }
 
         // The unified diff below is redundant for the calling model (it just wrote
         // the replacements), so it's disabled by default. The diff-building code is
@@ -335,6 +348,11 @@ export function register(server) {
         method: "PUT",
         body: { message, content: toBase64(content), branch, sha },
       });
+      if (COMMIT_LOG_ENABLED) {
+        try {
+          waitUntil(recordCommit({ sha: result.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
+        } catch { /* best-effort logging: never affect the tool result */ }
+      }
       return { content: [{ type: "text", text: `${sha ? "Overwrote" : "Created"} ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
     }
   );
@@ -353,10 +371,15 @@ export function register(server) {
     async ({ owner = DEFAULT_OWNER, repo, path, message, branch }) => {
       const query    = `?ref=${encodeURIComponent(branch)}`;
       const existing = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${query}`);
-      await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
+      const resp = await githubRequest(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
         method: "DELETE",
         body: { message, sha: existing.sha, branch },
       });
+      if (COMMIT_LOG_ENABLED) {
+        try {
+          waitUntil(recordCommit({ sha: resp.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
+        } catch { /* best-effort logging: never affect the tool result */ }
+      }
       return { content: [{ type: "text", text: `Deleted ${path} from ${owner}/${repo}.` }] };
     }
   );
@@ -410,6 +433,11 @@ export function register(server) {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
+      if (COMMIT_LOG_ENABLED) {
+        try {
+          waitUntil(recordCommit({ sha: newCommit.sha, message: commitMessage, files: [old_path, new_path], branch, ts: new Date().toISOString() }));
+        } catch { /* best-effort logging: never affect the tool result */ }
+      }
       return { content: [{ type: "text", text: `Renamed ${old_path} → ${new_path} in ${owner}/${repo} (commit ${newCommit.sha.slice(0, 7)}).` }] };
     }
   );
@@ -461,6 +489,11 @@ export function register(server) {
         method: "PATCH",
         body: { sha: newCommit.sha },
       });
+      if (COMMIT_LOG_ENABLED) {
+        try {
+          waitUntil(recordCommit({ sha: newCommit.sha, message, files: files.map(f => f.path), branch, ts: new Date().toISOString() }));
+        } catch { /* best-effort logging: never affect the tool result */ }
+      }
       return { content: [{ type: "text", text: `Pushed ${files.length} file(s) to ${owner}/${repo}@${branch} (commit ${newCommit.sha.slice(0, 7)}).` }] };
     }
   );

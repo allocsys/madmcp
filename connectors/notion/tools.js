@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
+import { NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID, COMMIT_LOG_ENABLED } from "../../config.js";
 import {
   notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, entityMarkerBlock, notionBlockPlainText, parseMarkers,
@@ -12,6 +12,7 @@ import {
   buildSyncStartText, buildSyncRangeBlocks, findSyncRange, textBlock,
   buildCheckpointRangeBlocks, findCheckpointRange, buildCheckpointStartText,
   findPageByEntityId, chunkRichText,
+  COMMIT_LOG_MARKER_TEXT, isCommitLogMarkerText,
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
 import { triggerNotionEmbed } from "./embed_client.js";
@@ -651,13 +652,15 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     const existing = await findPageByEntityId(key);
     const notesLines = (notes || "").split("\n");
     const updated_at = new Date().toISOString();
+    // recordCommit only ever writes to the default key's page (hooks don't know
+    // the session key), so other keys get no log marker at all.
+    const logForKey = COMMIT_LOG_ENABLED && key === "checkpoint-latest";
 
     if (!existing) {
-      // Seed the checkpoint range directly in the page's initial content,
-      // same reasoning as before: avoids a briefly rangeless page, and
-      // replaceCheckpointRange always re-reads blocks first to check for an
-      // existing range, which a brand-new page can never have.
-      const contentText = [buildCheckpointStartText(updated_at), ...notesLines, "\u2705 End synced checkpoint"].join("\n");
+      const contentLines = logForKey
+        ? [COMMIT_LOG_MARKER_TEXT, buildCheckpointStartText(updated_at), ...notesLines, "\u2705 End synced checkpoint"]
+        : [buildCheckpointStartText(updated_at), ...notesLines, "\u2705 End synced checkpoint"];
+      const contentText = contentLines.join("\n");
       const created = await doCreatePage({
         parent_id: NOTION_SYNC_PARENT_PAGE_ID,
         parent_type: "page",
@@ -669,7 +672,56 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     }
 
     await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
-    return `Checkpoint saved successfully.\nURL: ${existing.url}`;
+
+    let logWarning = "";
+    if (logForKey) {
+      try {
+        const blocks = await readAllBlocks(existing.pageId);
+        const range = findCheckpointRange(blocks);
+        if (range) {
+          const startIdx = blocks.findIndex(b => b.id === range.startBlockId);
+          let logMarkerIdx = -1;
+          for (let i = 0; i < startIdx; i++) {
+            if (blocks[i].type === "paragraph" && isCommitLogMarkerText(notionBlockPlainText(blocks[i]))) {
+              logMarkerIdx = i;
+              break;
+            }
+          }
+          if (logMarkerIdx === -1) {
+            if (startIdx > 0) {
+              await appendBlocks(existing.pageId, [textBlock(COMMIT_LOG_MARKER_TEXT)], { after: blocks[startIdx - 1].id });
+            } else if (startIdx === 0) {
+              logWarning = "\ncommit log unavailable: start marker is first block";
+            }
+          }
+
+          // Trim on save only: if more than 20 log entries following log marker up to start marker, delete extra OLDEST ones
+          const freshBlocks = await readAllBlocks(existing.pageId);
+          const freshRange = findCheckpointRange(freshBlocks);
+          if (freshRange) {
+            const sIdx = freshBlocks.findIndex(b => b.id === freshRange.startBlockId);
+            let mIdx = -1;
+            for (let i = 0; i < sIdx; i++) {
+              if (freshBlocks[i].type === "paragraph" && isCommitLogMarkerText(notionBlockPlainText(freshBlocks[i]))) {
+                mIdx = i;
+                break;
+              }
+            }
+            if (mIdx !== -1) {
+              const logBlocks = freshBlocks.slice(mIdx + 1, sIdx).filter(b => b.type === "paragraph");
+              if (logBlocks.length > 20) {
+                const extraOldest = logBlocks.slice(20);
+                for (const b of extraOldest) {
+                  await notionRequest(`/blocks/${b.id}`, { method: "DELETE" });
+                }
+              }
+            }
+          }
+        }
+      } catch { /* best-effort: commit log must never break checkpoint save/load */ }
+    }
+
+    return `Checkpoint saved successfully.\nURL: ${existing.url}${logWarning}`;
   } else if (action === "load") {
     const existing = await findPageByEntityId(key);
     if (!existing) {
@@ -680,10 +732,26 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     if (!range) {
       return "No checkpoint found.";
     }
+    const startIdx = blocks.findIndex(b => b.id === range.startBlockId);
+    let logSection = "";
+    let mIdx = -1;
+    for (let i = 0; i < startIdx; i++) {
+      if (blocks[i].type === "paragraph" && isCommitLogMarkerText(notionBlockPlainText(blocks[i]))) {
+        mIdx = i;
+        break;
+      }
+    }
+    if (mIdx !== -1) {
+      const logBlocks = blocks.slice(mIdx + 1, startIdx).filter(b => b.type === "paragraph");
+      if (logBlocks.length > 0) {
+        const logTexts = logBlocks.map(b => notionBlockPlainText(b));
+        logSection = `Commit log:\n${logTexts.join("\n")}\n\n`;
+      }
+    }
     const blockMap = new Map(blocks.map((b) => [b.id, b]));
     const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
     const notesContent = notionBlocksToText(innerBlocks);
-    return notesContent || "(empty checkpoint)";
+    return logSection + (notesContent || "(empty checkpoint)");
   } else {
     throw new Error(`Invalid checkpoint action: "${action}" (expected "save" or "load").`);
   }
@@ -693,7 +761,7 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
       action: z.enum(["save", "load"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them"),
       notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),

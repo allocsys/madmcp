@@ -559,6 +559,11 @@ export function findSyncRange(blocks = []) {
 }
 
 // ---------------------------------------------------------------------------
+export const COMMIT_LOG_MARKER_TEXT = "📝 commit log";
+export function isCommitLogMarkerText(text) {
+  return text === COMMIT_LOG_MARKER_TEXT;
+}
+
 // Checkpoint marker convention (2026-09-04 bug fix -- the checkpoint tool
 // was reusing the mem0 sync markers above, which hardcode "SYNCED FROM
 // MEM0" text that's simply wrong for a tool that has nothing to do with
