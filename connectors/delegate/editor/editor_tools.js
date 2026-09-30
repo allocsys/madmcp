@@ -27,6 +27,7 @@
 import { z } from "zod";
 import { runEditorAgent, seedEditorRun } from "./editor_delegate.js";
 import { loadCheckpoint } from "./editor_checkpoint.js";
+import { pollStepLabel, pollTranscriptBlock, pollWrittenFilesBlock } from "../poll_format.js";
 import { publishEditorStep, isEditorQStashConfigured } from "../qstash_client.js";
 import {
   DEFAULT_OWNER,
@@ -73,7 +74,7 @@ export function register(server) {
       task:            z.string().optional().describe("What to change, described with enough detail for the agent to act without asking anything back -- it can't. The agent has no directory-listing or search capability, so include exact file paths for anything it needs to read or write -- it cannot discover them on its own. Ignored when resume_run_id resolves to a live checkpoint (the original task from that run is reused). Optional ONLY when resume_run_id is given and its checkpoint is still live; required otherwise."),
       max_steps:       z.number().optional().describe(`Max agent steps before being forced to answer (default ${EDITOR_DEFAULT_STEPS}, hard cap ${EDITOR_HARD_MAX_STEPS} regardless of this value). Leave unset on a fresh call. Only pass an explicit value when resuming a run that already stopped because it hit its step cap. On a resumed run, this is the new ceiling -- not additional steps on top of what's already done.`),
       resume_run_id:   z.string().optional().describe("A runId returned from a previous failed/partial delegate_editor call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
-      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). On a failed/partial run the transcript is always shown regardless of this flag."),
+      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run and on mid-run polls (default: false; polls otherwise report only that the run is running and which step it is on). On a failed/partial run the transcript is always shown regardless of this flag."),
       provider: z.enum(["gemini"]).optional()
         .describe(`Which provider runs the editor loop (default and only supported value: "gemini"). RESUME RULE: if resume_run_id resolves to a checkpoint that recorded a provider, that recorded provider is always used and this argument is ignored.`),
     },
@@ -165,7 +166,9 @@ export function register(server) {
             isFresh = ageMs < EDITOR_ASYNC_POLL_FRESH_SECONDS * 1000;
           }
 
-          const writtenNote = checkpoint.writtenFiles?.length ? `\n\nFiles written so far: ${checkpoint.writtenFiles.join(", ")}` : "";
+          // Mid-run polls stay quiet: files written / tool calls only when
+          // the caller explicitly passes show_transcript.
+          const pollDetail = pollWrittenFilesBlock(checkpoint, show_transcript) + pollTranscriptBlock(checkpoint, show_transcript);
 
           if (isFresh) {
             // Fresh lastStepAt or stepStartedAt -- the background worker
@@ -175,7 +178,7 @@ export function register(server) {
             // worker or trigger an unintended commit.
             return {
               content: [{ type: "text", text:
-                `Still running (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed so far. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.${writtenNote}` }],
+                `Running (run_id: ${resume_run_id}) -- on ${pollStepLabel(checkpoint)}. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.${pollDetail}` }],
             };
           }
           // Stale activity -- either lastStepAt is old, or stepStartedAt
@@ -191,7 +194,7 @@ export function register(server) {
             return {
               content: [{ type: "text", text:
                 `Run appears stalled (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
-                `Call delegate_editor again with resume_run_id: "${resume_run_id}" and an explicit max_steps to resume synchronously from where it left off.${writtenNote}` }],
+                `Call delegate_editor again with resume_run_id: "${resume_run_id}" and an explicit max_steps to resume synchronously from where it left off.${pollDetail}` }],
             };
           }
           // Explicit max_steps given -- caller wants to push forward: fall
