@@ -340,7 +340,7 @@ export async function writeFile(owner, repo, path, options = {}) {
   if (COMMIT_LOG_ENABLED && commitRes.commitSha) {
     try {
       waitUntil(recordCommit({ sha: commitRes.commitSha, message: message || `edit ${path}`, files: [path], branch, ts: new Date().toISOString() }));
-    } catch (_) {}
+    } catch { /* best-effort logging: never affect the tool result */ }
   }
 
   return commitRes;
