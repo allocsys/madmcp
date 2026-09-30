@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { runInvestigation, seedRun } from "./agent_delegate.js";
 import { loadCheckpoint } from "./agent_checkpoint.js";
+import { pollStepLabel, pollTranscriptBlock } from "../poll_format.js";
 import { publishAgentStep, isQStashConfigured } from "../qstash_client.js";
 import { doCreatePage } from "../../notion/tools.js";
 import { GEMINI_NOTION_ROOT_PAGE_ID, DELEGATE_AGENT_ASYNC, AGENT_ASYNC_POLL_FRESH_SECONDS, AGENT_ASYNC_STEP_DEAD_SECONDS } from "../../../config.js";
@@ -22,7 +23,7 @@ export function register(server) {
       max_steps:     z.number().optional().describe("Max tool-use turns Gemini gets before being forced to answer (default 20, hard cap 30 regardless of this value). LEAVE UNSET on a fresh call -- there's no reliable way to size this upfront from the task description alone, and an undersized guess just causes the investigation to hit the cap before it's actually done. Only pass an explicit value when RESUMING a run that already came back reporting it hit its step cap (the failed run's own reported step count, plus its transcript, is real evidence for how many more steps are needed -- use that, not a fresh guess). On a resumed run this is the new ceiling, not additional steps on top of what's already done. IN ASYNC/QSTASH MODE: leave unset to just poll a resume_run_id for status -- omitting max_steps guarantees the call is read-only (never drives a step), even if the background worker chain has stalled; pass it explicitly only when you want this call to actually push the investigation forward. In synchronous mode this distinction doesn't apply -- every resume_run_id call runs synchronously regardless."),
       log_to_notion: z.boolean().optional().describe("Whether to log the task, step-by-step tool calls, and final answer as a page under the Gemini section of Notion (default: false). Write always targets the fixed Gemini root page. ASYNC CAVEAT: not persisted across calls -- the initial fire-and-forget start call ignores this and returns before logging ever runs, so it must be passed again as true on the resume_run_id call(s) that actually retrieve the final answer, or nothing gets logged."),
       resume_run_id: z.string().optional().describe("A runId returned from a previous failed/partial delegate_agent call. If its checkpoint is still live (1 hour TTL), continues that run's conversation instead of starting fresh."),
-      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run (default: false). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is only included if this flag is explicitly true."),
+      show_transcript: z.boolean().optional().describe("Include the full step-by-step tool-call transcript in the response, even on a successful run and on mid-run polls (default: false; polls otherwise report only that the run is running and which step it is on). Useful for debugging what Gemini actually called and in what order/grouping -- e.g. checking whether independent calls were batched into the same step. On a failed/partial run the transcript is only included if this flag is explicitly true."),
       provider: z.enum(["gemini"]).optional()
         .describe(`Which provider runs the investigation loop (default and only supported value: "gemini").`),
       model: z.string().optional()
@@ -158,8 +159,8 @@ export function register(server) {
             // a step ourselves, so a poll can never race the worker.
             return {
               content: [{ type: "text", text:
-                `Still running (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed so far. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.` +
-                (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
+                `Running (run_id: ${resume_run_id}) -- on ${pollStepLabel(checkpoint)}. Last activity ${Math.round(ageMs / 1000)}s ago. Call again with the same resume_run_id to keep polling.` +
+                pollTranscriptBlock(checkpoint, show_transcript) }],
             };
           }
           // Stale activity -- either lastStepAt is old, or stepStartedAt exceeded AGENT_ASYNC_STEP_DEAD_SECONDS.
@@ -188,9 +189,9 @@ export function register(server) {
           if (!maxStepsProvided) {
             return {
               content: [{ type: "text", text:
-                `Investigation appears stalled (run_id: ${resume_run_id}) -- ${checkpoint.stepsDone} step(s) completed, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
+                `Investigation appears stalled (run_id: ${resume_run_id}) -- stalled on ${pollStepLabel(checkpoint)}, no activity in ${Math.round(ageMs / 1000)}s (the background worker chain may have broken). ` +
                 `Call delegate_agent again with resume_run_id: "${resume_run_id}" and an explicit max_steps to resume the investigation synchronously from where it left off.` +
-                (checkpoint.transcript?.length ? `\n\nTool calls so far:\n${checkpoint.transcript.join("\n")}` : "") }],
+                pollTranscriptBlock(checkpoint, show_transcript) }],
             };
           }
           // Explicit max_steps given -- caller wants to push forward: fall

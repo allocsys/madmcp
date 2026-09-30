@@ -147,6 +147,7 @@ describe("agent_tools.js — delegate_agent async branching", () => {
       status: "running",
       stepsDone: 3,
       lastStepAt: Date.now() - 5000, // 5s ago, well inside the 25s fresh window
+      overallMaxSteps: 20,
       transcript: ["github_get_repo_topics(a, b)"],
     });
 
@@ -154,9 +155,46 @@ describe("agent_tools.js — delegate_agent async branching", () => {
 
     expect(mockRunInvestigation).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toMatch(/Still running/);
-    expect(result.content[0].text).toContain("3 step(s)");
+    // Quiet poll: just "running" + which step (stepsDone 3 -> now on step 4 of 20).
+    expect(result.content[0].text).toMatch(/Running \(run_id: run-poll-1\) -- on step 4 of 20/);
+    // ...and NO transcript / per-call detail while the run is in progress.
+    expect(result.content[0].text).not.toContain("github_get_repo_topics(a, b)");
+    expect(result.content[0].text).not.toMatch(/Tool calls so far/);
+  });
+
+  it("poll with a fresh checkpoint AND show_transcript: true: includes the transcript (opt-in)", async () => {
+    const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25 });
+    mockIsQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 3,
+      lastStepAt: Date.now() - 5000,
+      overallMaxSteps: 20,
+      transcript: ["github_get_repo_topics(a, b)"],
+    });
+
+    const result = await delegate_agent({ resume_run_id: "run-poll-t", show_transcript: true });
+
+    expect(mockRunInvestigation).not.toHaveBeenCalled();
+    expect(result.content[0].text).toMatch(/on step 4 of 20/);
+    expect(result.content[0].text).toMatch(/Tool calls so far/);
     expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
+  });
+
+  it("poll with a fresh checkpoint that has no overallMaxSteps: reports just 'step N' without a ceiling", async () => {
+    const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25 });
+    mockIsQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 0,
+      lastStepAt: Date.now() - 1000,
+      transcript: [],
+    });
+
+    const result = await delegate_agent({ resume_run_id: "run-poll-nomax" });
+
+    expect(result.content[0].text).toMatch(/on step 1\./);
+    expect(result.content[0].text).not.toMatch(/ of \d+/);
   });
 
   it("poll with a checkpoint fresh via stepStartedAt alone (with no newly-completed step): is NOT reported as stalled", async () => {
@@ -174,8 +212,7 @@ describe("agent_tools.js — delegate_agent async branching", () => {
 
     expect(mockRunInvestigation).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toMatch(/Still running/);
-    expect(result.content[0].text).toContain("2 step(s)");
+    expect(result.content[0].text).toMatch(/Running \(run_id: run-poll-started\) -- on step 3/);
   });
 
   it("poll with a checkpoint whose stepStartedAt is older than the long-ceiling constant (AGENT_ASYNC_STEP_DEAD_SECONDS): IS reported as stalled even though stepStartedAt is set", async () => {
@@ -219,8 +256,28 @@ describe("agent_tools.js — delegate_agent async branching", () => {
     expect(mockRunInvestigation).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toMatch(/stalled/);
-    expect(result.content[0].text).toContain("3 step(s)");
+    // stepsDone 3 -> stalled while on step 4; no transcript by default.
+    expect(result.content[0].text).toContain("stalled on step 4");
+    expect(result.content[0].text).not.toContain("Tool calls so far");
     expect(result.content[0].text).toMatch(/explicit max_steps/);
+    // Stalled polls are quiet too: no transcript unless show_transcript is set.
+    expect(result.content[0].text).not.toContain("github_get_repo_topics(a, b)");
+  });
+
+  it("poll with a stale checkpoint, no max_steps, show_transcript: true: includes the transcript in the stall message", async () => {
+    const delegate_agent = await setup({ delegateAgentAsync: "qstash", pollFreshSeconds: 25 });
+    mockIsQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 3,
+      lastStepAt: Date.now() - 60000,
+      transcript: ["github_get_repo_topics(a, b)"],
+    });
+
+    const result = await delegate_agent({ resume_run_id: "run-poll-stall-t", show_transcript: true });
+
+    expect(mockRunInvestigation).not.toHaveBeenCalled();
+    expect(result.content[0].text).toMatch(/stalled/);
     expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
   });
 

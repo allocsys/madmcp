@@ -158,9 +158,48 @@ describe("editor_tools.js — delegate_editor async branching", () => {
 
     expect(mockRunEditorAgent).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toMatch(/Still running/);
-    expect(result.content[0].text).toContain("3 step(s)");
-    expect(result.content[0].text).toContain("a.md");
+    expect(result.content[0].text).toMatch(/^Running \(run_id: run-poll-1\)/);
+    // Quiet poll: status + current step only (stepsDone 3 -> in progress on step 4).
+    expect(result.content[0].text).toContain("on step 4");
+    expect(result.content[0].text).not.toContain("a.md");
+    expect(result.content[0].text).not.toContain("Files written so far");
+    expect(result.content[0].text).not.toContain("Tool calls so far");
+  });
+
+  it("fresh poll with overallMaxSteps: reports 'step N of M'", async () => {
+    const delegate_editor = await setup({ editorAgentAsync: "qstash", pollFreshSeconds: 25 });
+    mockIsEditorQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 3,
+      overallMaxSteps: 15,
+      lastStepAt: Date.now() - 5000,
+      writtenFiles: ["a.md"],
+      transcript: ["step 1: read_file(a.md)"],
+    });
+
+    const result = await delegate_editor({ resume_run_id: "run-poll-max" });
+
+    expect(result.content[0].text).toContain("on step 4 of 15");
+    expect(result.content[0].text).not.toContain("read_file");
+  });
+
+  it("fresh poll with show_transcript: true opts back in to files written + transcript", async () => {
+    const delegate_editor = await setup({ editorAgentAsync: "qstash", pollFreshSeconds: 25 });
+    mockIsEditorQStashConfigured.mockReturnValue(true);
+    mockLoadCheckpoint.mockResolvedValue({
+      status: "running",
+      stepsDone: 3,
+      lastStepAt: Date.now() - 5000,
+      writtenFiles: ["a.md"],
+      transcript: ["step 1: read_file(a.md)"],
+    });
+
+    const result = await delegate_editor({ resume_run_id: "run-poll-verbose", show_transcript: true });
+
+    expect(result.content[0].text).toContain("Files written so far: a.md");
+    expect(result.content[0].text).toContain("Tool calls so far");
+    expect(result.content[0].text).toContain("read_file(a.md)");
   });
 
   it("poll with a checkpoint fresh via stepStartedAt alone (with no newly-completed step): is NOT reported as stalled", async () => {
@@ -178,8 +217,8 @@ describe("editor_tools.js — delegate_editor async branching", () => {
 
     expect(mockRunEditorAgent).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toMatch(/Still running/);
-    expect(result.content[0].text).toContain("2 step(s)");
+    expect(result.content[0].text).toMatch(/^Running \(run_id: run-poll-started\)/);
+    expect(result.content[0].text).toContain("on step 3");
   });
 
   it("poll with a checkpoint whose stepStartedAt is older than the long-ceiling constant (EDITOR_ASYNC_STEP_DEAD_SECONDS): IS reported as stalled even though stepStartedAt is set", async () => {
@@ -216,9 +255,11 @@ describe("editor_tools.js — delegate_editor async branching", () => {
     expect(mockRunEditorAgent).not.toHaveBeenCalled();
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toMatch(/stalled/);
-    expect(result.content[0].text).toContain("3 step(s)");
+    // stepsDone 3 -> stalled while on step 4.
+    expect(result.content[0].text).toContain("stalled on step 4");
     expect(result.content[0].text).toMatch(/explicit max_steps/);
-    expect(result.content[0].text).toContain("a.md");
+    // Quiet by default: written files only with show_transcript.
+    expect(result.content[0].text).not.toContain("a.md");
   });
 
   it("poll with a stale checkpoint AND an explicit max_steps: falls through to synchronous runEditorAgent, pushing the run forward (can make further writes)", async () => {

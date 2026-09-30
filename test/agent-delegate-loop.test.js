@@ -115,19 +115,16 @@ describe("delegate_agent failure path compacting", () => {
   });
 });
 
-// Regression coverage for the scope-creep bug found while landing the
-// compact-failure-response fix above: an earlier commit on this branch
-// (since reverted) accidentally gated the async "still running" poll
-// branch's transcript on show_transcript too, even though that branch was
-// never part of the documented failed/partial-run bug and broke
-// test/agent-tools-async.test.js's existing "poll with a fresh checkpoint"
-// case. These tests pin the poll branch's transcript to stay unconditional
-// so that gate can't silently come back. Needs DELEGATE_AGENT_ASYNC set to
-// "qstash" (the outer describe block above relies on real config.js's
-// "sync" default, which never reaches this branch at all), so config.js is
-// mocked per-test here via vi.doMock + vi.resetModules, same technique
-// test/agent-tools-async.test.js uses for the same reason.
-describe("delegate_agent poll-branch transcript (regression guard)", () => {
+// Mid-run polls of an async delegate_agent run stay quiet: status + current
+// step only, no transcript, until the run finishes. The transcript is opt-in
+// via show_transcript: true (same flag that already governs final/failed
+// results). These tests pin that so the transcript can't silently leak back
+// onto every poll. Needs DELEGATE_AGENT_ASYNC set to "qstash" (the outer
+// describe block above relies on real config.js's "sync" default, which never
+// reaches this branch at all), so config.js is mocked per-test here via
+// vi.doMock + vi.resetModules, same technique test/agent-tools-async.test.js
+// uses for the same reason.
+describe("delegate_agent poll-branch quiet output (regression guard)", () => {
   let register;
 
   beforeEach(async () => {
@@ -148,25 +145,37 @@ describe("delegate_agent poll-branch transcript (regression guard)", () => {
     ({ register } = await import("../connectors/delegate/agent/agent_tools.js"));
   });
 
-  it("includes the transcript on a fresh poll when show_transcript is omitted (default false)", async () => {
+  it("omits the transcript on a fresh poll when show_transcript is omitted (default false)", async () => {
     const server = makeFakeServer();
     register(server);
 
     const result = await server.tools.delegate_agent({ resume_run_id: "run-poll-1" });
 
     expect(mockRunInvestigation).not.toHaveBeenCalled();
-    expect(result.content[0].text).toMatch(/Still running/);
-    expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
+    expect(result.content[0].text).toMatch(/^Running \(run_id: run-poll-1\)/);
+    expect(result.content[0].text).toContain("on step 3");
+    expect(result.content[0].text).not.toContain("Tool calls so far");
+    expect(result.content[0].text).not.toContain("github_get_repo_topics(a, b)");
   });
 
-  it("still includes the transcript on a fresh poll when show_transcript is explicitly false", async () => {
+  it("omits the transcript on a fresh poll when show_transcript is explicitly false", async () => {
     const server = makeFakeServer();
     register(server);
 
     const result = await server.tools.delegate_agent({ resume_run_id: "run-poll-1", show_transcript: false });
 
     expect(mockRunInvestigation).not.toHaveBeenCalled();
-    expect(result.content[0].text).toMatch(/Still running/);
+    expect(result.content[0].text).not.toContain("github_get_repo_topics(a, b)");
+  });
+
+  it("includes the transcript on a fresh poll only when show_transcript is explicitly true", async () => {
+    const server = makeFakeServer();
+    register(server);
+
+    const result = await server.tools.delegate_agent({ resume_run_id: "run-poll-1", show_transcript: true });
+
+    expect(mockRunInvestigation).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain("Tool calls so far");
     expect(result.content[0].text).toContain("github_get_repo_topics(a, b)");
   });
 });
