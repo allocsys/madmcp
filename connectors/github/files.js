@@ -227,7 +227,7 @@ export function register(server) {
       if (COMMIT_LOG_ENABLED) {
         try {
           waitUntil(recordCommit({ sha: result.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
-        } catch (_) {}
+        } catch { /* best-effort logging: never affect the tool result */ }
       }
       return { content: [{ type: "text", text: `Created ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
     }
@@ -288,7 +288,7 @@ export function register(server) {
         if (COMMIT_LOG_ENABLED) {
           try {
             waitUntil(recordCommit({ sha: result.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
-          } catch (_) {}
+          } catch { /* best-effort logging: never affect the tool result */ }
         }
 
         // The unified diff below is redundant for the calling model (it just wrote
@@ -351,7 +351,7 @@ export function register(server) {
       if (COMMIT_LOG_ENABLED) {
         try {
           waitUntil(recordCommit({ sha: result.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
-        } catch (_) {}
+        } catch { /* best-effort logging: never affect the tool result */ }
       }
       return { content: [{ type: "text", text: `${sha ? "Overwrote" : "Created"} ${path} in ${owner}/${repo} (commit ${result.commit.sha.slice(0, 7)}).` }] };
     }
@@ -378,7 +378,7 @@ export function register(server) {
       if (COMMIT_LOG_ENABLED) {
         try {
           waitUntil(recordCommit({ sha: resp.commit.sha, message, files: [path], branch, ts: new Date().toISOString() }));
-        } catch (_) {}
+        } catch { /* best-effort logging: never affect the tool result */ }
       }
       return { content: [{ type: "text", text: `Deleted ${path} from ${owner}/${repo}.` }] };
     }
@@ -436,7 +436,7 @@ export function register(server) {
       if (COMMIT_LOG_ENABLED) {
         try {
           waitUntil(recordCommit({ sha: newCommit.sha, message: commitMessage, files: [old_path, new_path], branch, ts: new Date().toISOString() }));
-        } catch (_) {}
+        } catch { /* best-effort logging: never affect the tool result */ }
       }
       return { content: [{ type: "text", text: `Renamed ${old_path} → ${new_path} in ${owner}/${repo} (commit ${newCommit.sha.slice(0, 7)}).` }] };
     }
@@ -492,7 +492,7 @@ export function register(server) {
       if (COMMIT_LOG_ENABLED) {
         try {
           waitUntil(recordCommit({ sha: newCommit.sha, message, files: files.map(f => f.path), branch, ts: new Date().toISOString() }));
-        } catch (_) {}
+        } catch { /* best-effort logging: never affect the tool result */ }
       }
       return { content: [{ type: "text", text: `Pushed ${files.length} file(s) to ${owner}/${repo}@${branch} (commit ${newCommit.sha.slice(0, 7)}).` }] };
     }
