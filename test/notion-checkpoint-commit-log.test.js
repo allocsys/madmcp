@@ -163,9 +163,9 @@ describe("doCheckpoint save -- trim", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps the newest 20 log lines and deletes only the oldest ones (bottom of the section)", async () => {
-    // Newest first, so log-0 is newest and log-21 is oldest (right above the start marker).
-    const logLines = Array.from({ length: 22 }, (_, i) => para(`log-${i}`, `sha${i} · msg ${i}`));
+  it("keeps the newest 8 log lines and deletes only the oldest ones (bottom of the section)", async () => {
+    // Newest first, so log-0 is newest and log-9 is oldest (right above the start marker).
+    const logLines = Array.from({ length: 10 }, (_, i) => para(`log-${i}`, `sha${i} · msg ${i}`));
     mockExistingPage([entityBlock(), para("log-marker", COMMIT_LOG_MARKER_TEXT), ...logLines, startBlock(), noteBlock(), endBlock()]);
 
     await doCheckpoint({ action: "save", notes: "new notes" });
@@ -173,15 +173,15 @@ describe("doCheckpoint save -- trim", () => {
     const deleted = client.notionRequest.mock.calls
       .filter(([, opts]) => opts?.method === "DELETE")
       .map(([path]) => path);
-    expect(deleted).toContain("/blocks/log-20");
-    expect(deleted).toContain("/blocks/log-21");
-    for (let i = 0; i < 20; i++) expect(deleted).not.toContain(`/blocks/log-${i}`);
+    expect(deleted).toContain("/blocks/log-8");
+    expect(deleted).toContain("/blocks/log-9");
+    for (let i = 0; i < 8; i++) expect(deleted).not.toContain(`/blocks/log-${i}`);
     expect(deleted).not.toContain("/blocks/log-marker");
     expect(deleted).not.toContain("/blocks/pre-1");
   });
 
-  it("does not delete anything when there are 20 or fewer log lines", async () => {
-    const logLines = Array.from({ length: 20 }, (_, i) => para(`log-${i}`, `sha${i} · msg ${i}`));
+  it("does not delete anything when there are 8 or fewer log lines", async () => {
+    const logLines = Array.from({ length: 8 }, (_, i) => para(`log-${i}`, `sha${i} · msg ${i}`));
     mockExistingPage([entityBlock(), para("log-marker", COMMIT_LOG_MARKER_TEXT), ...logLines, startBlock(), noteBlock(), endBlock()]);
 
     await doCheckpoint({ action: "save", notes: "new notes" });
@@ -189,7 +189,7 @@ describe("doCheckpoint save -- trim", () => {
     const deleted = client.notionRequest.mock.calls
       .filter(([, opts]) => opts?.method === "DELETE")
       .map(([path]) => path);
-    for (let i = 0; i < 20; i++) expect(deleted).not.toContain(`/blocks/log-${i}`);
+    for (let i = 0; i < 8; i++) expect(deleted).not.toContain(`/blocks/log-${i}`);
   });
 });
 
