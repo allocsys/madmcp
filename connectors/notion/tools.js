@@ -753,8 +753,38 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
     const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
     const notesContent = notionBlocksToText(innerBlocks);
     return logSection + (notesContent || "(empty checkpoint)");
+  } else if (action === "clear_log") {
+    // Deletes the commit log entries sitting between the log marker and the
+    // checkpoint start marker. Both markers and the saved notes are left
+    // untouched. Deliberately not gated on COMMIT_LOG_ENABLED so a stale log
+    // can still be cleared after logging has been switched off.
+    const existing = await findPageByEntityId(key);
+    if (!existing) {
+      return "No checkpoint found.";
+    }
+    const blocks = await readAllBlocks(existing.pageId);
+    const range = findCheckpointRange(blocks);
+    if (!range) {
+      return "No checkpoint found.";
+    }
+    const startIdx = blocks.findIndex(b => b.id === range.startBlockId);
+    let mIdx = -1;
+    for (let i = 0; i < startIdx; i++) {
+      if (blocks[i].type === "paragraph" && isCommitLogMarkerText(notionBlockPlainText(blocks[i]))) {
+        mIdx = i;
+        break;
+      }
+    }
+    if (mIdx === -1) {
+      return "No commit log marker found; nothing to clear.";
+    }
+    const logBlocks = blocks.slice(mIdx + 1, startIdx).filter(b => b.type === "paragraph");
+    for (const b of logBlocks) {
+      await notionRequest(`/blocks/${b.id}`, { method: "DELETE" });
+    }
+    return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save" or "load").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load" or "clear_log").`);
   }
 }
 
@@ -762,9 +792,9 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
-      action: z.enum(["save", "load"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them"),
+      action: z.enum(["save", "load", "clear_log"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept)"),
       notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
       key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
