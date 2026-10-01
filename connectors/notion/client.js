@@ -387,8 +387,19 @@ export async function queryAllIndexEntries() {
       const entity_id = notionRichTextToString(row.properties?.EntityId?.rich_text || []);
       const page_id   = notionRichTextToString(row.properties?.PageId?.rich_text || []);
       const url       = row.properties?.Url?.url || "";
-      const tagsRaw   = notionRichTextToString(row.properties?.Tags?.rich_text || []);
-      const tags      = tagsRaw ? tagsRaw.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean) : [];
+      // Tags is a multi_select column (that is what appendIndexEntry writes
+      // and what the live database uses). It was read as rich_text before,
+      // which always yielded [] and silently disabled tag-overlap linking.
+      // The rich_text branch is kept only as a fallback for a database whose
+      // Tags column was configured as comma-separated text.
+      const tagProp = row.properties?.Tags;
+      let tags;
+      if (Array.isArray(tagProp?.multi_select)) {
+        tags = tagProp.multi_select.map((t) => String(t?.name || "").trim().toLowerCase()).filter(Boolean);
+      } else {
+        const tagsRaw = notionRichTextToString(tagProp?.rich_text || []);
+        tags = tagsRaw ? tagsRaw.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean) : [];
+      }
       if (entity_id && page_id) entries.push({ entity_id, page_id, url, tags });
     }
     if (!data.has_more) break;
