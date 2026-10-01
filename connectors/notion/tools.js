@@ -15,6 +15,8 @@ import {
   COMMIT_LOG_MARKER_TEXT, isCommitLogMarkerText,
 } from "./client.js";
 import { findLinkCandidates, extractTags } from "./linking.js";
+import { trimCommitLogBlocks } from "./commit_log.js";
+import { withLock } from "../shared/lock.js";
 import { triggerNotionEmbed } from "./embed_client.js";
 import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 
@@ -136,6 +138,7 @@ async function upsertIndexRow({ entity_id, page_id, url, tags }) {
       body: { properties: {
         PageId: { rich_text: [{ text: { content: page_id } }] },
         Url:    { url: url || null },
+        ...(tags?.length ? { Tags: { multi_select: tags.map((name) => ({ name })) } } : {}),
       } },
     });
     return null;
@@ -203,7 +206,47 @@ export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
 // to track a thing that should be tracked -- so that case now throws
 // instead of silently creating an untracked page. Passing one_off: true is
 // the deliberate opt-out for real one-offs.
-export async function doCreatePage({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
+// Cross-instance duplicate backstop. The lock in doCreatePage covers callers
+// that share a process or Redis, but Notion itself has no unique constraint,
+// so two creates that still slip through (Redis down, lock wait timed out)
+// would each write an index row. After our own index write, look at every row
+// for this entity_id; the OLDEST row wins deterministically for everyone. If
+// ours isn't the winner we archive our page and row and report the winner,
+// so the duplicate disappears instead of lingering. Best-effort: Notion query
+// consistency is not guaranteed instant, so a miss here is possible but the
+// next create for that entity_id is then caught by the dedup check.
+async function reconcileEntityIndex({ entity_id, page_id }) {
+  const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+    method: "POST",
+    body: {
+      filter: { property: "EntityId", rich_text: { equals: entity_id } },
+      sorts: [{ timestamp: "created_time", direction: "ascending" }],
+      page_size: 10,
+    },
+  });
+  const rows = (data?.results || [])
+    .map((r) => ({ rowId: r.id, pageId: (r.properties?.PageId?.rich_text || []).map((t) => t.plain_text || "").join("") }))
+    .filter((r) => r.pageId);
+  if (rows.length < 2) return null;
+  const winner = rows[0];
+  if (winner.pageId === page_id) return null;
+  for (const row of rows.filter((r) => r.pageId === page_id)) {
+    await notionRequest(`/pages/${row.rowId}`, { method: "PATCH", body: { archived: true } });
+  }
+  await notionRequest(`/pages/${page_id}`, { method: "PATCH", body: { archived: true } });
+  const winnerPage = await notionRequest(`/pages/${winner.pageId}`);
+  return { pageId: winner.pageId, url: winnerPage?.url, title: notionPageTitle(winnerPage || {}) };
+}
+
+// Public entry point. Entity-tracked creates run under a per-entity_id lock so
+// the dedup check -> create -> index write sequence is atomic with respect to
+// other creates for the same entity_id (concurrent tool calls, client retries).
+export async function doCreatePage(args) {
+  if (!args.entity_id) return doCreatePageUnlocked(args);
+  return withLock(`notion-create:${args.entity_id}`, () => doCreatePageUnlocked(args));
+}
+
+async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create's entity_id and one_off param descriptions.`);
   }
@@ -306,7 +349,31 @@ export async function doCreatePage({ parent_id, parent_type, title, content, ent
 
   let indexError = null;
   if (entity_id) {
-    indexError = await appendIndexEntry({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")] });
+    // Upsert, not blind append: a stale row (its page was deleted outside
+    // these tools) would otherwise sit next to a new row for the same
+    // entity_id, and findPageByEntityId reads only the first match -- so it
+    // could keep landing on the stale row and creating a new page every time.
+    // Re-check right before writing: if another create for this entity_id
+    // finished first and its page is live, we lost the race. Never overwrite
+    // its index row -- archive our page and report theirs.
+    if (!batchError) {
+      const winner = await findPageByEntityId(entity_id);
+      if (winner && winner.pageId !== data.id) {
+        await notionRequest(`/pages/${data.id}`, { method: "PATCH", body: { archived: true } });
+        return { skipped: true, entity_id, existingId: winner.pageId, existingTitle: winner.title, existingUrl: winner.url };
+      }
+    }
+    indexError = await upsertIndexRow({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")] });
+    if (!indexError && !batchError) {
+      try {
+        const lost = await reconcileEntityIndex({ entity_id, page_id: data.id });
+        if (lost) {
+          return { skipped: true, entity_id, existingId: lost.pageId, existingTitle: lost.title, existingUrl: lost.url };
+        }
+      } catch (err) {
+        console.warn(`[notion-create] duplicate reconciliation failed for "${entity_id}": ${err.message}`);
+      }
+    }
   }
 
   if (batchError) {
@@ -695,31 +762,15 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
             }
           }
 
-          // Trim on save only: if more than COMMIT_LOG_MAX_ENTRIES log entries following log marker up to start marker, delete extra OLDEST ones
-          const COMMIT_LOG_MAX_ENTRIES = 8;
+          // Backstop: recordCommit already trims on every insert; this catches
+          // anything that slipped past it (e.g. a page edited by hand).
           const freshBlocks = await readAllBlocks(existing.pageId);
-          const freshRange = findCheckpointRange(freshBlocks);
-          if (freshRange) {
-            const sIdx = freshBlocks.findIndex(b => b.id === freshRange.startBlockId);
-            let mIdx = -1;
-            for (let i = 0; i < sIdx; i++) {
-              if (freshBlocks[i].type === "paragraph" && isCommitLogMarkerText(notionBlockPlainText(freshBlocks[i]))) {
-                mIdx = i;
-                break;
-              }
-            }
-            if (mIdx !== -1) {
-              const logBlocks = freshBlocks.slice(mIdx + 1, sIdx).filter(b => b.type === "paragraph");
-              if (logBlocks.length > COMMIT_LOG_MAX_ENTRIES) {
-                const extraOldest = logBlocks.slice(COMMIT_LOG_MAX_ENTRIES);
-                for (const b of extraOldest) {
-                  await notionRequest(`/blocks/${b.id}`, { method: "DELETE" });
-                }
-              }
-            }
+          const { failed } = await trimCommitLogBlocks(freshBlocks);
+          for (const f of failed) {
+            console.warn(`[commit-log] Failed to trim old entry ${f.id}: ${f.error}`);
           }
         }
-      } catch { /* best-effort: commit log must never break checkpoint save/load */ }
+      } catch (err) { console.warn(`[commit-log] checkpoint save: commit log maintenance failed: ${err.message}`); /* best-effort: commit log must never break checkpoint save/load */ }
     }
 
     return `Checkpoint saved successfully.\nURL: ${existing.url}${logWarning}`;

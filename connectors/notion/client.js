@@ -26,6 +26,21 @@ function isRetryableNotion(res) {
   return res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
 }
 
+// DUPLICATE-PAGE FIX: a 502/503/504 from a proxy/gateway does NOT mean Notion
+// didn't process the request -- the write may have landed and only the
+// response was lost. Blindly retrying a non-idempotent write then creates a
+// second page (POST /pages) or appends blocks twice (PATCH .../children).
+// 429 is always safe (Notion rejects before processing). 5xx is only retried
+// for requests that are safe to repeat.
+export function isSafeToRetryOnServerError(method, path) {
+  const m = String(method || "GET").toUpperCase();
+  const p = String(path || "").split("?")[0];
+  if (m === "GET" || m === "DELETE" || m === "PUT") return true;
+  if (m === "POST") return p === "/search" || /^\/databases\/[^/]+\/query$/.test(p);
+  if (m === "PATCH") return !/\/children$/.test(p);
+  return false;
+}
+
 async function doNotionFetch(path, { method, body }) {
   const res = await fetch(`${NOTION_API}${path}`, {
     method,
@@ -69,14 +84,18 @@ export async function notionRequest(path, { method = "GET", body } = {}) {
 
     maybeAlertOnFallbackId404(res.status, path);
 
-    if (isRetryableNotion(res) && attempt < NOTION_MAX_RETRIES) {
+    const retryable = isRetryableNotion(res) && (res.status === 429 || isSafeToRetryOnServerError(method, path));
+    if (retryable && attempt < NOTION_MAX_RETRIES) {
       await sleep(defaultRetryDelayMs(res, attempt, NOTION_RETRY_BASE_MS));
       lastErr = res;
       continue;
     }
 
     const message = (data && (data.message || JSON.stringify(data))) || res.statusText;
-    throw new Error(`Notion API error (${res.status}): ${message}`);
+    const ambiguous = isRetryableNotion(res) && res.status !== 429 && !isSafeToRetryOnServerError(method, path)
+      ? " -- the write may or may not have been applied; check Notion before retrying to avoid a duplicate"
+      : "";
+    throw new Error(`Notion API error (${res.status}): ${message}${ambiguous}`);
   }
 
   // Exhausted retries.
