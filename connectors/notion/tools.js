@@ -695,7 +695,8 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
             }
           }
 
-          // Trim on save only: if more than 20 log entries following log marker up to start marker, delete extra OLDEST ones
+          // Trim on save only: if more than COMMIT_LOG_MAX_ENTRIES log entries following log marker up to start marker, delete extra OLDEST ones
+          const COMMIT_LOG_MAX_ENTRIES = 8;
           const freshBlocks = await readAllBlocks(existing.pageId);
           const freshRange = findCheckpointRange(freshBlocks);
           if (freshRange) {
@@ -709,8 +710,8 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
             }
             if (mIdx !== -1) {
               const logBlocks = freshBlocks.slice(mIdx + 1, sIdx).filter(b => b.type === "paragraph");
-              if (logBlocks.length > 20) {
-                const extraOldest = logBlocks.slice(20);
+              if (logBlocks.length > COMMIT_LOG_MAX_ENTRIES) {
+                const extraOldest = logBlocks.slice(COMMIT_LOG_MAX_ENTRIES);
                 for (const b of extraOldest) {
                   await notionRequest(`/blocks/${b.id}`, { method: "DELETE" });
                 }
