@@ -184,9 +184,53 @@ async function appendIndexEntry({ entity_id, page_id, url, tags }) {
 // as doCreatePage, just without also creating a page.
 export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
   const existing = await findPageByEntityId(entity_id);
-  if (existing) return { skipped: true, existingId: existing.pageId };
-  const error = await appendIndexEntry({ entity_id, page_id, url, tags: tags || [] });
+  // An ARCHIVED owner doesn't count: its row is stale, so repoint it at the
+  // live page (upsertIndexRow updates in place) instead of skipping.
+  if (existing && !existing.archived) return { skipped: true, existingId: existing.pageId };
+  const error = await upsertIndexRow({ entity_id, page_id, url, tags: tags || [] });
   return { skipped: false, error };
+}
+
+// Archiving a page must also archive its Entity Index row(s). Otherwise the
+// row keeps pointing at an archived page and findPageByEntityId reports the
+// entity_id as taken. Matches rows by PageId (not EntityId) so it also catches
+// rows left behind when an entity_id was corrected after creation. Best-effort
+// like the other index writes: returns { count, error }.
+async function archiveIndexRowsForPage(page_id) {
+  try {
+    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+      method: "POST",
+      body: { filter: { property: "PageId", rich_text: { equals: page_id } }, page_size: 20 },
+    });
+    let count = 0;
+    for (const row of data?.results || []) {
+      await notionRequest(`/pages/${row.id}`, { method: "PATCH", body: { archived: true } });
+      count++;
+    }
+    return { count, error: null };
+  } catch (err) {
+    return { count: 0, error: err.message };
+  }
+}
+
+// Restoring an archived page: re-create/repoint its index row from the
+// entity_id marker on the page. Archived rows can't be queried, so this goes
+// through upsertIndexRow. Never takes over an entity_id that a different LIVE
+// page owns now (it may have been re-created after the archive). Returns an
+// error/warning string or null.
+async function restoreIndexRowForPage(page) {
+  try {
+    const blocks = await notionRequest(`/blocks/${page.id}/children?page_size=100`);
+    const { entity_id } = parseMarkers(blocks.results || []);
+    if (!entity_id) return null;
+    const existing = await findPageByEntityId(entity_id);
+    if (existing && !existing.archived && existing.pageId !== page.id) {
+      return `entity_id "${entity_id}" now belongs to another live page (${existing.pageId}), so its index row was not restored`;
+    }
+    return await upsertIndexRow({ entity_id, page_id: page.id, url: page.url, tags: [] });
+  } catch (err) {
+    return err.message;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +302,9 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   }
   if (entity_id) {
     const existing = await findPageByEntityId(entity_id);
-    if (existing) {
+    // An archived page does not own its entity_id: continue and let
+    // upsertIndexRow below repoint the stale row at the new page.
+    if (existing && !existing.archived) {
       return { skipped: true, entity_id, existingId: existing.pageId, existingTitle: existing.title, existingUrl: existing.url };
     }
   }
@@ -358,7 +404,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
     // its index row -- archive our page and report theirs.
     if (!batchError) {
       const winner = await findPageByEntityId(entity_id);
-      if (winner && winner.pageId !== data.id) {
+      if (winner && !winner.archived && winner.pageId !== data.id) {
         await notionRequest(`/pages/${data.id}`, { method: "PATCH", body: { archived: true } });
         return { skipped: true, entity_id, existingId: winner.pageId, existingTitle: winner.title, existingUrl: winner.url };
       }
@@ -540,6 +586,10 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     if (Object.keys(propUpdates).length) body.properties = propUpdates;
     const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
     results.push(`Updated page "${notionPageTitle(data)}" (ID: ${data.id}).`);
+    if (archived === false) {
+      const restoreError = await restoreIndexRowForPage(data);
+      if (restoreError) results.push(`(\u26a0\ufe0f index row not restored: ${restoreError})`);
+    }
   }
   if (append_content) {
     const children = append_content.split("\n").filter(Boolean).map(textBlock);
@@ -651,6 +701,10 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
     if (Object.keys(propUpdates).length) body.properties = propUpdates;
     const data = await notionRequest(`/pages/${page_id}`, { method: "PATCH", body });
     results.push(`Updated page "${notionPageTitle(data)}" (ID: ${data.id}).`);
+    // Keep the Entity Index in sync: archive any row pointing at this page.
+    const { count, error } = await archiveIndexRowsForPage(data.id);
+    if (error) results.push(`(\u26a0\ufe0f index row not archived: ${error} -- re-creating this entity_id is still safe, but run an index cleanup)`);
+    else if (count) results.push(`Archived ${count} index row${count === 1 ? "" : "s"}.`);
   }
   // Skip the changelog write when this call archived the page -- Notion
   // rejects block edits on an already-archived page ("Can't edit block that
@@ -716,7 +770,10 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
 // ---------------------------------------------------------------------------
 export async function doCheckpoint({ action, notes, key = "checkpoint-latest" }) {
   if (action === "save") {
-    const existing = await findPageByEntityId(key);
+    const found = await findPageByEntityId(key);
+    // An archived checkpoint page can't be written to: treat it as missing so
+    // a fresh page is created and the index row is repointed.
+    const existing = found && !found.archived ? found : null;
     const notesLines = (notes || "").split("\n");
     const updated_at = new Date().toISOString();
     // recordCommit only ever writes to the default key's page (hooks don't know
