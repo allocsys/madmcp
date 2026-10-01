@@ -207,8 +207,8 @@ export async function upsertIndexEntry({ entity_id, page_id, url, tags }) {
 // instead of silently creating an untracked page. Passing one_off: true is
 // the deliberate opt-out for real one-offs.
 // Cross-instance duplicate backstop. The lock in doCreatePage covers callers
-// that share a process or Redis, but Notion itself has no unique constraint,
-// so two creates that still slip through (Redis down, lock wait timed out)
+// that share a process, but Notion itself has no unique constraint,
+// so two creates that still slip through (separate serverless instances)
 // would each write an index row. After our own index write, look at every row
 // for this entity_id; the OLDEST row wins deterministically for everyone. If
 // ours isn't the winner we archive our page and row and report the winner,
