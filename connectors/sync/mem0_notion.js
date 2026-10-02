@@ -168,8 +168,7 @@ async function syncOneMemory(memory, { dry_run }) {
   // only touch status/relations if they actually differ, to avoid the same
   // needless-write/changelog-spam problem synced_at solves for content.
   if (dry_run) {
-    const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
-    const blocks = blocksData.results || [];
+    const blocks = await readAllBlocks(existing.pageId);
     const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
     // Audit A8: an unset mem0 status never changes the page (doUpdatePage
     // with status: undefined is a no-op), so don't report it as a change.
@@ -184,8 +183,10 @@ async function syncOneMemory(memory, { dry_run }) {
 
   const range = await replaceSyncedRange({ page_id: existing.pageId, contentLines, synced_at });
 
-  const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
-  const blocks = blocksData.results || [];
+  // Full (paginated) read: relation blocks sit at the end of the page, past
+  // the first 100 on long pages, and would otherwise look "missing" and be
+  // rewritten on every sync.
+  const blocks = await readAllBlocks(existing.pageId);
   const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
   const statusChanged = status !== undefined && (existing.markers.status || undefined) !== status; // A8
   const relationsChanged = !relationsEqual(currentRelations, relations);
@@ -197,6 +198,20 @@ async function syncOneMemory(memory, { dry_run }) {
     });
   }
   return { entity_id: notionEntityId, action: range.action, pageUrl: existing.url, statusChanged, relationsChanged };
+}
+
+// Reads every top-level block of a page (Notion caps a request at 100). Kept
+// local, going through notionRequest, so the sync's I/O boundary stays the same.
+async function readAllBlocks(page_id) {
+  const blocks = [];
+  let cursor;
+  for (let i = 0; i < 50; i++) {
+    const data = await notionRequest(`/blocks/${page_id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`);
+    blocks.push(...(data?.results || []));
+    if (!data?.has_more || !data?.next_cursor) break;
+    cursor = data.next_cursor;
+  }
+  return blocks;
 }
 
 export function register(server) {
