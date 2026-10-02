@@ -63,7 +63,11 @@ export const NOTION_RETRY_BASE_MS           = Number(process.env.NOTION_RETRY_BA
 // zero rows -- no old entries were migrated in.
 // Entity Index database properties: Name (title, holds the entity_id for
 // readability in the Notion UI), EntityId (rich_text, the actual filter
-// target), PageId (rich_text), Url (url), Tags (rich_text, comma-separated).
+// target), PageId (rich_text), Url (url), Tags (multi_select -- what
+// appendIndexEntry writes; queryAllIndexEntries also tolerates a legacy
+// comma-separated rich_text column). Rows are archived together with their
+// page (doUpdatePage archived: true) so an archived page never keeps an
+// entity_id reserved.
 // Override via env var if this database is ever moved/recreated.
 export const NOTION_INDEX_DATABASE_ID = process.env.NOTION_INDEX_DATABASE_ID || "3a745572-b580-8160-856b-cf6544c8ffa8";
 
