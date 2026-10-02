@@ -123,6 +123,45 @@ async function appendBlocks(page_id, children, { after } = {}) {
   }
 }
 
+// Deletes blocks with small bounded concurrency (Notion rate-limits ~3 req/s).
+// A 404 / "archived" error means the block is already gone, which is the
+// desired end state, so it is not counted as a failure. Returns the failures.
+async function deleteBlocks(ids, concurrency = 3) {
+  const failed = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      try {
+        await notionRequest(`/blocks/${id}`, { method: "DELETE" });
+      } catch (err) {
+        if (notionErrorStatus(err) === 404 || /archived/i.test(err.message)) continue;
+        failed.push({ id, error: err.message });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, worker));
+  return failed;
+}
+
+// Replaces the content strictly between a range's markers WITHOUT a window in
+// which the range is empty: the new blocks are inserted right after the start
+// marker first, only then are the old inner blocks deleted, and the start
+// marker's timestamp is bumped last. If anything fails midway the old content
+// is still there (worst case old + new appear together), and because the
+// timestamp is untouched a retry is never skipped as "already up to date".
+async function swapRangeContent({ page_id, range, contentBlocks, startText }) {
+  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
+  const failed = await deleteBlocks(range.innerBlockIds);
+  if (failed.length) {
+    throw new Error(`New content was written, but ${failed.length} of ${range.innerBlockIds.length} old block(s) could not be deleted (${failed[0].error}). The range may show old and new content together -- run the save/sync again to retry.`);
+  }
+  await notionRequest(`/blocks/${range.startBlockId}`, {
+    method: "PATCH",
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: startText } }] } },
+  });
+}
+
 // N3: notionRequest errors are `Notion API error (<status>): ...`.
 function notionErrorStatus(err) {
   const m = /\((\d{3})\)/.exec(err?.message || "");
@@ -519,24 +558,13 @@ async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange,
     return { action: "skipped", reason: `already up to date (timestamp: ${timestamp})` };
   }
 
-  // Delete every block strictly between the markers -- never the markers
-  // themselves, and never anything past the end marker.
-  for (const blockId of range.innerBlockIds) {
-    await notionRequest(`/blocks/${blockId}`, { method: "DELETE" });
-  }
-
-  // Insert new content right after the start marker via Notion's `after`
-  // cursor, so it lands inside the range regardless of what (if anything)
-  // sits below the end marker.
+  // Insert the new content right after the start marker (Notion's `after`
+  // cursor), then delete only the old blocks strictly between the markers --
+  // never the markers themselves, never anything past the end marker -- then
+  // bump the start marker's timestamp. Insert-first so a mid-way failure
+  // can't leave the range empty. See swapRangeContent.
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
-
-  // Update the start marker's own text in place with the new timestamp --
-  // same single-block PATCH doUpdatePage uses for the status marker.
-  await notionRequest(`/blocks/${range.startBlockId}`, {
-    method: "PATCH",
-    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildStartText(timestamp) } }] } },
-  });
+  await swapRangeContent({ page_id, range, contentBlocks, startText: buildStartText(timestamp) });
 
   return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousTimestamp: getTimestamp(range) };
 }
@@ -797,17 +825,10 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
   // Unlike replaceSyncedRange, always overwrite -- a checkpoint save is
   // meant to reflect "now", so there's no meaningful "already up to date"
   // skip case the way there is for a mem0 memory that hasn't changed.
-  for (const blockId of range.innerBlockIds) {
-    await notionRequest(`/blocks/${blockId}`, { method: "DELETE" });
-  }
-
+  // Insert-first, delete-after (see swapRangeContent): a failure midway must
+  // not wipe the saved checkpoint.
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
-
-  await notionRequest(`/blocks/${range.startBlockId}`, {
-    method: "PATCH",
-    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildCheckpointStartText(updated_at) } }] } },
-  });
+  await swapRangeContent({ page_id, range, contentBlocks, startText: buildCheckpointStartText(updated_at) });
 
   return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousUpdatedAt: range.updated_at };
 }
@@ -937,8 +958,9 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
       return "No commit log marker found; nothing to clear.";
     }
     const logBlocks = blocks.slice(mIdx + 1, startIdx).filter(b => b.type === "paragraph");
-    for (const b of logBlocks) {
-      await notionRequest(`/blocks/${b.id}`, { method: "DELETE" });
+    const clearFailed = await deleteBlocks(logBlocks.map((b) => b.id));
+    if (clearFailed.length) {
+      throw new Error(`Commit log partially cleared: ${logBlocks.length - clearFailed.length} removed, ${clearFailed.length} failed (${clearFailed[0].error}). Run clear_log again to retry.`);
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
