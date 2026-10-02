@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { mem0Request } from "../mem/client.js";
 import { notionRequest, parseRelationBlocks, queryAllIndexEntries, findPageByEntityId, findSyncRange } from "../notion/client.js";
-import { doCreatePage, doUpdatePage, replaceSyncedRange, readAllBlocks } from "../notion/tools.js";
+import { doCreatePage, doUpdatePage, replaceSyncedRange } from "../notion/tools.js";
 import { MEM0_USER_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 
 const MEM0_ENTITY_PREFIX = "mem0:";
@@ -198,6 +198,20 @@ async function syncOneMemory(memory, { dry_run }) {
     });
   }
   return { entity_id: notionEntityId, action: range.action, pageUrl: existing.url, statusChanged, relationsChanged };
+}
+
+// Reads every top-level block of a page (Notion caps a request at 100). Kept
+// local, going through notionRequest, so the sync's I/O boundary stays the same.
+async function readAllBlocks(page_id) {
+  const blocks = [];
+  let cursor;
+  for (let i = 0; i < 50; i++) {
+    const data = await notionRequest(`/blocks/${page_id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`);
+    blocks.push(...(data?.results || []));
+    if (!data?.has_more || !data?.next_cursor) break;
+    cursor = data.next_cursor;
+  }
+  return blocks;
 }
 
 export function register(server) {
