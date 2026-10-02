@@ -91,7 +91,7 @@ const SLUG_LIKE_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+){2,}$/;
 // pathological page can't loop forever.
 const MAX_BLOCK_PAGES = 50;
 
-async function readAllBlocks(page_id) {
+export async function readAllBlocks(page_id) {
   const blocks = [];
   let cursor;
   for (let i = 0; i < MAX_BLOCK_PAGES; i++) {
@@ -527,11 +527,8 @@ const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3"
 // see mem0 entity_id: mem0-notion-sync-tool-spec). See client.js's
 // "Synced-range marker convention" comment for the marker format and why
 // this exists (protecting manual edits from being clobbered by a re-sync).
-// Same 100-block-page read limitation as findPageByEntityId/parseMarkers
-// elsewhere in this file -- a range on a page with >100 total blocks may
-// not be found; treated as not-found (append fresh range) rather than a
-// silent corruption risk, same reasoning as findSyncRange's unterminated-
-// range case.
+// Pages are read in full (readAllBlocks paginates), so ranges past the first
+// 100 blocks are found.
 // Generic marker-range replace -- shared logic behind replaceSyncedRange
 // (below) and replaceCheckpointRange (further down this file). Both
 // maintain a marker-delimited block range (start marker carrying a
@@ -697,8 +694,9 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
     results.push(`Appended markdown content (${append_markdown.length} chars).`);
   }
   if (status !== undefined) {
-    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-    const markers = parseMarkers(blocksData.results || []);
+    // Read ALL blocks: a status marker appended at the end of a long page sits
+    // past the first 100, and missing it would add a duplicate marker each time.
+    const markers = parseMarkers(await readAllBlocks(page_id));
     if (markers.statusBlockId) {
       await notionRequest(`/blocks/${markers.statusBlockId}`, {
         method: "PATCH",
@@ -717,8 +715,7 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   // `replacements` and silently leaving the index stale/pointing nowhere.
   // Same marker-block-in-place pattern as `status` above.
   if (entity_id !== undefined) {
-    const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-    const markers = parseMarkers(blocksData.results || []);
+    const markers = parseMarkers(await readAllBlocks(page_id));
     const previousEntityId = markers.entity_id;
     if (markers.entityBlockId) {
       await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: { paragraph: entityMarkerBlock(entity_id).paragraph } });
