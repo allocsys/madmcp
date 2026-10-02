@@ -28,6 +28,15 @@ export const GITHUB_RETRY_BASE_MS = Number(process.env.GITHUB_RETRY_BASE_MS) || 
 export const NOTION_TOKEN   = process.env.NOTION_TOKEN;
 export const NOTION_API     = "https://api.notion.com/v1";
 export const NOTION_VERSION = "2022-06-28";
+// Page markdown endpoints (GET/PATCH /pages/{id}/markdown) only exist from this
+// API version on. It is sent PER REQUEST for those endpoints only: 2026-03-11
+// also changes database querying (data sources), so the rest of the connector
+// stays on NOTION_VERSION above.
+export const NOTION_MARKDOWN_VERSION = "2026-03-11";
+// Append a "📜" changelog paragraph to the page body on every notion_update.
+// Set NOTION_CHANGELOG_ENABLED=false to stop that clutter (include_history will
+// then only show entries written earlier).
+export const NOTION_CHANGELOG_ENABLED = process.env.NOTION_CHANGELOG_ENABLED !== "false";
 
 // Throttle + retry for the Notion API (fix #3 -- rate-limit asymmetry,
 // 2026-07-27). Notion's documented average rate limit is ~3 requests/second

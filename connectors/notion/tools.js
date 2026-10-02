@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID, COMMIT_LOG_ENABLED } from "../../config.js";
+import { NOTION_INDEX_DATABASE_ID, NOTION_SYNC_PARENT_PAGE_ID, COMMIT_LOG_ENABLED, NOTION_CHANGELOG_ENABLED } from "../../config.js";
 import {
   notionRequest, notionPageTitle, notionDatabaseTitle, notionRichTextToString,
   notionBlocksToText, buildMarkerBlocks, statusMarkerBlock, entityMarkerBlock, notionBlockPlainText, parseMarkers,
@@ -19,6 +19,8 @@ import { trimCommitLogBlocks } from "./commit_log.js";
 import { withLock } from "../shared/lock.js";
 import { triggerNotionEmbed } from "./embed_client.js";
 import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
+import { fetchPageMarkdown, patchPageMarkdown, parseMarkdownMarkers, splitChangelog, withPreservedMarkers } from "./markdown.js";
+import { paginateText } from "../output.js";
 
 // Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
 // current title+content and fires it at the embed-on-write endpoint.
@@ -32,12 +34,24 @@ import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 // but never risk of failing the update this is attached to.
 async function triggerEmbedForPage(page_id) {
   try {
-    const [page, blocksData] = await Promise.all([
-      notionRequest(`/pages/${page_id}`),
-      notionRequest(`/blocks/${page_id}/children?page_size=100`),
-    ]);
+    // Markdown covers the whole page, nested blocks included; the block read
+    // below only saw the first 100 top-level blocks. Fall back to it if the
+    // markdown API is unavailable.
+    let text;
+    let page;
+    try {
+      const [p, md] = await Promise.all([notionRequest(`/pages/${page_id}`), fetchPageMarkdown(page_id)]);
+      if (md) { page = p; text = splitChangelog(md.markdown).body; }
+    } catch { /* fall back below */ }
+    if (text === undefined) {
+      const [p, blocksData] = await Promise.all([
+        notionRequest(`/pages/${page_id}`),
+        notionRequest(`/blocks/${page_id}/children?page_size=100`),
+      ]);
+      page = p;
+      text = notionBlocksToText(blocksData.results || []);
+    }
     const title = notionPageTitle(page);
-    const text = notionBlocksToText(blocksData.results || []);
     await triggerNotionEmbed({ page_id, content: [title, text].filter(Boolean).join("\n") });
   } catch {
     // best-effort -- see comment above (covers the re-read failing; the
@@ -107,6 +121,45 @@ async function appendBlocks(page_id, children, { after } = {}) {
       await notionRequest(`/blocks/${page_id}/children`, { method: "PATCH", body: { children: chunk } });
     }
   }
+}
+
+// Deletes blocks with small bounded concurrency (Notion rate-limits ~3 req/s).
+// A 404 / "archived" error means the block is already gone, which is the
+// desired end state, so it is not counted as a failure. Returns the failures.
+async function deleteBlocks(ids, concurrency = 3) {
+  const failed = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      try {
+        await notionRequest(`/blocks/${id}`, { method: "DELETE" });
+      } catch (err) {
+        if (notionErrorStatus(err) === 404 || /archived/i.test(err.message)) continue;
+        failed.push({ id, error: err.message });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, worker));
+  return failed;
+}
+
+// Replaces the content strictly between a range's markers WITHOUT a window in
+// which the range is empty: the new blocks are inserted right after the start
+// marker first, only then are the old inner blocks deleted, and the start
+// marker's timestamp is bumped last. If anything fails midway the old content
+// is still there (worst case old + new appear together), and because the
+// timestamp is untouched a retry is never skipped as "already up to date".
+async function swapRangeContent({ page_id, range, contentBlocks, startText }) {
+  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
+  const failed = await deleteBlocks(range.innerBlockIds);
+  if (failed.length) {
+    throw new Error(`New content was written, but ${failed.length} of ${range.innerBlockIds.length} old block(s) could not be deleted (${failed[0].error}). The range may show old and new content together -- run the save/sync again to retry.`);
+  }
+  await notionRequest(`/blocks/${range.startBlockId}`, {
+    method: "PATCH",
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: startText } }] } },
+  });
 }
 
 // N3: notionRequest errors are `Notion API error (<status>): ...`.
@@ -505,24 +558,13 @@ async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange,
     return { action: "skipped", reason: `already up to date (timestamp: ${timestamp})` };
   }
 
-  // Delete every block strictly between the markers -- never the markers
-  // themselves, and never anything past the end marker.
-  for (const blockId of range.innerBlockIds) {
-    await notionRequest(`/blocks/${blockId}`, { method: "DELETE" });
-  }
-
-  // Insert new content right after the start marker via Notion's `after`
-  // cursor, so it lands inside the range regardless of what (if anything)
-  // sits below the end marker.
+  // Insert the new content right after the start marker (Notion's `after`
+  // cursor), then delete only the old blocks strictly between the markers --
+  // never the markers themselves, never anything past the end marker -- then
+  // bump the start marker's timestamp. Insert-first so a mid-way failure
+  // can't leave the range empty. See swapRangeContent.
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
-
-  // Update the start marker's own text in place with the new timestamp --
-  // same single-block PATCH doUpdatePage uses for the status marker.
-  await notionRequest(`/blocks/${range.startBlockId}`, {
-    method: "PATCH",
-    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildStartText(timestamp) } }] } },
-  });
+  await swapRangeContent({ page_id, range, contentBlocks, startText: buildStartText(timestamp) });
 
   return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousTimestamp: getTimestamp(range) };
 }
@@ -548,6 +590,7 @@ export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
 // an otherwise-successful page update. Returns an error string (for the
 // caller to optionally surface) or null on success.
 async function appendChangelogEntry(page_id, summary) {
+  if (!NOTION_CHANGELOG_ENABLED) return null;
   try {
     await notionRequest(`/blocks/${page_id}/children`, {
       method: "PATCH",
@@ -571,8 +614,19 @@ async function appendChangelogEntry(page_id, summary) {
 // unsupported block type) -- the single-item tool catches this to preserve
 // its existing isError response shape; the batch tool lets Promise.allSettled
 // catch it per item, same pattern as mem/tools.js.
-export async function doUpdatePage({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties }) {
+export async function doUpdatePage(args) {
   const results = [];
+  try {
+    return await doUpdatePageInner(args, results);
+  } catch (err) {
+    // Edits are applied one by one, so a later failure must not hide what was
+    // already written.
+    if (results.length && err instanceof Error) err.message += ` Already applied before the failure: ${results.join("; ")}`;
+    throw err;
+  }
+}
+
+async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content }, results) {
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
   // (archived: true) is deliberately NOT handled here -- see the bottom of
@@ -602,10 +656,10 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
       const matches = blocks.filter((b) => notionBlockPlainText(b) === find);
       const trunc = (s) => s.slice(0, 60) + (s.length > 60 ? "…" : "");
       if (matches.length === 0) {
-        throw new Error(`Update aborted, nothing further written — "${trunc(find)}" was not found among this page's top-level blocks. It may be nested inside a toggle/column — re-check with notion_read.`);
+        throw new Error(`Update aborted, nothing further written — "${trunc(find)}" was not found among this page's top-level blocks. It may be nested inside a toggle/column, or only be part of a longer block -- use content_updates (substring search/replace, sees nested blocks) instead.`);
       }
       if (matches.length > 1) {
-        throw new Error(`Update aborted, nothing further written — "${trunc(find)}" matches ${matches.length} blocks, but must be unique. Include more surrounding context in "find" to disambiguate.`);
+        throw new Error(`Update aborted, nothing further written — "${trunc(find)}" matches ${matches.length} blocks, but must be unique. "find" is matched against whole blocks, so surrounding context won't help -- use content_updates with a longer old_str (or replace_all_matches) instead.`);
       }
       const block = matches[0];
       const type  = block.type;
@@ -617,6 +671,30 @@ export async function doUpdatePage({ page_id, title, append_content, archived, r
       await notionRequest(`/blocks/${block.id}`, { method: "PATCH", body: patchBody });
       results.push(`Replaced block ("${trunc(find)}" → "${trunc(replace)}").`);
     }
+  }
+  // Markdown-based content edits (Notion-Version 2026-03-11). Unlike
+  // `replacements` these match substrings anywhere on the page (nested blocks,
+  // code, callouts included), keep inline formatting and accept markdown.
+  if (replace_content !== undefined) {
+    let current = "";
+    try { current = (await fetchPageMarkdown(page_id))?.markdown || ""; } catch { /* nothing to preserve */ }
+    const next = withPreservedMarkers(replace_content, current);
+    const r = await patchPageMarkdown(page_id, { type: "replace_content", replace_content: { new_str: next, ...(allow_deleting_content ? { allow_deleting_content: true } : {}) } });
+    results.push(`Replaced page content (${replace_content.length} chars; entity_id/status/relation lines preserved)${r.truncated ? " -- page is very large, Notion reports truncation" : ""}.`);
+  }
+  if (content_updates?.length) {
+    await patchPageMarkdown(page_id, {
+      type: "update_content",
+      update_content: {
+        content_updates: content_updates.map(({ old_str, new_str, replace_all_matches }) => ({ old_str, new_str, ...(replace_all_matches ? { replace_all_matches: true } : {}) })),
+        ...(allow_deleting_content ? { allow_deleting_content: true } : {}),
+      },
+    });
+    results.push(`Applied ${content_updates.length} search-and-replace edit(s).`);
+  }
+  if (append_markdown) {
+    await patchPageMarkdown(page_id, { type: "insert_content", insert_content: { content: append_markdown, position: { type: "end" } } });
+    results.push(`Appended markdown content (${append_markdown.length} chars).`);
   }
   if (status !== undefined) {
     const blocksData = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
@@ -747,17 +825,10 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
   // Unlike replaceSyncedRange, always overwrite -- a checkpoint save is
   // meant to reflect "now", so there's no meaningful "already up to date"
   // skip case the way there is for a mem0 memory that hasn't changed.
-  for (const blockId of range.innerBlockIds) {
-    await notionRequest(`/blocks/${blockId}`, { method: "DELETE" });
-  }
-
+  // Insert-first, delete-after (see swapRangeContent): a failure midway must
+  // not wipe the saved checkpoint.
   const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  await appendBlocks(page_id, contentBlocks, { after: range.startBlockId });
-
-  await notionRequest(`/blocks/${range.startBlockId}`, {
-    method: "PATCH",
-    body: { paragraph: { rich_text: [{ type: "text", text: { content: buildCheckpointStartText(updated_at) } }] } },
-  });
+  await swapRangeContent({ page_id, range, contentBlocks, startText: buildCheckpointStartText(updated_at) });
 
   return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousUpdatedAt: range.updated_at };
 }
@@ -887,13 +958,76 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest" })
       return "No commit log marker found; nothing to clear.";
     }
     const logBlocks = blocks.slice(mIdx + 1, startIdx).filter(b => b.type === "paragraph");
-    for (const b of logBlocks) {
-      await notionRequest(`/blocks/${b.id}`, { method: "DELETE" });
+    const clearFailed = await deleteBlocks(logBlocks.map((b) => b.id));
+    if (clearFailed.length) {
+      throw new Error(`Commit log partially cleared: ${logBlocks.length - clearFailed.length} removed, ${clearFailed.length} failed (${clearFailed[0].error}). Run clear_log again to retry.`);
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
     throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load" or "clear_log").`);
   }
+}
+
+// Renders the first 5 relations the same way the block-based read does.
+async function renderRelations(relations) {
+  if (!relations.length) return "";
+  const toResolve = relations.slice(0, 5);
+  const resolved = await Promise.all(toResolve.map(async (r) => {
+    try {
+      const target = await findPageByEntityId(r.to_entity_id);
+      return target ? `  \u{1F517} ${r.relation} -> ${r.to_entity_id} ("${target.title}", ${target.url})` : `  \u{1F517} ${r.relation} -> ${r.to_entity_id} (not found -- dangling reference)`;
+    } catch {
+      return `  \u{1F517} ${r.relation} -> ${r.to_entity_id} (couldn't resolve -- index unreachable)`;
+    }
+  }));
+  const remaining = relations.length - toResolve.length;
+  return `\n\nRelations:\n${resolved.join("\n")}${remaining ? `\n  \u2026 and ${remaining} more (not resolved, showing first 5)` : ""}`;
+}
+
+// Markdown-first page read (Notion-Version 2026-03-11): whole page in one
+// request, nested blocks included, then paged by character offset so a huge
+// page can be read in chunks. Returns { result } on success, or { note } when
+// the caller should fall back to the block-API view (note says why, or null
+// when the id simply isn't a page, e.g. a database).
+async function readViaMarkdown({ id, include_history, offset, max_chars }) {
+  const [pageRes, mdRes] = await Promise.allSettled([notionRequest(`/pages/${id}`), fetchPageMarkdown(id)]);
+  if (mdRes.status === "rejected") {
+    const st = notionErrorStatus(mdRes.reason);
+    return { note: st === null || st === 400 || st === 404 ? null : `markdown read unavailable (${mdRes.reason.message})` };
+  }
+  const md = mdRes.value;
+  if (!md) return { note: null };
+  let page = null;
+  if (pageRes.status === "fulfilled") page = pageRes.value;
+  else {
+    const st = notionErrorStatus(pageRes.reason);
+    if (st !== 400 && st !== 404) throw pageRes.reason; // not just "this is a block, not a page"
+  }
+
+  const { body, history } = splitChangelog(md.markdown);
+  const markers = parseMarkdownMarkers(md.markdown);
+  const limit = Number.isFinite(max_chars) && max_chars > 0 ? Math.trunc(max_chars) : undefined;
+  const start = Number.isFinite(offset) && offset > 0 ? Math.trunc(offset) : 0;
+  const content = paginateText(body, { offset: start, limit });
+
+  const head = page
+    ? `# ${notionPageTitle(page)}\nID: ${page.id}\nURL: ${page.url}\nCreated: ${page.created_time?.slice(0, 10)} | Last edited: ${page.last_edited_time?.slice(0, 10)}`
+    : `# Block subtree\nID: ${id}`;
+  const markerLine = (markers.entity_id || markers.status)
+    ? `\n${markers.entity_id ? `Entity ID: ${markers.entity_id}` : ""}${markers.entity_id && markers.status ? " | " : ""}${markers.status ? `Status: ${markers.status}` : ""}`
+    : "";
+  const changelogNote = history.length && !include_history
+    ? `\n\u{1F4DC} ${history.length} changelog entr${history.length === 1 ? "y" : "ies"} on this page (hidden here) -- use include_history: true to see them.`
+    : "";
+  const truncNote = md.truncated
+    ? `\n\n\u26A0\uFE0F Notion truncated this very large page. ${md.unknownBlockIds.length ? `Call notion_read with these block ids to read the missing parts: ${md.unknownBlockIds.slice(0, 20).join(", ")}${md.unknownBlockIds.length > 20 ? ", ..." : ""}` : ""}`
+    : "";
+  const relationsBlock = await renderRelations(markers.relations);
+  const historyBlock = include_history
+    ? `\n\nHistory:\n${history.length ? history.join("\n") : "No changelog entries found on this page."}`
+    : "";
+  const text = `${head}${markerLine}${changelogNote}\n\n${body.trim() ? content : "(no content)"}${truncNote}${relationsBlock}${historyBlock}`;
+  return { result: { content: [{ type: "text", text }] } };
 }
 
 export function register(server) {
@@ -1014,9 +1148,18 @@ export function register(server) {
       filter:          z.record(z.any()).optional().describe("Optional Notion filter object (only meaningful if the ID refers to a database) — if provided, runs the database query and includes matching rows in the response so callers don't need a second call"),
       cursor:          z.string().optional().describe("Optional pagination cursor for blocks (page) or rows (database)"),
       page_size:       z.number().optional().describe("Optional page size for blocks (page) or rows (database), 1-100 (values above 100 are clamped). Defaults: 100 for blocks, 20 for rows"),
+      format:          z.enum(["markdown", "blocks"]).optional().describe("Pages only. 'markdown' (default) returns the WHOLE page as markdown, nested blocks (toggles, columns, tables, code, callouts) included, and is the text to copy old_str values from for notion_update content_updates. 'blocks' forces the older top-level-only block view (paged with cursor). Also used automatically if markdown isn't available."),
+      offset:          z.number().optional().describe("Markdown view only: character offset to continue from when a long page was cut off (the footer of the previous call gives the exact value)."),
+      max_chars:       z.number().optional().describe("Markdown view only: max characters returned per call (default 20000)."),
     },
-    async ({ id, include_history = false, filter, cursor, page_size }) => {
+    async ({ id, include_history = false, filter, cursor, page_size, format = "markdown", offset, max_chars }) => {
       try {
+        let fallbackNote = null;
+        if (format !== "blocks" && filter === undefined && cursor === undefined) {
+          const viaMarkdown = await readViaMarkdown({ id, include_history, offset, max_chars });
+          if (viaMarkdown.result) return viaMarkdown.result;
+          fallbackNote = viaMarkdown.note;
+        }
         let isPage = false;
         let page, blocksData, dbData;
         try {
@@ -1093,7 +1236,8 @@ export function register(server) {
             `ID: ${page.id}\n` +
             `URL: ${page.url}\n` +
             `Created: ${page.created_time?.slice(0, 10)} | Last edited: ${page.last_edited_time?.slice(0, 10)}${markerLine}${changelogNote}\n\n` +
-            (content || "(no content)") + hasMore + childSummary + relationsBlock + historyBlock;
+            (content || "(no content)") + hasMore + childSummary + relationsBlock + historyBlock +
+            (fallbackNote ? `\n\n\u26A0\uFE0F ${fallbackNote}; showing the block-API view (nested blocks not expanded).` : "");
           return { content: [{ type: "text", text }] };
         } else {
           const title = notionDatabaseTitle(dbData);
@@ -1208,7 +1352,7 @@ export function register(server) {
 
   server.tool(
     "notion_update",
-    "DOES: Update one or more Notion pages, or one or more Notion databases. `type: 'page'` updates page(s) under `items` (page_id/title/append_content/archived/replacements/status/entity_id/relations/properties per item). `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
+    "DOES: Update one or more Notion pages, or one or more Notion databases. `type: 'page'` updates page(s) under `items` (page_id/title/content_updates/replace_content/append_markdown/append_content/archived/replacements/status/entity_id/relations/properties per item). To edit page content, prefer content_updates (substring search/replace over the markdown notion_read returns; handles nested blocks, code, callouts and keeps formatting), append_markdown (add real headings/bullets/code blocks) and replace_content (overwrite the whole body); `replacements` only matches whole top-level blocks and `append_content` writes plain paragraphs. `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
     {
       type:  z.enum(["page", "database"]).describe("'page' updates one or more Notion pages. 'database' updates one or more Notion databases."),
       items: z.array(z.object({
@@ -1221,6 +1365,14 @@ export function register(server) {
           find:    z.string().describe("Exact plain text of an existing top-level block (paragraph, heading, list item, or to-do) -- must match exactly one block"),
           replace: z.string().describe("New plain text for that block"),
         })).optional().describe("type 'page' only: list of find-and-replace operations for targeted in-place block edits. Each `find` must match exactly one of the page's top-level blocks by plain text -- fails loudly (no changes made) on zero or multiple matches. Only text-style blocks (paragraph/heading/list-item/to-do) can be edited this way."),
+        content_updates: z.array(z.object({
+          old_str:             z.string().describe("Text to find (markdown as returned by notion_read). Must match exactly one place on the page unless replace_all_matches is true."),
+          new_str:             z.string().describe("Replacement markdown. To insert after a line, repeat the line in new_str and add the new content after it; use an empty string to delete."),
+          replace_all_matches: z.boolean().optional().describe("Replace every occurrence instead of failing when old_str matches several places."),
+        })).optional().describe("type 'page' only: PREFERRED way to edit existing content. Substring search-and-replace over the page's markdown: works on any block (nested, code, callout, toggle, table), keeps untouched formatting, and can add/remove/insert whole lines or blocks."),
+        replace_content: z.string().optional().describe("type 'page' only: overwrite the ENTIRE page body with this markdown (entity_id/status/relation marker lines are kept automatically). Do not use on pages managed by notion_sync_content or checkpoint -- their markers would be lost."),
+        append_markdown: z.string().optional().describe("type 'page' only: append markdown (headings, bullets, code fences, to-dos, tables...) to the end of the page. Unlike append_content, markdown is parsed into real blocks."),
+        allow_deleting_content: z.boolean().optional().describe("type 'page' only: allow content_updates/replace_content to delete child pages or databases (refused by default)."),
         status:         z.enum(STATUS_VALUES).optional().describe("type 'page' only: set this page's lifecycle status (open/resolved/superseded). Updates the existing status marker block in place if one exists, or appends a new marker if the page has none yet."),
         entity_id:      z.string().optional().describe("type 'page' only: correct or set this page's entity_id marker. Updates the visible entity_id marker block in place AND upserts the Entity Index database entry that notion_create's dedup check and notion_read's relation resolution both read from -- editing the marker text via `replacements` alone does NOT update the index."),
         relations:      z.array(z.object({
@@ -1235,6 +1387,7 @@ export function register(server) {
         const results = await runSequentially(items, (item) => doUpdatePage({
           page_id: item.page_id, title: item.title, append_content: item.append_content, archived: item.archived,
           replacements: item.replacements, status: item.status, entity_id: item.entity_id, relations: item.relations, properties: item.properties,
+          content_updates: item.content_updates, replace_content: item.replace_content, append_markdown: item.append_markdown, allow_deleting_content: item.allow_deleting_content,
         }));
         const lines = results.map((r, i) => {
           const label = items[i].page_id;

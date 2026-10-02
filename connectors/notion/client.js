@@ -37,16 +37,18 @@ export function isSafeToRetryOnServerError(method, path) {
   const p = String(path || "").split("?")[0];
   if (m === "GET" || m === "DELETE" || m === "PUT") return true;
   if (m === "POST") return p === "/search" || /^\/databases\/[^/]+\/query$/.test(p);
-  if (m === "PATCH") return !/\/children$/.test(p);
+  // PATCH .../children and PATCH .../markdown apply content: a lost response
+  // followed by a retry could insert it twice.
+  if (m === "PATCH") return !/\/(children|markdown)$/.test(p);
   return false;
 }
 
-async function doNotionFetch(path, { method, body }) {
+async function doNotionFetch(path, { method, body, version }) {
   const res = await fetch(`${NOTION_API}${path}`, {
     method,
     headers: {
       Authorization:    `Bearer ${NOTION_TOKEN}`,
-      "Notion-Version": NOTION_VERSION,
+      "Notion-Version": version || NOTION_VERSION,
       "Content-Type":   "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -73,12 +75,12 @@ function maybeAlertOnFallbackId404(status, path) {
   }
 }
 
-export async function notionRequest(path, { method = "GET", body } = {}) {
+export async function notionRequest(path, { method = "GET", body, version } = {}) {
   if (!NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set. Add it as an environment variable on the madmcp server.");
 
   let lastErr;
   for (let attempt = 0; attempt <= NOTION_MAX_RETRIES; attempt++) {
-    const { res, data } = await scheduleThrottled(() => doNotionFetch(path, { method, body }));
+    const { res, data } = await scheduleThrottled(() => doNotionFetch(path, { method, body, version }));
 
     if (res.ok) return data;
 
