@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { mem0Request } from "../mem/client.js";
 import { notionRequest, parseRelationBlocks, queryAllIndexEntries, findPageByEntityId, findSyncRange } from "../notion/client.js";
-import { doCreatePage, doUpdatePage, replaceSyncedRange } from "../notion/tools.js";
+import { doCreatePage, doUpdatePage, replaceSyncedRange, readAllBlocks } from "../notion/tools.js";
 import { MEM0_USER_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 
 const MEM0_ENTITY_PREFIX = "mem0:";
@@ -168,8 +168,7 @@ async function syncOneMemory(memory, { dry_run }) {
   // only touch status/relations if they actually differ, to avoid the same
   // needless-write/changelog-spam problem synced_at solves for content.
   if (dry_run) {
-    const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
-    const blocks = blocksData.results || [];
+    const blocks = await readAllBlocks(existing.pageId);
     const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
     // Audit A8: an unset mem0 status never changes the page (doUpdatePage
     // with status: undefined is a no-op), so don't report it as a change.
@@ -184,8 +183,10 @@ async function syncOneMemory(memory, { dry_run }) {
 
   const range = await replaceSyncedRange({ page_id: existing.pageId, contentLines, synced_at });
 
-  const blocksData = await notionRequest(`/blocks/${existing.pageId}/children?page_size=100`);
-  const blocks = blocksData.results || [];
+  // Full (paginated) read: relation blocks sit at the end of the page, past
+  // the first 100 on long pages, and would otherwise look "missing" and be
+  // rewritten on every sync.
+  const blocks = await readAllBlocks(existing.pageId);
   const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
   const statusChanged = status !== undefined && (existing.markers.status || undefined) !== status; // A8
   const relationsChanged = !relationsEqual(currentRelations, relations);
