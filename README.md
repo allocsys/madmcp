@@ -278,6 +278,17 @@ Delete: `cf_delete` (`resource`: d1 | kv | r2 | hyperdrive, `id`, `confirm`), re
 separate backfill/repair tool for the entity_id → page_id dedup index, not part of the
 consolidation.
 
+`notion_chart` (`action`: `create` | `update` | `get` | `list` | `delete`) — creates and manages
+native Notion chart views (column, bar, line, donut, number) through the Views API. Without
+`page_id` a chart becomes a view tab on the database; with `page_id` (+ optional `after_block_id`)
+it is placed inline on that page. Properties are given by name or id. `dry_run: true` returns the
+exact request body without writing (it still does read-only schema/view lookups). Example:
+`{action: "create", database_id, name: "Tasks by status", chart_type: "column", x: "Status"}`.
+Requirements: a paid Notion plan (free workspaces get one chart) and an integration with the
+capability to create views. Views calls send `Notion-Version: 2026-03-11` per request only; the
+global `NOTION_VERSION` stays 2022-06-28 because the entity index relies on
+`/databases/{id}/query`. Not supported yet: raw "results" mode and dashboards.
+
 ### Mem0
 `mem0_write` (`action`: `add` | `add_batch` | `update` — replaces the former `mem0_add`,
 `mem0_add_batch` and `mem0_update`), `mem0_inspect` (`action`: `get` | `history` | `relations` —
