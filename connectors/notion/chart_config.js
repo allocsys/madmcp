@@ -337,6 +337,34 @@ export function buildChartConfig(schema, input = {}, { partial = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard widget placement. Omitted -> Notion's default (a new row at the
+// end). { type: "new_row", row_index? } inserts a row; { type: "existing_row",
+// row_index } puts the widget side by side with the widgets in that row.
+// Row indexes are 0-based.
+function buildWidgetPlacement(placement, errs) {
+  if (placement === undefined || placement === null) return undefined;
+  if (!isObj(placement)) {
+    errs.push('placement must be an object: { type: "new_row" | "existing_row", row_index }');
+    return undefined;
+  }
+  const { type, row_index } = placement;
+  if (!["new_row", "existing_row"].includes(type)) {
+    errs.push(`placement.type must be "new_row" or "existing_row" (got ${JSON.stringify(type)})`);
+    return undefined;
+  }
+  const hasIndex = row_index !== undefined && row_index !== null;
+  if (hasIndex && !(Number.isInteger(row_index) && row_index >= 0)) {
+    errs.push("placement.row_index must be an integer >= 0");
+    return undefined;
+  }
+  if (type === "existing_row" && !hasIndex) {
+    errs.push('placement.row_index is required for type "existing_row"');
+    return undefined;
+  }
+  return hasIndex ? { type, row_index } : { type };
+}
+
+// ---------------------------------------------------------------------------
 // POST /v1/views body for a new chart view.
 //
 // Extra input: name (required); filter (Notion filter object, passed through);
@@ -349,6 +377,9 @@ export function buildCreateChartViewBody(schema, input = {}) {
   if (!name) errs.push("name is required");
   if (input.filter !== undefined && input.filter !== null && !isObj(input.filter)) errs.push("filter must be a Notion filter object");
   if (input.after_block_id && !input.page_id) errs.push("after_block_id only applies together with page_id");
+  if (input.page_id && input.dashboard_id) errs.push("page_id and dashboard_id can't be combined: a chart is either inline on a page or a widget in a dashboard");
+  if (input.placement !== undefined && input.placement !== null && !input.dashboard_id) errs.push("placement only applies together with dashboard_id");
+  const placement = input.dashboard_id ? buildWidgetPlacement(input.placement, errs) : undefined;
 
   const configuration = buildConfigInternal(schema, input, { partial: false }, errs);
   throwIfErrors(errs);
@@ -361,7 +392,12 @@ export function buildCreateChartViewBody(schema, input = {}) {
   };
   if (isObj(input.filter)) body.filter = input.filter;
 
-  if (input.page_id) {
+  if (input.dashboard_id) {
+    // Widget in an existing dashboard: the dashboard is the parent (view_id);
+    // data_source_id above says which data the chart reads.
+    body.view_id = String(input.dashboard_id).trim();
+    if (placement) body.placement = placement;
+  } else if (input.page_id) {
     const create_database = { parent: { type: "page_id", page_id: String(input.page_id).trim() } };
     if (input.after_block_id) create_database.position = { type: "after_block", block_id: String(input.after_block_id).trim() };
     body.create_database = create_database;
@@ -401,6 +437,28 @@ export function buildUpdateChartViewBody(schema, input = {}, existingChartType) 
   throwIfErrors(errs);
   if (!Object.keys(body).length) throw new ChartConfigError(["nothing to update: pass name, filter or chart settings"]);
   return body;
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/views body for a new, empty dashboard view (a tab on the database).
+// Notion's create-view request requires a data_source_id even for dashboards
+// (the dashboard itself has none: it only holds widgets). Layout can't be set
+// here or changed later through the API: add widgets with the chart create
+// body + dashboard_id.
+export function buildCreateDashboardBody(schema, input = {}) {
+  const errs = [];
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!name) errs.push("name is required");
+  for (const k of CONFIG_INPUT_KEYS) {
+    if (input[k] !== undefined && input[k] !== null && input[k] !== "") {
+      errs.push(`${k} doesn't apply to dashboards (they only hold widgets; add charts with action "create" + dashboard_id)`);
+    }
+  }
+  for (const k of ["page_id", "after_block_id", "dashboard_id", "placement"]) {
+    if (input[k] !== undefined && input[k] !== null && input[k] !== "") errs.push(`${k} doesn't apply to create_dashboard`);
+  }
+  throwIfErrors(errs);
+  return { data_source_id: schema.data_source_id, database_id: schema.database_id, name, type: "dashboard" };
 }
 
 // ---------------------------------------------------------------------------

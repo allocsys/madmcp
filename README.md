@@ -278,16 +278,34 @@ Delete: `cf_delete` (`resource`: d1 | kv | r2 | hyperdrive, `id`, `confirm`), re
 separate backfill/repair tool for the entity_id → page_id dedup index, not part of the
 consolidation.
 
-`notion_chart` (`action`: `create` | `update` | `get` | `list` | `delete`) — creates and manages
-native Notion chart views (column, bar, line, donut, number) through the Views API. Without
-`page_id` a chart becomes a view tab on the database; with `page_id` (+ optional `after_block_id`)
-it is placed inline on that page. Properties are given by name or id. `dry_run: true` returns the
-exact request body without writing (it still does read-only schema/view lookups). Example:
+`notion_chart` (`action`: `create` | `update` | `get` | `list` | `delete` | `create_dashboard` |
+`create_from_data`) — creates and manages native Notion chart views (column, bar, line, donut,
+number) through the Views API. Without `page_id`/`dashboard_id` a chart becomes a view tab on the
+database; with `page_id` (+ optional `after_block_id`) it is placed inline on that page; with
+`dashboard_id` it becomes a widget in that dashboard. Properties are given by name or id.
+`update` keeps every existing chart setting you don't change (Notion replaces the whole
+configuration on PATCH, so the tool re-sends it). `dry_run: true` returns the exact request body
+without writing (it still does read-only schema/view lookups). Examples:
 `{action: "create", database_id, name: "Tasks by status", chart_type: "column", x: "Status"}`.
+
+Dashboards: `{action: "create_dashboard", database_id, name}` makes an empty dashboard view, then
+add charts with `{action: "create", database_id, dashboard_id, placement: {type: "new_row" |
+"existing_row", row_index}, ...}` (default placement: a new row at the end; `existing_row` puts the
+widget side by side with that row). Notion has no API to move widgets or change the layout after
+creation. Dashboards need a Business or Enterprise Notion plan.
+
+Ad-hoc data: `{action: "create_from_data", parent_page_id, database_title, columns: [{name, type}],
+rows: [{<column>: value}], chart_type, x, ...}` creates a new database under that page, inserts
+the rows, then adds the chart (`name` defaults to `database_title`; `page_id`/`dashboard_id`
+placement also work). Column types: `title` (exactly one), `text`, `number`, `select`, `date`
+(ISO 8601), `checkbox`. Max 50 rows and 25 columns per call. The data and the chart settings are
+validated before anything is written; if a later step fails, the error says what was already
+created (the database is left in place).
+
 Requirements: a paid Notion plan (free workspaces get one chart) and an integration with the
 capability to create views. Views calls send `Notion-Version: 2026-03-11` per request only; the
 global `NOTION_VERSION` stays 2022-06-28 because the entity index relies on
-`/databases/{id}/query`. Not supported yet: raw "results" mode and dashboards.
+`/databases/{id}/query`. Not supported yet: raw "results" mode.
 
 ### Mem0
 `mem0_write` (`action`: `add` | `add_batch` | `update` — replaces the former `mem0_add`,

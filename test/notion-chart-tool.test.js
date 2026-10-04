@@ -374,6 +374,177 @@ describe("delete", () => {
   });
 });
 
+
+describe("create_dashboard", () => {
+  it("creates an empty dashboard on the database's data source", async () => {
+    route([
+      ...SCHEMA_ROUTES,
+      [/^POST \/views$/, () => ({ id: "dash1", url: "https://notion.so/dash1" })],
+    ]);
+    const text = await runChartAction({ action: "create_dashboard", database_id: "db1", name: "KPIs" });
+    expect(calls("POST")).toHaveLength(1);
+    expect(calls("POST")[0][1]).toMatchObject({ body: { data_source_id: "ds1", database_id: "db1", name: "KPIs", type: "dashboard" }, version: "2026-03-11" });
+    expect(calls("POST")[0][1].body).not.toHaveProperty("configuration");
+    expect(text).toMatch(/Created empty dashboard "KPIs"/);
+    expect(text).toContain("dashboard_id: dash1");
+  });
+
+  it("dry_run never POSTs", async () => {
+    route(SCHEMA_ROUTES);
+    const text = await runChartAction({ action: "create_dashboard", database_id: "db1", name: "KPIs", dry_run: true });
+    expect(calls("POST")).toHaveLength(0);
+    expect(text).toMatch(/^DRY RUN/);
+  });
+
+  it("requires database_id and a name, and rejects chart settings", async () => {
+    await expect(runChartAction({ action: "create_dashboard", name: "x" })).rejects.toThrow(/database_id is required for action "create_dashboard"/);
+    route(SCHEMA_ROUTES);
+    await expect(runChartAction({ action: "create_dashboard", database_id: "db1" })).rejects.toThrow(/name is required/);
+    await expect(runChartAction({ action: "create_dashboard", database_id: "db1", name: "x", chart_type: "bar" })).rejects.toThrow(/chart_type doesn't apply to dashboards/);
+    expect(calls("POST")).toHaveLength(0);
+  });
+});
+
+describe("create as a dashboard widget", () => {
+  it("adds the chart to the dashboard with the requested placement", async () => {
+    route([
+      ...SCHEMA_ROUTES,
+      [/^POST \/views$/, () => ({ id: "w1" })],
+    ]);
+    const text = await runChartAction({ action: "create", database_id: "db1", dashboard_id: "dash1", placement: { type: "existing_row", row_index: 0 }, name: "By status", chart_type: "column", x: "Status" });
+    const body = calls("POST")[0][1].body;
+    expect(body).toMatchObject({ view_id: "dash1", data_source_id: "ds1", type: "chart", placement: { type: "existing_row", row_index: 0 } });
+    expect(body).not.toHaveProperty("database_id");
+    expect(text).toMatch(/as a widget in dashboard dash1/);
+  });
+
+  it("rejects dashboard_id together with page_id before any write", async () => {
+    route(SCHEMA_ROUTES);
+    await expect(runChartAction({ action: "create", database_id: "db1", dashboard_id: "d", page_id: "p", name: "n", chart_type: "column", x: "Status" })).rejects.toThrow(/can't be combined/);
+    expect(calls("POST")).toHaveLength(0);
+  });
+
+  it("describes dashboards and widgets in get", async () => {
+    route([
+      [/^GET \/views\/dash1$/, () => ({ id: "dash1", name: "KPIs", type: "dashboard", data_source_id: null, configuration: { type: "dashboard", rows: [{ id: "r1", widgets: [{ id: "a", view_id: "w1" }, { id: "b", view_id: "w2" }] }] } })],
+      [/^GET \/views\/w1$/, () => ({ id: "w1", name: "W", type: "chart", dashboard_view_id: "dash1", configuration: { type: "chart", chart_type: "bar" } })],
+    ]);
+    expect(await runChartAction({ action: "get", view_id: "dash1" })).toMatch(/KPIs \u2014 dashboard\/1 row\(s\), 2 widget\(s\)/);
+    expect(await runChartAction({ action: "get", view_id: "w1" })).toMatch(/chart\/bar \u2014 id: w1, widget of dashboard dash1/);
+  });
+});
+
+describe("create_from_data", () => {
+  const COLUMNS = [{ name: "Region", type: "title" }, { name: "Revenue", type: "number" }];
+  const ROWS = [{ Region: "EMEA", Revenue: 120 }, { Region: "APAC", Revenue: 90 }, { Region: "AMER", Revenue: 200 }];
+  const ARGS = {
+    action: "create_from_data", parent_page_id: "page1", database_title: "Sales", columns: COLUMNS, rows: ROWS,
+    chart_type: "bar", x: "Region", y_aggregator: "sum", y_property: "Revenue",
+  };
+  const NEW_PROPS = { Region: { id: "title", name: "Region", type: "title" }, Revenue: { id: "r3v", name: "Revenue", type: "number" } };
+
+  const routes = (over = {}) => [
+    [/^POST \/databases$/, over.db || (() => ({ id: "newdb", url: "https://notion.so/newdb" }))],
+    [/^POST \/pages$/, over.page || (() => ({ id: "row" }))],
+    [/^GET \/databases\/newdb$/, () => ({ id: "newdb", data_sources: [{ id: "ds2", name: "Sales" }] })],
+    [/^GET \/data_sources\/ds2$/, () => ({ id: "ds2", properties: NEW_PROPS })],
+    [/^POST \/views$/, over.view || (() => ({ id: "v9", url: "https://notion.so/v9" }))],
+  ];
+
+  it("creates the database, inserts the rows, then charts it with the real property ids", async () => {
+    route(routes());
+    const text = await runChartAction(ARGS);
+
+    const order = client.notionRequest.mock.calls.filter(([, o]) => o?.method === "POST").map(([p]) => p);
+    expect(order).toEqual(["/databases", "/pages", "/pages", "/pages", "/views"]);
+
+    const [dbPath, dbOpts] = calls("POST")[0];
+    expect(dbPath).toBe("/databases");
+    expect(dbOpts.version).toBeUndefined(); // default Notion version, same as notion_create
+    expect(dbOpts.body.parent).toEqual({ type: "page_id", page_id: "page1" });
+    expect(dbOpts.body.properties).toEqual({ Region: { title: {} }, Revenue: { number: {} } });
+
+    const pageBodies = calls("POST").filter(([p]) => p === "/pages").map(([, o]) => o.body);
+    expect(pageBodies[0]).toEqual({
+      parent: { type: "database_id", database_id: "newdb" },
+      properties: { Region: { title: [{ type: "text", text: { content: "EMEA" } }] }, Revenue: { number: 120 } },
+    });
+
+    const viewCall = calls("POST").find(([p]) => p === "/views")[1];
+    expect(viewCall.version).toBe("2026-03-11");
+    expect(viewCall.body).toMatchObject({
+      database_id: "newdb", data_source_id: "ds2", name: "Sales", type: "chart",
+      configuration: { chart_type: "bar", x_axis: { type: "title", property_id: "title" }, y_axis: { aggregator: "sum", property_id: "r3v" } },
+    });
+    expect(text).toMatch(/Created database "Sales" \(id: newdb.*\) with 3 rows and chart "Sales" as a view tab/);
+    expect(text).toContain("view id: v9");
+  });
+
+  it("uses the given chart name and supports a dashboard widget", async () => {
+    route(routes());
+    const text = await runChartAction({ ...ARGS, name: "Revenue by region", dashboard_id: "dash1", placement: { type: "new_row" } });
+    const body = calls("POST").find(([p]) => p === "/views")[1].body;
+    expect(body).toMatchObject({ name: "Revenue by region", view_id: "dash1", placement: { type: "new_row" } });
+    expect(body).not.toHaveProperty("database_id");
+    expect(text).toMatch(/as a widget in dashboard dash1/);
+  });
+
+  it("dry_run writes nothing and shows the plan", async () => {
+    route(routes());
+    const text = await runChartAction({ ...ARGS, dry_run: true });
+    expect(calls("POST")).toHaveLength(0);
+    expect(client.notionRequest).not.toHaveBeenCalled();
+    expect(text).toMatch(/^DRY RUN/);
+    expect(text).toContain("POST /v1/databases");
+    expect(text).toContain("POST /v1/pages \u00d7 3");
+    expect(text).toContain("POST /v1/views");
+  });
+
+  it("rejects bad data before any request", async () => {
+    route(routes());
+    await expect(runChartAction({ ...ARGS, rows: [{ Region: "x", Revenue: "lots" }] })).rejects.toMatchObject({ name: "DatasetError" });
+    expect(client.notionRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects bad chart settings before any write", async () => {
+    route(routes());
+    await expect(runChartAction({ ...ARGS, x: "Nope" })).rejects.toMatchObject({ name: "ChartConfigError" });
+    await expect(runChartAction({ ...ARGS, y_property: "Region" })).rejects.toMatchObject({ name: "ChartConfigError" });
+    await expect(runChartAction({ ...ARGS, chart_type: undefined })).rejects.toMatchObject({ name: "ChartConfigError" });
+    expect(client.notionRequest).not.toHaveBeenCalled();
+  });
+
+  it("requires parent_page_id and refuses database_id", async () => {
+    await expect(runChartAction({ ...ARGS, parent_page_id: undefined })).rejects.toThrow(/parent_page_id is required for action "create_from_data"/);
+    await expect(runChartAction({ ...ARGS, database_id: "db1" })).rejects.toThrow(/database_id doesn't apply/);
+    expect(client.notionRequest).not.toHaveBeenCalled();
+  });
+
+  it("reports what was created if a row fails, and never charts", async () => {
+    let n = 0;
+    route(routes({ page: () => { n += 1; if (n === 2) throw new Error("Notion API error (400): validation_error"); return { id: "row" }; } }));
+    const err = await runChartAction(ARGS).catch((e) => e);
+    expect(err.message).toMatch(/Created database newdb/);
+    expect(err.message).toMatch(/inserted 1\/3 rows, then row 1 failed/);
+    expect(err.message).toMatch(/Nothing was charted/);
+    expect(calls("POST").some(([p]) => p === "/views")).toBe(false);
+    expect(calls("POST").filter(([p]) => p === "/pages")).toHaveLength(2); // stops at the first failure
+  });
+
+  it("reports what was created if the chart fails", async () => {
+    route(routes({ view: () => { throw new Error("Notion API error (403): restricted_resource"); } }));
+    const err = await runChartAction(ARGS).catch((e) => e);
+    expect(err.message).toMatch(/Created database newdb .* with 3 rows, but creating the chart failed/);
+    expect(err.message).toMatch(/action "create" and database_id newdb/);
+  });
+
+  it("stops if the database itself can't be created", async () => {
+    route(routes({ db: () => { throw new Error("Notion API error (404): object_not_found"); } }));
+    await expect(runChartAction(ARGS)).rejects.toThrow(/object_not_found/);
+    expect(calls("POST")).toHaveLength(1);
+  });
+});
+
 describe("runChartAction", () => {
   it("rejects an unknown action", async () => {
     await expect(runChartAction({ action: "explode" })).rejects.toThrow(/invalid action "explode"/);
@@ -396,6 +567,14 @@ describe("explainChartError", () => {
 
   it("adds a sharing hint for not-found errors", () => {
     expect(explainChartError(new Error("Notion API error (404): object_not_found"))).toMatch(/shared with the integration/);
+  });
+
+  it("lists dataset problems", () => {
+    const err = Object.assign(new Error("x"), { name: "DatasetError", errors: ["rows[0].A must be a number"], totalErrors: 3 });
+    const text = explainChartError(err);
+    expect(text).toMatch(/Invalid data \(3\)/);
+    expect(text).toContain("- rows[0].A must be a number");
+    expect(text.trim().endsWith("- ...")).toBe(true);
   });
 
   it("passes other errors through unchanged", () => {
