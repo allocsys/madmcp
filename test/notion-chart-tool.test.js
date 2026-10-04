@@ -212,7 +212,7 @@ describe("update", () => {
     expect(JSON.parse(text.slice(text.indexOf("{")))).toEqual({ name: "New" });
   });
 
-  describe("carries over unchanged configuration (Notion doesn't merge)", () => {
+  describe("carries over unchanged configuration (Notion replaces it wholesale)", () => {
     const COLUMN_VIEW = {
       id: "v1", name: "Old", type: "chart",
       configuration: {
@@ -243,6 +243,31 @@ describe("update", () => {
       const cfg = calls("PATCH")[0][1].body.configuration;
       expect(cfg.y_axis).toEqual({ aggregator: "average", property_id: "def2" });
       expect(cfg.x_axis).toMatchObject({ type: "status", property_id: "abc1" });
+    });
+
+    it("keeps other saved options (height, show_data_labels) when changing one", async () => {
+      patchRoutes({ ...COLUMN_VIEW, configuration: { ...COLUMN_VIEW.configuration, color_theme: "green", height: "large", show_data_labels: true } });
+      await runChartAction({ action: "update", view_id: "v1", options: { color_theme: "blue" } });
+      expect(calls("PATCH")[0][1].body.configuration).toMatchObject({ color_theme: "blue", height: "large", show_data_labels: true });
+    });
+
+    it("an explicit null still clears a saved option", async () => {
+      patchRoutes({ ...COLUMN_VIEW, configuration: { ...COLUMN_VIEW.configuration, height: "large" } });
+      await runChartAction({ action: "update", view_id: "v1", options: { height: null } });
+      expect(calls("PATCH")[0][1].body.configuration.height).toBeNull();
+    });
+
+    it("keeps saved reference_lines", async () => {
+      const lines = [{ id: "r1", value: 5, label: "Goal", color: "red", dash_style: "dash" }];
+      patchRoutes({ id: "v1", name: "L", type: "chart", configuration: { type: "chart", chart_type: "line", reference_lines: lines } });
+      await runChartAction({ action: "update", view_id: "v1", options: { smooth_line: true } });
+      expect(calls("PATCH")[0][1].body.configuration).toMatchObject({ smooth_line: true, reference_lines: lines });
+    });
+
+    it("does not carry saved options over when chart_type changes", async () => {
+      patchRoutes({ ...COLUMN_VIEW, configuration: { ...COLUMN_VIEW.configuration, height: "large" } });
+      await runChartAction({ action: "update", view_id: "v1", chart_type: "number" });
+      expect(calls("PATCH")[0][1].body.configuration).toEqual({ type: "chart", chart_type: "number" });
     });
 
     it("carries over stack_by", async () => {
