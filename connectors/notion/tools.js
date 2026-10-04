@@ -21,6 +21,7 @@ import { triggerNotionEmbed } from "./embed_client.js";
 import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 import { fetchPageMarkdown, patchPageMarkdown, parseMarkdownMarkers, splitChangelog, withPreservedMarkers } from "./markdown.js";
 import { paginateText } from "../output.js";
+import { register as registerChartTool } from "./chart_tool.js";
 
 // Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
 // current title+content and fires it at the embed-on-write endpoint.
@@ -1465,4 +1466,7 @@ export function register(server) {
       return { ...(allFailed ? { isError: true } : {}), content: [{ type: "text", text: `${added}/${items.length} added.\n\n${lines.join("\n")}` }] };
     }
   );
+
+  // Native Notion charts (Views API) -- see connectors/notion/chart_tool.js.
+  registerChartTool(server);
 }
