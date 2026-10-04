@@ -22,7 +22,8 @@ import { notionRequest } from "./client.js";
 
 export const VIEWS_API_VERSION = "2026-03-11";
 
-export const CHART_TYPES = ["column", "bar", "line", "donut", "number"];
+// Single source of truth lives in chart_config.js (pure, no I/O imports).
+export { CHART_TYPES } from "./chart_config.js";
 
 function requireId(value, name) {
   if (typeof value !== "string" || !value.trim()) {
