@@ -212,6 +212,72 @@ describe("update", () => {
     expect(JSON.parse(text.slice(text.indexOf("{")))).toEqual({ name: "New" });
   });
 
+  describe("carries over unchanged configuration (Notion doesn't merge)", () => {
+    const COLUMN_VIEW = {
+      id: "v1", name: "Old", type: "chart",
+      configuration: {
+        type: "chart", chart_type: "column",
+        x_axis: { type: "status", property_id: "abc1", property_name: "Status", group_by: "option", sort: { type: "manual" } },
+        y_axis: { aggregator: "sum", property_id: "def2", property_name: "Amount" },
+      },
+    };
+    const patchRoutes = (view) => route([
+      ...SCHEMA_ROUTES,
+      [/^GET \/views\/v1$/, () => view],
+      [/^PATCH \/views\/v1$/, () => ({ id: "v1" })],
+    ]);
+
+    it("options-only update re-sends x_axis and y_axis without property_name", async () => {
+      patchRoutes(COLUMN_VIEW);
+      await runChartAction({ action: "update", view_id: "v1", options: { color_theme: "blue" } });
+      expect(calls("PATCH")[0][1].body.configuration).toEqual({
+        type: "chart", chart_type: "column", color_theme: "blue",
+        x_axis: { type: "status", property_id: "abc1", group_by: "option", sort: { type: "manual" } },
+        y_axis: { aggregator: "sum", property_id: "def2" },
+      });
+    });
+
+    it("explicitly passed settings win over the existing ones", async () => {
+      patchRoutes(COLUMN_VIEW);
+      await runChartAction({ action: "update", view_id: "v1", database_id: "db1", y_aggregator: "average", y_property: "Amount" });
+      const cfg = calls("PATCH")[0][1].body.configuration;
+      expect(cfg.y_axis).toEqual({ aggregator: "average", property_id: "def2" });
+      expect(cfg.x_axis).toMatchObject({ type: "status", property_id: "abc1" });
+    });
+
+    it("carries over stack_by", async () => {
+      patchRoutes({ ...COLUMN_VIEW, configuration: { ...COLUMN_VIEW.configuration, stack_by: { type: "status", property_id: "abc1", property_name: "Status", group_by: "group", sort: { type: "manual" } } } });
+      await runChartAction({ action: "update", view_id: "v1", options: { color_theme: "blue" } });
+      expect(calls("PATCH")[0][1].body.configuration.stack_by).toEqual({ type: "status", property_id: "abc1", group_by: "group", sort: { type: "manual" } });
+    });
+
+    it("carries over a number chart's value", async () => {
+      patchRoutes({ id: "v1", name: "N", type: "chart", configuration: { type: "chart", chart_type: "number", value: { aggregator: "count" } } });
+      await runChartAction({ action: "update", view_id: "v1", options: { hide_title: true } });
+      expect(calls("PATCH")[0][1].body.configuration).toMatchObject({ chart_type: "number", value: { aggregator: "count" }, hide_title: true });
+    });
+
+    it("does not carry anything over when chart_type changes", async () => {
+      patchRoutes(COLUMN_VIEW);
+      await runChartAction({ action: "update", view_id: "v1", chart_type: "number" });
+      const cfg = calls("PATCH")[0][1].body.configuration;
+      expect(cfg).toEqual({ type: "chart", chart_type: "number" });
+    });
+
+    it("name-only updates still send no configuration", async () => {
+      patchRoutes(COLUMN_VIEW);
+      await runChartAction({ action: "update", view_id: "v1", name: "New" });
+      expect(calls("PATCH")[0][1].body).toEqual({ name: "New" });
+    });
+
+    it("dry_run shows the filled-in body", async () => {
+      patchRoutes(COLUMN_VIEW);
+      const text = await runChartAction({ action: "update", view_id: "v1", options: { color_theme: "blue" }, dry_run: true });
+      expect(JSON.parse(text.slice(text.indexOf("{"))).configuration.x_axis.property_id).toBe("abc1");
+      expect(calls("PATCH")).toHaveLength(0);
+    });
+  });
+
   it("requires view_id", async () => {
     await expect(runChartAction({ action: "update", name: "x" })).rejects.toThrow(/view_id is required for action "update"/);
   });

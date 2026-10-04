@@ -18,7 +18,7 @@ import {
   VIEWS_API_VERSION, createView, retrieveView, updateView, deleteView, listViews, getDatabaseSchema,
 } from "./views.js";
 import {
-  CHART_TYPES, AGGREGATORS, buildCreateChartViewBody, buildUpdateChartViewBody,
+  CHART_TYPES, AGGREGATORS, buildCreateChartViewBody, buildUpdateChartViewBody, fillConfigFromExisting,
 } from "./chart_config.js";
 
 const ACTIONS = ["create", "update", "get", "list", "delete"];
@@ -95,6 +95,8 @@ async function doUpdate(args) {
   }
 
   const body = buildUpdateChartViewBody(schema, args, existing?.configuration?.chart_type);
+  // Notion doesn't merge partial configurations, so carry over what wasn't changed.
+  if (body.configuration) body.configuration = fillConfigFromExisting(body.configuration, existing?.configuration);
   if (args.dry_run) return dryRunText("PATCH", `/views/${view_id}`, body);
 
   await updateView(view_id, body);

@@ -402,3 +402,28 @@ export function buildUpdateChartViewBody(schema, input = {}, existingChartType) 
   if (!Object.keys(body).length) throw new ChartConfigError(["nothing to update: pass name, filter or chart settings"]);
   return body;
 }
+
+// ---------------------------------------------------------------------------
+// Notion doesn't merge a partial `configuration` into the stored one: a PATCH
+// that sends e.g. only { color_theme } is rejected ("column charts in grouped
+// mode require an x_axis group-by"). So when an update sends a configuration,
+// fill the structural pieces the caller didn't change (x_axis, y_axis, value,
+// stack_by) from the chart's existing configuration. Returns a new object.
+//
+// Only done when the chart type is unchanged: a type switch (e.g. column ->
+// number) changes which pieces are valid, so nothing is carried over then.
+// `property_name` is read-only output from Notion and is stripped.
+const CARRY_OVER_KEYS = ["x_axis", "y_axis", "value", "stack_by"];
+
+export function fillConfigFromExisting(config, existingConfig) {
+  if (!isObj(config) || !isObj(existingConfig)) return config;
+  if (existingConfig.chart_type !== config.chart_type) return config;
+  const out = { ...config };
+  for (const key of CARRY_OVER_KEYS) {
+    if (out[key] === undefined && isObj(existingConfig[key])) {
+      const { property_name, ...rest } = existingConfig[key]; // eslint-disable-line no-unused-vars
+      out[key] = rest;
+    }
+  }
+  return out;
+}
