@@ -95,7 +95,7 @@ async function doUpdate(args) {
   }
 
   const body = buildUpdateChartViewBody(schema, args, existing?.configuration?.chart_type);
-  // Notion doesn't merge partial configurations, so carry over what wasn't changed.
+  // Notion replaces the configuration wholesale, so carry over everything not changed.
   if (body.configuration) body.configuration = fillConfigFromExisting(body.configuration, existing?.configuration);
   if (args.dry_run) return dryRunText("PATCH", `/views/${view_id}`, body);
 
