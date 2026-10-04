@@ -167,7 +167,7 @@ export function register(server) {
       page_id:         z.string().optional().describe("'create' only: place the chart inline on this page (linked database view) instead of as a database view tab."),
       after_block_id:  z.string().optional().describe("'create' only, with page_id: insert after this block."),
       name:            z.string().optional().describe("Chart name. Required for 'create'."),
-      filter:          z.record(z.any()).optional().describe("Notion filter object limiting the rows charted. On 'update', null clears it."),
+      filter:          z.record(z.any()).nullable().optional().describe("Notion filter object limiting the rows charted. On 'update', null clears it."),
       chart_type:      z.enum(CHART_TYPES).optional().describe("column | bar | line | donut | number. Required for 'create'; on 'update' defaults to the chart's current type."),
       x:               z.string().optional().describe("Property (name or id) to group by. Required for column/bar/line/donut; not allowed for number."),
       x_group_by:      z.string().optional().describe("How to group x. status: group|option; date: relative|day|week|month|year; text/title/url/email/phone: exact|alphabet_prefix."),
