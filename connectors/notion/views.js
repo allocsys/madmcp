@@ -47,8 +47,10 @@ export function retrieveView(view_id) {
   return viewsRequest(`/views/${encodeURIComponent(requireId(view_id, "view_id"))}`);
 }
 
-// PATCH /v1/views/{id}. Only include fields to change; configuration is a
-// shallow merge and must include its `type`.
+// PATCH /v1/views/{id}. Only include fields to change. NOTE: Notion REPLACES
+// the whole `configuration` (no merge), and it must include its `type`; the
+// notion_chart tool re-sends the existing configuration (see
+// fillConfigFromExisting in chart_config.js).
 export function updateView(view_id, body) {
   if (!body || typeof body !== "object") throw new Error("updateView: body is required");
   return viewsRequest(`/views/${encodeURIComponent(requireId(view_id, "view_id"))}`, { method: "PATCH", body });

@@ -14,14 +14,16 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
+import { notionRequest, chunkRichText } from "./client.js";
 import {
   VIEWS_API_VERSION, createView, retrieveView, updateView, deleteView, listViews, getDatabaseSchema,
 } from "./views.js";
 import {
-  CHART_TYPES, AGGREGATORS, buildCreateChartViewBody, buildUpdateChartViewBody, fillConfigFromExisting,
+  CHART_TYPES, AGGREGATORS, buildCreateChartViewBody, buildUpdateChartViewBody, buildCreateDashboardBody, fillConfigFromExisting,
 } from "./chart_config.js";
+import { buildDataset, syntheticSchema, COLUMN_TYPE_NAMES, MAX_ROWS } from "./chart_data.js";
 
-const ACTIONS = ["create", "update", "get", "list", "delete"];
+const ACTIONS = ["create", "update", "get", "list", "delete", "create_dashboard", "create_from_data"];
 const MAX_LIST_DETAILS = 25; // retrieveView calls per list (Notion rate-limits ~3 req/s)
 
 // Update inputs that need property-name resolution (and so a schema lookup).
@@ -39,10 +41,15 @@ function json(value) {
 }
 
 function describeView(v) {
-  const kind = v.type === "chart"
-    ? `chart/${v.configuration?.chart_type ?? "?"}`
-    : (v.type || "unknown");
-  return `${v.name || "(unnamed)"} \u2014 ${kind} \u2014 id: ${v.id}${v.url ? `, url: ${v.url}` : ""}`;
+  let kind = v.type || "unknown";
+  if (v.type === "chart") kind = `chart/${v.configuration?.chart_type ?? "?"}`;
+  if (v.type === "dashboard") {
+    const rows = v.configuration?.rows;
+    const widgets = Array.isArray(rows) ? rows.reduce((n, r) => n + (r.widgets?.length || 0), 0) : null;
+    kind = widgets === null ? "dashboard" : `dashboard/${rows.length} row(s), ${widgets} widget(s)`;
+  }
+  const widgetOf = v.dashboard_view_id ? `, widget of dashboard ${v.dashboard_view_id}` : "";
+  return `${v.name || "(unnamed)"} \u2014 ${kind} \u2014 id: ${v.id}${widgetOf}${v.url ? `, url: ${v.url}` : ""}`;
 }
 
 function dryRunText(method, path, body) {
@@ -53,6 +60,9 @@ function dryRunText(method, path, body) {
 export function explainChartError(err) {
   if (err?.name === "ChartConfigError") {
     return `Invalid chart settings (${err.errors.length}):\n${err.errors.map((e) => `- ${e}`).join("\n")}`;
+  }
+  if (err?.name === "DatasetError") {
+    return `Invalid data (${err.totalErrors}):\n${err.errors.map((e) => `- ${e}`).join("\n")}${err.totalErrors > err.errors.length ? "\n- ..." : ""}`;
   }
   const msg = err?.message || String(err);
   if (/validation_error/i.test(msg)) {
@@ -65,7 +75,7 @@ export function explainChartError(err) {
     return `${msg}\nHint: check the id, and that the database/page is shared with the integration.`;
   }
   if (/\(402\)|payment|upgrade|plan/i.test(msg)) {
-    return `${msg}\nHint: charts need a paid Notion plan (free workspaces are limited to one chart).`;
+    return `${msg}\nHint: charts need a paid Notion plan (free workspaces are limited to one chart), and dashboards need a Business or Enterprise plan.`;
   }
   return msg;
 }
@@ -77,8 +87,63 @@ async function doCreate(args) {
   if (args.dry_run) return dryRunText("POST", "/views", body);
 
   const view = await createView(body);
-  const where = args.page_id ? `inline on page ${args.page_id}` : `as a view tab on database ${database_id}`;
+  const where = args.dashboard_id ? `as a widget in dashboard ${args.dashboard_id}`
+    : args.page_id ? `inline on page ${args.page_id}`
+    : `as a view tab on database ${database_id}`;
   return `\u2713 Created chart "${body.name}" ${where}.\nview id: ${view?.id ?? "(not returned)"}${view?.url ? `\nurl: ${view.url}` : ""}`;
+}
+
+async function doCreateDashboard(args) {
+  const database_id = requireString(args.database_id, "database_id", "create_dashboard");
+  const schema = await getDatabaseSchema(database_id, { data_source_id: args.data_source_id });
+  const body = buildCreateDashboardBody(schema, args);
+  if (args.dry_run) return dryRunText("POST", "/views", body);
+
+  const view = await createView(body);
+  return `\u2713 Created empty dashboard "${body.name}" on database ${database_id}.\nview id: ${view?.id ?? "(not returned)"}${view?.url ? `\nurl: ${view.url}` : ""}\nAdd charts with action "create" + dashboard_id: ${view?.id ?? "<view id>"} (optional placement: {type, row_index}).`;
+}
+
+// Creates a NEW database from inline data, inserts the rows, then adds a chart
+// for it. Everything that can be checked up front (the data, and the chart
+// settings against the declared columns) is checked before the first write.
+async function doCreateFromData(args) {
+  const parent_page_id = requireString(args.parent_page_id, "parent_page_id", "create_from_data");
+  if (args.database_id) {
+    throw new Error('database_id doesn\'t apply to "create_from_data" (it creates a new database); use action "create" to chart an existing one');
+  }
+  const data = buildDataset({ database_title: args.database_title, columns: args.columns, rows: args.rows });
+  const chartArgs = { ...args, name: args.name || data.title };
+  const previewBody = buildCreateChartViewBody(syntheticSchema(data.columns), chartArgs);
+
+  const dbBody = { parent: { type: "page_id", page_id: parent_page_id }, title: chunkRichText(data.title), properties: data.schema };
+  if (args.dry_run) {
+    return `DRY RUN \u2014 nothing was written.\n1. POST /v1/databases\n${json(dbBody)}\n\n2. POST /v1/pages \u00d7 ${data.rows.length} (one request per row). First row:\n${json({ parent: { type: "database_id", database_id: "<new database id>" }, properties: data.rows[0] })}\n\n3. POST /v1/views (Notion-Version ${VIEWS_API_VERSION}). Property ids appear as column names here; the real ids are resolved once the database exists:\n${json(previewBody)}`;
+  }
+
+  const db = await notionRequest("/databases", { method: "POST", body: dbBody });
+  let inserted = 0;
+  for (const properties of data.rows) {
+    try {
+      await notionRequest("/pages", { method: "POST", body: { parent: { type: "database_id", database_id: db.id }, properties } });
+      inserted += 1;
+    } catch (err) {
+      throw new Error(`Created database ${db.id}${db.url ? ` (${db.url})` : ""} and inserted ${inserted}/${data.rows.length} rows, then row ${inserted} failed: ${err.message}\nNothing was charted. The database was left in place: archive it, or add the missing rows and chart it with action "create" and database_id ${db.id}.`, { cause: err });
+    }
+  }
+
+  let view;
+  let body;
+  try {
+    const schema = await getDatabaseSchema(db.id);
+    body = buildCreateChartViewBody(schema, { ...chartArgs, database_id: db.id });
+    view = await createView(body);
+  } catch (err) {
+    throw new Error(`Created database ${db.id}${db.url ? ` (${db.url})` : ""} with ${inserted} rows, but creating the chart failed: ${err.message}\nRetry the chart with action "create" and database_id ${db.id}.`, { cause: err });
+  }
+  const where = args.dashboard_id ? `as a widget in dashboard ${args.dashboard_id}`
+    : args.page_id ? `inline on page ${args.page_id}`
+    : "as a view tab";
+  return `\u2713 Created database "${data.title}" (id: ${db.id}${db.url ? `, url: ${db.url}` : ""}) with ${inserted} rows and chart "${body.name}" ${where}.\nview id: ${view?.id ?? "(not returned)"}${view?.url ? `\nurl: ${view.url}` : ""}`;
 }
 
 async function doUpdate(args) {
@@ -153,6 +218,8 @@ export async function runChartAction(args) {
     case "get":    return doGet(args);
     case "list":   return doList(args);
     case "delete": return doDelete(args);
+    case "create_dashboard": return doCreateDashboard(args);
+    case "create_from_data": return doCreateFromData(args);
     default: throw new Error(`invalid action "${args.action}" (expected ${ACTIONS.join(", ")})`);
   }
 }
@@ -160,13 +227,19 @@ export async function runChartAction(args) {
 export function register(server) {
   server.tool(
     "notion_chart",
-    "DOES: Create and manage native Notion chart views (Views API) on a database. Use `action` to pick: 'create' makes a chart (column, bar, line, donut or number); 'update' changes name/filter/chart settings of an existing chart; 'get' returns one view; 'list' lists a database's views with name and type; 'delete' removes a view. 'create' and 'delete' MUTATE Notion state.\nRULE: 'create' needs database_id + name + chart_type; grouped charts (column/bar/line/donut) also need x (property to group by); number charts must not have x. y_aggregator defaults to 'count' (no y_property); every other aggregator needs y_property (sum/average/median/min/max/range need a number property). Properties can be given by name or id.\nRULE: placement -- without page_id the chart becomes a view tab on the database; with page_id it is placed inline on that page as a linked database view (optional after_block_id).\nRULE: 'update' needs view_id; pass only what changes. database_id is also needed when changing x, y_aggregator, y_property or stack_by (to resolve property names). 'get' and 'delete' need view_id; 'list' needs database_id (or data_source_id).\nRULE: dry_run: true returns the exact request body without writing (it still does read-only lookups of the database schema / existing view). Use it first when unsure.\nEXAMPLE: {action:'create', database_id:'...', name:'Tasks by status', chart_type:'column', x:'Status'} | {action:'create', database_id:'...', name:'Revenue by month', chart_type:'line', x:'Date', x_group_by:'month', y_aggregator:'sum', y_property:'Amount', options:{smooth_line:true}}\nNOTE: charts need a paid Notion plan (free: 1 chart); the integration needs capability to create views.",
+    "DOES: Create and manage native Notion chart views (Views API) on a database. Use `action` to pick: 'create' makes a chart (column, bar, line, donut or number); 'update' changes name/filter/chart settings of an existing chart; 'get' returns one view; 'list' lists a database's views with name and type; 'delete' removes a view; 'create_dashboard' makes an empty dashboard view on a database; 'create_from_data' creates a NEW database from inline data and charts it in one call. 'create', 'create_dashboard', 'create_from_data' and 'delete' MUTATE Notion state.\nRULE: 'create' needs database_id + name + chart_type; grouped charts (column/bar/line/donut) also need x (property to group by); number charts must not have x. y_aggregator defaults to 'count' (no y_property); every other aggregator needs y_property (sum/average/median/min/max/range need a number property). Properties can be given by name or id.\nRULE: placement -- without page_id or dashboard_id the chart becomes a view tab on the database; with page_id it is placed inline on that page as a linked database view (optional after_block_id); with dashboard_id (the id from 'create_dashboard') it becomes a widget in that dashboard, optionally with placement {type:'new_row'|'existing_row', row_index} (default: a new row at the end; 'existing_row' puts it side by side with that row's widgets). Dashboard layout can't be changed through the API after creation, and dashboards need a Business or Enterprise Notion plan.\nRULE: 'create_dashboard' needs database_id + name; chart settings don't apply.\nRULE: 'create_from_data' needs parent_page_id + database_title + columns [{name, type: title|text|number|select|date|checkbox}] (exactly one title column) + rows [{<column name>: value}] (max 50 rows, empty cells omitted) + the chart settings of 'create' (chart_type, x, y_aggregator, ...; name defaults to database_title; page_id/dashboard_id placement also work). It creates the database, inserts the rows, then adds the chart. The data and chart settings are validated before anything is written; if it fails midway the error says what was already created.\nRULE: 'update' needs view_id; pass only what changes (the existing settings are kept). database_id is also needed when changing x, y_aggregator, y_property or stack_by (to resolve property names). 'get' and 'delete' need view_id; 'list' needs database_id (or data_source_id).\nRULE: dry_run: true returns the exact request body without writing (it still does read-only lookups of the database schema / existing view). Use it first when unsure.\nEXAMPLE: {action:'create', database_id:'...', name:'Tasks by status', chart_type:'column', x:'Status'} | {action:'create', database_id:'...', name:'Revenue by month', chart_type:'line', x:'Date', x_group_by:'month', y_aggregator:'sum', y_property:'Amount', options:{smooth_line:true}} | {action:'create_from_data', parent_page_id:'...', database_title:'Sales', columns:[{name:'Region',type:'title'},{name:'Revenue',type:'number'}], rows:[{Region:'EMEA',Revenue:120},{Region:'APAC',Revenue:90}], chart_type:'bar', x:'Region', y_aggregator:'sum', y_property:'Revenue'}\nNOTE: charts need a paid Notion plan (free: 1 chart); the integration needs capability to create views.",
     {
-      action:          z.enum(["create", "update", "get", "list", "delete"]).describe("Which operation to perform."),
+      action:          z.enum(ACTIONS).describe("Which operation to perform."),
       database_id:     z.string().optional().describe("Database to chart. Required for 'create' and 'list'; for 'update' only when changing x/y_aggregator/y_property/stack_by."),
       data_source_id:  z.string().optional().describe("Pick a data source when the database has several (otherwise it's an error). 'list' accepts it instead of database_id."),
       view_id:         z.string().optional().describe("Chart view ID. Required for 'update', 'get' and 'delete'."),
       page_id:         z.string().optional().describe("'create' only: place the chart inline on this page (linked database view) instead of as a database view tab."),
+      dashboard_id:    z.string().optional().describe("'create' only: add the chart as a widget to this dashboard view (id from 'create_dashboard'). Can't be combined with page_id."),
+      placement:       z.object({ type: z.enum(["new_row", "existing_row"]), row_index: z.number().optional() }).optional().describe("With dashboard_id: where the widget goes. {type:'new_row', row_index?} inserts a row (default: appended); {type:'existing_row', row_index} adds it beside that row's widgets. row_index is 0-based."),
+      parent_page_id:  z.string().optional().describe("'create_from_data' only: the page the new database is created under."),
+      database_title:  z.string().optional().describe("'create_from_data' only: title of the new database."),
+      columns:         z.array(z.object({ name: z.string(), type: z.enum(COLUMN_TYPE_NAMES) })).optional().describe("'create_from_data' only: the database columns. Exactly one must have type 'title'."),
+      rows:            z.array(z.record(z.any())).optional().describe(`'create_from_data' only: up to ${MAX_ROWS} rows, each an object keyed by column name. number: a number; select: a string without commas; date: ISO 8601 (2026-10-04); checkbox: true/false.`),
       after_block_id:  z.string().optional().describe("'create' only, with page_id: insert after this block."),
       name:            z.string().optional().describe("Chart name. Required for 'create'."),
       filter:          z.record(z.any()).nullable().optional().describe("Notion filter object limiting the rows charted. On 'update', null clears it."),
