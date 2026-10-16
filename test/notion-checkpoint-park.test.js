@@ -7,8 +7,10 @@
 // and replaceCheckpointRange run for real against canned Notion responses.
 // See that file's header comment for why clientInternals is mutated in place.
 //
-// park copies (source untouched). unpark MOVES: after restoring into
-// checkpoint-latest it archives the parked page and its Entity Index row.
+// park copies the notes; when the source is checkpoint-latest it is then
+// BLANKED (its notes removed, page kept). Any other source key is untouched.
+// unpark MOVES: after restoring into checkpoint-latest it archives the parked
+// page and its Entity Index row.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint } from "../connectors/notion/tools.js";
@@ -109,7 +111,7 @@ describe("Notion checkpoint park / unpark", () => {
     vi.clearAllMocks();
   });
 
-  it("park copies the active notes to a new key and deletes nothing", async () => {
+  it("park copies the active notes to a new key and then blanks checkpoint-latest", async () => {
     mockNotion({
       pages: { "page-active": checkpointBlocks("active", "MahPari notes") },
       // 1st query = source lookup; later queries (target lookup + create dedup) find nothing.
@@ -119,6 +121,7 @@ describe("Notion checkpoint park / unpark", () => {
     const result = await doCheckpoint({ action: "park", to: "checkpoint2" });
 
     expect(result).toContain('Parked "checkpoint-latest" -> "checkpoint2"');
+    expect(result).toContain("is now blank");
     expect(result).toContain("Checkpoint saved successfully");
 
     // A new page was created for the target key, carrying the copied notes.
@@ -128,9 +131,43 @@ describe("Notion checkpoint park / unpark", () => {
     expect(childTexts.some((t) => t.includes("MahPari notes"))).toBe(true);
     expect(childTexts.some((t) => t.includes("checkpoint2"))).toBe(true);
 
-    // Nothing was removed from the source (or anywhere).
-    expect(deleteCalls().length).toBe(0);
+    // The source's note block was removed (blanked); no page or row was archived,
+    // and no second page was created.
+    expect(deleteCalls().map(([path]) => path)).toEqual(["/blocks/note-active"]);
     expect(archivedPaths().length).toBe(0);
+  });
+
+  it("park does not blank the source when the copy target shares its page", async () => {
+    mockNotion({
+      pages: { "page-active": checkpointBlocks("active", "Shared notes") },
+      // 1 source lookup, 2 target lookup (save), 3 target lookup (share guard).
+      indexResults: ["page-active", "page-active", "page-active"],
+    });
+
+    const result = await doCheckpoint({ action: "park", to: "checkpoint2" });
+
+    expect(result).toContain("NOT blanked");
+    expect(result).toContain("share one page");
+    expect(pageCreateCalls().length).toBe(0);
+  });
+
+  it("park still reports the copy and warns when blanking the source fails", async () => {
+    mockNotion({
+      pages: { "page-active": checkpointBlocks("active", "MahPari notes") },
+      indexResults: ["page-active"],
+    });
+    const impl = client.notionRequest.getMockImplementation();
+    client.notionRequest.mockImplementation(async (path, opts = {}) => {
+      if (path === "/blocks/note-active" && opts.method === "DELETE") throw new Error("boom");
+      return impl(path, opts);
+    });
+
+    const result = await doCheckpoint({ action: "park", to: "checkpoint2" });
+
+    expect(result).toContain("could not be blanked");
+    expect(result).toContain("boom");
+    // The copy went through.
+    expect(pageCreateCalls().length).toBe(1);
   });
 
   it("park can read from a non-default source key", async () => {
@@ -144,6 +181,9 @@ describe("Notion checkpoint park / unpark", () => {
     expect(result).toContain('Parked "checkpoint-news-market-ai" -> "checkpoint3"');
     const childTexts = pageCreateCalls()[0][1].body.children.map(blockText);
     expect(childTexts.some((t) => t.includes("News notes"))).toBe(true);
+    // A non-default source key is left untouched.
+    expect(result).toContain("Source left untouched");
+    expect(deleteCalls().length).toBe(0);
   });
 
   it("park does not copy the commit log, only the saved notes", async () => {
