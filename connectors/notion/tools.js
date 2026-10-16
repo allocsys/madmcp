@@ -850,6 +850,46 @@ async function readCheckpointNotes(key) {
   return notionBlocksToText(innerBlocks);
 }
 
+// Retires a parked checkpoint after a successful unpark, so unpark is a MOVE
+// rather than a copy (2026-10-17): archives the parked page and its Entity
+// Index row. Never throws -- the restore already succeeded, so a failure here
+// only produces a warning in the result text. Safety rails:
+//  - if the parked key and the destination key live on the SAME page, nothing
+//    is archived (that page now holds the active notes);
+//  - if another key's index row also points at the parked page, only this
+//    key's row is archived and the page is kept for the other key.
+async function retireParkedKey(key, destKey) {
+  try {
+    const src = await findPageByEntityId(key);
+    if (!src || src.archived) return "Parked copy was already gone.";
+    const dest = await findPageByEntityId(destKey);
+    if (dest && !dest.archived && dest.pageId === src.pageId) {
+      return `Parked copy not archived: "${key}" and "${destKey}" share one page.`;
+    }
+    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+      method: "POST",
+      body: { filter: { property: "PageId", rich_text: { equals: src.pageId } }, page_size: 20 },
+    });
+    const rows = data?.results || [];
+    const entityOf = (row) => notionRichTextToString(row.properties?.EntityId?.rich_text || []);
+    const ownRows = rows.filter((r) => entityOf(r) === key);
+    const sharedWith = [...new Set(rows.map(entityOf).filter((e) => e && e !== key))];
+    // Page first, then its row(s) -- same order as doUpdatePage's archive path.
+    if (!sharedWith.length) {
+      await notionRequest(`/pages/${src.pageId}`, { method: "PATCH", body: { archived: true } });
+    }
+    for (const row of ownRows) {
+      await notionRequest(`/pages/${row.id}`, { method: "PATCH", body: { archived: true } });
+    }
+    if (sharedWith.length) {
+      return `Parked key "${key}" removed from the index; its page is shared with ${sharedWith.join(", ")}, so the page was kept.`;
+    }
+    return `Parked copy "${key}" archived (page and index row).`;
+  } catch (err) {
+    return `⚠️ Restored, but the parked copy could not be archived: ${err.message}`;
+  }
+}
+
 export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to }) {
   if (action === "park") {
     // Copy the notes under `key` (default: the active checkpoint-latest) to the
@@ -864,12 +904,14 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
   if (action === "unpark") {
     // Copy the notes of a parked key back into the active checkpoint-latest.
     // This OVERWRITES the notes currently in checkpoint-latest (park them first
-    // if they matter). The parked copy is left untouched.
+    // if they matter). Unpark is a MOVE: once the restore succeeded, the parked
+    // page and its index row are archived (see retireParkedKey).
     if (!key || key === "checkpoint-latest") throw new Error("unpark requires 'key' (the parked checkpoint to restore, e.g. \"checkpoint2\").");
     const parked = await readCheckpointNotes(key);
     if (parked === null) return `No checkpoint found for key "${key}"; nothing restored.`;
     const saved = await doCheckpoint({ action: "save", notes: parked, key: "checkpoint-latest" });
-    return `Unparked "${key}" -> "checkpoint-latest" (previous active notes were overwritten; parked copy kept).\n${saved}`;
+    const retired = await retireParkedKey(key, "checkpoint-latest");
+    return `Unparked "${key}" -> "checkpoint-latest" (previous active notes were overwritten). ${retired}\n${saved}`;
   }
   if (action === "save") {
     const found = await findPageByEntityId(key);
@@ -1065,7 +1107,7 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' without deleting anything; 'unpark' copies the notes of a parked 'key' back into checkpoint-latest (overwrites the active notes, parked copy is kept). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' without deleting anything; 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
       action: z.enum(["save", "load", "clear_log", "park", "unpark"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
