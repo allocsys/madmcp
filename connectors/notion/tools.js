@@ -839,7 +839,7 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
 // ---------------------------------------------------------------------------
 // Reads just the saved notes (no commit log) for a checkpoint key.
 // Returns null when the key has no page / no checkpoint range.
-async function readCheckpointNotes(key) {
+async function readCheckpointNotesWithPage(key) {
   const existing = await findPageByEntityId(key);
   if (!existing || existing.archived) return null;
   const blocks = await readAllBlocks(existing.pageId);
@@ -847,7 +847,12 @@ async function readCheckpointNotes(key) {
   if (!range) return null;
   const blockMap = new Map(blocks.map((b) => [b.id, b]));
   const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
-  return notionBlocksToText(innerBlocks);
+  return { pageId: existing.pageId, text: notionBlocksToText(innerBlocks) };
+}
+
+async function readCheckpointNotes(key) {
+  const found = await readCheckpointNotesWithPage(key);
+  return found ? found.text : null;
 }
 
 // Retires a parked checkpoint after a successful unpark, so unpark is a MOVE
@@ -893,13 +898,28 @@ async function retireParkedKey(key, destKey) {
 export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to }) {
   if (action === "park") {
     // Copy the notes under `key` (default: the active checkpoint-latest) to the
-    // key given in `to`. Nothing is deleted; the source is left untouched.
+    // key given in `to`. Parking checkpoint-latest also BLANKS it afterwards
+    // (2026-10-17), so a fresh session starts clean; any other source key is
+    // left untouched. The blanking only happens after the copy succeeded, and
+    // is skipped if `to` turns out to share a page with the source.
     if (!to || !to.trim()) throw new Error("park requires 'to' (the key to park the notes under, e.g. \"checkpoint2\").");
     if (to === key) throw new Error(`park: 'to' must differ from the source key ("${key}").`);
-    const parked = await readCheckpointNotes(key);
-    if (parked === null) return `No checkpoint found for key "${key}"; nothing parked.`;
-    const saved = await doCheckpoint({ action: "save", notes: parked, key: to });
-    return `Parked "${key}" -> "${to}". Source left untouched.\n${saved}`;
+    const source = await readCheckpointNotesWithPage(key);
+    if (source === null) return `No checkpoint found for key "${key}"; nothing parked.`;
+    const saved = await doCheckpoint({ action: "save", notes: source.text, key: to });
+    if (key !== "checkpoint-latest") {
+      return `Parked "${key}" -> "${to}". Source left untouched.\n${saved}`;
+    }
+    try {
+      const target = await findPageByEntityId(to);
+      if (target && !target.archived && target.pageId === source.pageId) {
+        return `Parked "${key}" -> "${to}", but "${key}" was NOT blanked: both keys share one page.\n${saved}`;
+      }
+      await replaceCheckpointRange({ page_id: source.pageId, contentLines: [], updated_at: new Date().toISOString() });
+    } catch (err) {
+      return `Parked "${key}" -> "${to}", but "${key}" could not be blanked: ${err.message}\n${saved}`;
+    }
+    return `Parked "${key}" -> "${to}". "${key}" is now blank.\n${saved}`;
   }
   if (action === "unpark") {
     // Copy the notes of a parked key back into the active checkpoint-latest.
@@ -1107,7 +1127,7 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' without deleting anything; 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
     {
       action: z.enum(["save", "load", "clear_log", "park", "unpark"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
