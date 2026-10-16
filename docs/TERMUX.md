@@ -46,7 +46,18 @@ pkg update
 pkg install nodejs termux-api
 ```
 
-Copy `scripts/termux-agent.mjs` to the phone (clone the repo, or download the raw file), then:
+**Quick start** -- one script installs what's missing, asks for your server URL and secret once, downloads the agent and runs it:
+
+```sh
+pkg install -y curl
+curl -fsSL -o termux-start.sh https://raw.githubusercontent.com/allocsys/madmcp/main/scripts/termux-start.sh
+bash termux-start.sh        # foreground
+bash termux-start.sh bg     # or: detached in tmux
+```
+
+If the repo is private, add `-H "Authorization: token $GITHUB_TOKEN"` to the `curl` and `export GITHUB_TOKEN=...` before running the script. Other commands: `stop`, `config` (re-enter URL/secret), `update` (re-download the agent). Config is stored in `~/madmcp-agent/env` (chmod 600).
+
+**Manual alternative** -- copy `scripts/termux-agent.mjs` to the phone (clone the repo, or download the raw file), then:
 
 ```sh
 export MADMCP_URL=https://<your-madmcp-host>
