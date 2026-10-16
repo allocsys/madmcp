@@ -181,7 +181,12 @@ describe("askApproval (fails closed)", () => {
     const dir = tmp();
     await askApproval(job, {
       dir,
-      notify: async () => { writeFileSync(join(dir, "job1.ok"), ""); return { exitCode: 0 }; },
+      // First call shows the notification (the tap creates the marker); the
+      // second call is the notification-remove and must not recreate it.
+      notify: async (argv) => {
+        if (argv[0] === "termux-notification") writeFileSync(join(dir, "job1.ok"), "");
+        return { exitCode: 0 };
+      },
       wait: async () => "approved",
     });
     expect(existsSync(join(dir, "job1.ok"))).toBe(false);
