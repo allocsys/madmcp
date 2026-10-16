@@ -388,12 +388,14 @@ export const COMMIT_LOG_ENABLED = process.env.COMMIT_LOG_ENABLED !== "false";
 export const CODE_EXEC_ENABLED = process.env.CODE_EXEC_ENABLED === "true";
 
 // Termux connector (connectors/termux/, docs/TERMUX.md): lets an agent run
-// commands on the owner's phone via a polling agent. OPT-IN, default OFF --
-// register() is a no-op and server.js mounts no /api/termux/* routes unless
-// TERMUX_ENABLED is exactly "true". TERMUX_AGENT_SECRET is the bearer token the
+// commands on the owner's phone via a polling agent. DEFAULT ON -- set
+// TERMUX_ENABLED=false to turn it off, which makes register() a no-op and stops
+// server.js mounting the /api/termux/* routes. Even when on it is inert until
+// TERMUX_AGENT_SECRET is set: the routes return 401 and termux_exec refuses to
+// queue. TERMUX_AGENT_SECRET is the bearer token the
 // phone presents; it is deliberately separate from MCP_SHARED_KEY so the
 // secret stored on the phone can only poll/post results, not call MCP tools.
-export const TERMUX_ENABLED = process.env.TERMUX_ENABLED === "true";
+export const TERMUX_ENABLED = process.env.TERMUX_ENABLED !== "false";
 export const TERMUX_AGENT_SECRET = process.env.TERMUX_AGENT_SECRET;
 function termuxNumber(name, fallback) {
   const n = Number(process.env[name]);
