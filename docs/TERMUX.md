@@ -74,11 +74,40 @@ Ask Claude to run `termux_exec` with `echo hello`. The first command after the a
 
 ## Security
 
-- `termux_exec` is arbitrary code execution on your phone, as the Termux app user (Termux's home, plus shared storage if you ran `termux-setup-storage`). Anyone who can call your MCP endpoint can use it, so keep `MCP_SHARED_KEY` and the IP allowlist on.
+- `termux_exec` is arbitrary code execution on your phone, as the Termux app user (Termux's home, plus shared storage if you ran `termux-setup-storage`). Anyone who can call your MCP endpoint can use it, so keep `MCP_SHARED_KEY` and the IP allowlist on. The agent also asks for your approval on the phone before running anything that is not plainly read-only (see **Approval on the phone** below).
 - On by default, but inert until `TERMUX_AGENT_SECRET` is set. With `TERMUX_ENABLED=false` no tool is registered and the `/api/termux/*` routes are not mounted.
 - The agent endpoints fail closed (401) without the exact bearer token and have their own rate limit.
 - Jobs expire from Redis after `TERMUX_JOB_TTL_SECONDS` (default 600), output is capped (`TERMUX_MAX_OUTPUT_CHARS`, default 50000), commands are killed at their timeout, and the queue refuses more than `TERMUX_MAX_QUEUE_DEPTH` (default 20) waiting jobs.
 - To revoke access: stop the agent, rotate or unset `TERMUX_AGENT_SECRET`, or set `TERMUX_ENABLED=false`.
+
+## Approval on the phone
+
+The check runs **in the agent on your phone**, not on the server, so a leaked `MCP_SHARED_KEY` or a compromised server can't skip it. When a job needs approval the agent shows a Termux notification with the command and **Approve** / **Deny** buttons, and waits. Only an explicit Approve runs it. Deny, swiping the notification away, no answer within the timeout, or a notification that can't be shown all mean the job is **not run**, and Claude gets a `Not run: ...` error.
+
+This needs the Termux:API app and the `termux-api` package (the same ones `termux_api` uses). If Android hides notifications from Termux:API, risky commands are refused rather than run.
+
+| Mode (`TERMUX_APPROVAL`) | Behaviour |
+|---|---|
+| `smart` (default) | Auto-runs simple read-only commands (`ls`, `pwd`, `cat`, `git status`, `ps`, `grep`, ...). Everything else asks. `termux_api` `location` and `clipboard_get` also ask. |
+| `all` | Every job asks, including read-only ones. |
+| `off` | Never asks (the old behaviour). |
+
+`smart` is an allowlist: it only recognises a small set of plain commands, and anything it doesn't understand asks. Commands with substitution (`$(...)`, backticks, `$VAR`), redirects to files, background jobs, subshells, or globs on file readers always ask, as does anything that mentions secret paths such as `.ssh`, `.gnupg`, `.git-credentials` or `.env`. Commands over 800 characters are refused because they're too long to review on a notification. Read the notification before you tap Approve.
+
+Set these on the phone, for example in `~/madmcp-agent/env` (the start script loads it):
+
+```sh
+export TERMUX_APPROVAL=smart
+export TERMUX_APPROVAL_TIMEOUT_S=60
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TERMUX_APPROVAL` | `smart` | `smart`, `all` or `off`. An unknown value falls back to `smart`. |
+| `TERMUX_APPROVAL_TIMEOUT_S` | `60` | Seconds to wait for a tap before refusing. |
+| `TERMUX_APPROVAL_DIR` | `~/.madmcp-approvals` | Where the notification buttons drop their marker files. |
+
+While a job waits for approval the agent doesn't poll for new jobs, and the calling tool may return a `job_id` to collect later with `termux_result`.
 
 ## Redis cost
 
