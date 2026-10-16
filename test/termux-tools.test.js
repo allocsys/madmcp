@@ -131,7 +131,7 @@ describe("termux tools", () => {
   });
 
   it("refuses to queue when TERMUX_AGENT_SECRET is unset", async () => {
-    const { tools, redis } = await load({ secret: undefined });
+    const { tools, redis } = await load({ secret: "" });
     const res = await tools.termux_exec({ command: "ls", wait_seconds: 0 });
     expect(res.isError).toBe(true);
     expect(text(res)).toMatch(/TERMUX_AGENT_SECRET/);
