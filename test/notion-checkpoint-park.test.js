@@ -6,6 +6,9 @@
 // (the I/O boundary) is mocked; doCheckpoint, findPageByEntityId, doCreatePage
 // and replaceCheckpointRange run for real against canned Notion responses.
 // See that file's header comment for why clientInternals is mutated in place.
+//
+// park copies (source untouched). unpark MOVES: after restoring into
+// checkpoint-latest it archives the parked page and its Entity Index row.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint } from "../connectors/notion/tools.js";
@@ -35,7 +38,13 @@ function checkpointBlocks(prefix, noteText) {
   ];
 }
 
-const indexRow = (pageId) => ({ properties: { PageId: { rich_text: [{ plain_text: pageId }] } } });
+const indexRow = (pageId, entityId = "", id = `row-${pageId}`) => ({
+  id,
+  properties: {
+    PageId: { rich_text: [{ plain_text: pageId }] },
+    EntityId: { rich_text: [{ plain_text: entityId }] },
+  },
+});
 
 function pageGet(id) {
   return {
@@ -50,8 +59,10 @@ function blockText(block) {
 }
 
 // Routes blocks/pages by page id. `pages` = { "page-x": [blocks] }.
-// `indexResults` is consumed one entry per entity-id index query, in call
-// order; once exhausted, further queries return no results.
+// `indexResults` is consumed one entry per index query, in call order; once
+// exhausted, further queries return no results. An entry is either a page id
+// string (one row pointing at that page) or an array of
+// { pageId, entityId, id } specs (several rows, for PageId-filter queries).
 function mockNotion({ pages, indexResults }) {
   const queue = [...indexResults];
   client.notionRequest.mockImplementation(async (path, opts = {}) => {
@@ -59,6 +70,7 @@ function mockNotion({ pages, indexResults }) {
 
     if (INDEX_QUERY_RE.test(path)) {
       const next = queue.shift();
+      if (Array.isArray(next)) return { results: next.map((r) => indexRow(r.pageId, r.entityId, r.id)) };
       return { results: next ? [indexRow(next)] : [] };
     }
     if (path === "/pages" && method === "POST") {
@@ -67,6 +79,7 @@ function mockNotion({ pages, indexResults }) {
     }
     const pageMatch = path.match(/^\/pages\/([\w-]+)$/);
     if (pageMatch && method === "GET" && pages[pageMatch[1]]) return pageGet(pageMatch[1]);
+    if (pageMatch && method === "PATCH") return {};
 
     const blocksMatch = path.match(/^\/blocks\/([\w-]+)\/children/);
     if (blocksMatch && pages[blocksMatch[1]]) {
@@ -85,6 +98,11 @@ const pageCreateCalls = () =>
   client.notionRequest.mock.calls.filter(
     ([path, opts]) => path === "/pages" && opts?.method === "POST" && !opts?.body?.parent?.database_id
   );
+// Paths of every PATCH that archived something, in call order.
+const archivedPaths = () =>
+  client.notionRequest.mock.calls
+    .filter(([, opts]) => opts?.method === "PATCH" && opts?.body?.archived === true)
+    .map(([path]) => path);
 
 describe("Notion checkpoint park / unpark", () => {
   beforeEach(() => {
@@ -112,6 +130,7 @@ describe("Notion checkpoint park / unpark", () => {
 
     // Nothing was removed from the source (or anywhere).
     expect(deleteCalls().length).toBe(0);
+    expect(archivedPaths().length).toBe(0);
   });
 
   it("park can read from a non-default source key", async () => {
@@ -130,7 +149,7 @@ describe("Notion checkpoint park / unpark", () => {
   it("park does not copy the commit log, only the saved notes", async () => {
     const blocks = [
       para("log-marker", "\u{1F4DD} commit log"),
-      para("log-1", "abc1234 \u00b7 some commit"),
+      para("log-1", "abc1234 · some commit"),
       ...checkpointBlocks("active", "Only these notes"),
     ];
     mockNotion({ pages: { "page-active": blocks }, indexResults: ["page-active"] });
@@ -169,19 +188,27 @@ describe("Notion checkpoint park / unpark", () => {
     expect(client.notionRequest).not.toHaveBeenCalled();
   });
 
-  it("unpark copies the parked notes into checkpoint-latest and leaves the parked page untouched", async () => {
+  it("unpark moves the parked notes into checkpoint-latest and archives the parked page and index row", async () => {
     mockNotion({
       pages: {
         "page-parked": checkpointBlocks("parked", "Parked MahPari notes"),
         "page-active": checkpointBlocks("active", "Current active notes"),
       },
-      // 1st query = parked key lookup; 2nd = checkpoint-latest lookup.
-      indexResults: ["page-parked", "page-active"],
+      // Query order: 1 parked lookup, 2 checkpoint-latest lookup (save),
+      // 3 parked lookup + 4 latest lookup (retire), 5 rows pointing at the parked page.
+      indexResults: [
+        "page-parked",
+        "page-active",
+        "page-parked",
+        "page-active",
+        [{ pageId: "page-parked", entityId: "checkpoint2", id: "row-parked" }],
+      ],
     });
 
     const result = await doCheckpoint({ action: "unpark", key: "checkpoint2" });
 
     expect(result).toContain('Unparked "checkpoint2" -> "checkpoint-latest"');
+    expect(result).toContain("archived");
     expect(result).toContain("https://notion.so/page-active");
 
     // The active page's old note was replaced, new content inserted after its start marker.
@@ -192,13 +219,80 @@ describe("Notion checkpoint park / unpark", () => {
     expect(insertCall).toBeTruthy();
     expect(insertCall[1].body.children.map(blockText).join(" ")).toContain("Parked MahPari notes");
 
-    // The parked page was only read, never modified or deleted.
-    const touchedParked = client.notionRequest.mock.calls.filter(
-      ([path, opts]) => /parked/.test(path) && opts?.method && opts.method !== "GET"
-    );
-    expect(touchedParked.length).toBe(0);
+    // The parked page was archived, then its index row; the active page was not.
+    expect(archivedPaths()).toEqual(["/pages/page-parked", "/pages/row-parked"]);
+    // The parked page's blocks were only read, never edited.
     expect(client.notionRequest).not.toHaveBeenCalledWith("/blocks/note-parked", expect.anything());
     expect(pageCreateCalls().length).toBe(0);
+  });
+
+  it("unpark does not archive anything when the parked key shares a page with checkpoint-latest", async () => {
+    mockNotion({
+      pages: { "page-shared": checkpointBlocks("shared", "Shared notes") },
+      indexResults: ["page-shared", "page-shared", "page-shared", "page-shared"],
+    });
+
+    const result = await doCheckpoint({ action: "unpark", key: "checkpoint3" });
+
+    expect(result).toContain('Unparked "checkpoint3" -> "checkpoint-latest"');
+    expect(result).toContain("share one page");
+    expect(archivedPaths()).toEqual([]);
+  });
+
+  it("unpark keeps the parked page when another key also points at it, and archives only this key's row", async () => {
+    mockNotion({
+      pages: {
+        "page-parked": checkpointBlocks("parked", "Parked notes"),
+        "page-active": checkpointBlocks("active", "Current active notes"),
+      },
+      indexResults: [
+        "page-parked",
+        "page-active",
+        "page-parked",
+        "page-active",
+        [
+          { pageId: "page-parked", entityId: "checkpoint2", id: "row-2" },
+          { pageId: "page-parked", entityId: "checkpoint9", id: "row-9" },
+        ],
+      ],
+    });
+
+    const result = await doCheckpoint({ action: "unpark", key: "checkpoint2" });
+
+    expect(result).toContain("shared with checkpoint9");
+    expect(archivedPaths()).toEqual(["/pages/row-2"]);
+  });
+
+  it("unpark still succeeds and warns when archiving the parked copy fails", async () => {
+    mockNotion({
+      pages: {
+        "page-parked": checkpointBlocks("parked", "Parked notes"),
+        "page-active": checkpointBlocks("active", "Current active notes"),
+      },
+      indexResults: [
+        "page-parked",
+        "page-active",
+        "page-parked",
+        "page-active",
+        [{ pageId: "page-parked", entityId: "checkpoint2", id: "row-parked" }],
+      ],
+    });
+    const impl = client.notionRequest.getMockImplementation();
+    client.notionRequest.mockImplementation(async (path, opts = {}) => {
+      if (path === "/pages/page-parked" && opts.method === "PATCH") throw new Error("boom");
+      return impl(path, opts);
+    });
+
+    const result = await doCheckpoint({ action: "unpark", key: "checkpoint2" });
+
+    expect(result).toContain('Unparked "checkpoint2" -> "checkpoint-latest"');
+    expect(result).toContain("could not be archived");
+    expect(result).toContain("boom");
+    // The restore itself went through.
+    const insertCall = client.notionRequest.mock.calls.find(
+      ([path, opts]) => path === "/blocks/page-active/children" && opts?.method === "PATCH" && opts?.body?.after === "start-active"
+    );
+    expect(insertCall).toBeTruthy();
   });
 
   it("unpark reports a clear message and changes nothing when the parked key has no checkpoint", async () => {
@@ -209,6 +303,7 @@ describe("Notion checkpoint park / unpark", () => {
     expect(result).toContain("No checkpoint found");
     expect(result).toContain("nothing restored");
     expect(deleteCalls().length).toBe(0);
+    expect(archivedPaths().length).toBe(0);
     expect(pageCreateCalls().length).toBe(0);
   });
 });
