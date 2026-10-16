@@ -11,7 +11,7 @@
 // requireAllowedIp/mcpLimiter (the phone's IP is arbitrary, on mobile data);
 // they have their own limiter below. Same reasoning as /api/agent-worker in
 // server.js. They fail closed: flag off or secret unset = 401 for everything,
-// and server.js doesn't even mount them unless TERMUX_ENABLED=true.
+// and server.js doesn't mount them at all when TERMUX_ENABLED=false.
 // ---------------------------------------------------------------------------
 
 import rateLimit from "express-rate-limit";
