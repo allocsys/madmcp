@@ -6,9 +6,9 @@
 // job in Redis (queue.js) and the Termux agent (scripts/termux-agent.mjs)
 // polls for it. See docs/TERMUX.md for setup.
 //
-// OPT-IN, same posture as exec_in_codespace (connectors/github/codespaces.js):
-// register() is a no-op unless TERMUX_ENABLED=true, so a default deployment
-// exposes no phone access at all.
+// ON BY DEFAULT: register() is a no-op only when TERMUX_ENABLED=false. Without
+// TERMUX_AGENT_SECRET no phone agent can authenticate and the tools refuse to
+// queue anything, so a deployment that never sets it gets no phone access.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
