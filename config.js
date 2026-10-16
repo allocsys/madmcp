@@ -387,6 +387,31 @@ export const COMMIT_LOG_ENABLED = process.env.COMMIT_LOG_ENABLED !== "false";
 // rather than merely mid-rollout.
 export const CODE_EXEC_ENABLED = process.env.CODE_EXEC_ENABLED === "true";
 
+// Termux connector (connectors/termux/, docs/TERMUX.md): lets an agent run
+// commands on the owner's phone via a polling agent. DEFAULT ON -- set
+// TERMUX_ENABLED=false to turn it off, which makes register() a no-op and stops
+// server.js mounting the /api/termux/* routes. Even when on it is inert until
+// TERMUX_AGENT_SECRET is set: the routes return 401 and termux_exec refuses to
+// queue. TERMUX_AGENT_SECRET is the bearer token the
+// phone presents; it is deliberately separate from MCP_SHARED_KEY so the
+// secret stored on the phone can only poll/post results, not call MCP tools.
+export const TERMUX_ENABLED = process.env.TERMUX_ENABLED !== "false";
+export const TERMUX_AGENT_SECRET = process.env.TERMUX_AGENT_SECRET;
+function termuxNumber(name, fallback) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+export const TERMUX_JOB_TTL_SECONDS = termuxNumber("TERMUX_JOB_TTL_SECONDS", 600);
+export const TERMUX_DEFAULT_TIMEOUT_SECONDS = termuxNumber("TERMUX_DEFAULT_TIMEOUT_SECONDS", 60);
+export const TERMUX_MAX_TIMEOUT_SECONDS = termuxNumber("TERMUX_MAX_TIMEOUT_SECONDS", 300);
+export const TERMUX_MAX_OUTPUT_CHARS = termuxNumber("TERMUX_MAX_OUTPUT_CHARS", 50000);
+export const TERMUX_MAX_QUEUE_DEPTH = termuxNumber("TERMUX_MAX_QUEUE_DEPTH", 20);
+// Tool-side wait for the phone before returning a job_id. Max 45s keeps a call
+// inside Vercel's 60s function limit.
+export const TERMUX_DEFAULT_WAIT_SECONDS = termuxNumber("TERMUX_DEFAULT_WAIT_SECONDS", 20);
+export const TERMUX_MAX_WAIT_SECONDS = termuxNumber("TERMUX_MAX_WAIT_SECONDS", 45);
+export const TERMUX_WAIT_POLL_MS = termuxNumber("TERMUX_WAIT_POLL_MS", 1000);
+
 // Async delegate_editor -- mirrors the AGENT_WORKER_URL/
 // DELEGATE_AGENT_ASYNC/AGENT_ASYNC_*_SECONDS/AGENT_WORKER_MAX_CONSECUTIVE_FAILURES
 // block above almost exactly, but kept as its own set of flags rather than

@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC, REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, REPO_MAP_DATABASE_URL } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC, REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, REPO_MAP_DATABASE_URL, TERMUX_ENABLED } from "./config.js";
 import { isQStashConfigured, isEditorQStashConfigured } from "./connectors/delegate/qstash_client.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
@@ -27,6 +27,8 @@ import * as frontend   from "./connectors/delegate/designer/designer_tools.js";
 import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
 import * as repomap    from "./connectors/repomap/tools.js";
+import * as termux     from "./connectors/termux/tools.js";
+import { handleTermuxPoll, handleTermuxResult, termuxAgentLimiter } from "./connectors/termux/agent_routes.js";
 
 // Factory function to build a fresh McpServer instance with all connectors registered.
 // On Vercel, serverless functions reuse warm containers across separate requests/invocations.
@@ -54,6 +56,7 @@ export function createMcpServer() {
   sync.register(server);
   jules.register(server);
   repomap.register(server);
+  termux.register(server); // no-op unless TERMUX_ENABLED=true
 
   return server;
 }
@@ -219,6 +222,17 @@ app.post("/api/editor-worker", handleEditorWorker);
 // same reasoning as /api/agent-worker-failure above, mirrored for the editor
 // worker's own checkpoint/dead-letter path.
 app.post("/api/editor-worker-failure", handleEditorWorkerFailure);
+
+// Termux phone-agent endpoints (connectors/termux/agent_routes.js) -- only
+// mounted when TERMUX_ENABLED=true. Like /api/agent-worker above, deliberately
+// NOT behind requireMcpKey/requireAllowedIp/mcpLimiter: the phone's IP is
+// arbitrary (mobile data). Auth is the handlers' own bearer check against
+// TERMUX_AGENT_SECRET (a different secret from MCP_SHARED_KEY, fails closed),
+// plus their own rate limiter.
+if (TERMUX_ENABLED) {
+  app.post("/api/termux/poll", termuxAgentLimiter, handleTermuxPoll);
+  app.post("/api/termux/result/:id", termuxAgentLimiter, handleTermuxResult);
+}
 
 const PORT = process.env.PORT || 8080;
 // Gated so importing this module (e.g. from tests via supertest, or the MCP
