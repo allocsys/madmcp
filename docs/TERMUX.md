@@ -30,9 +30,10 @@ SMS, calls, contacts, camera and microphone are deliberately not in
 Redis must be configured (`UPSTASH_REDIS_REST_URL`/`TOKEN` or the `KV_REST_API_*` pair). Then set:
 
 ```
-TERMUX_ENABLED=true
 TERMUX_AGENT_SECRET=<long random string, e.g. openssl rand -hex 32>
 ```
+
+The connector is **on by default**; set `TERMUX_ENABLED=false` to turn it off. Until `TERMUX_AGENT_SECRET` is set it does nothing: the agent routes return 401 and `termux_exec` refuses to queue.
 
 Keep `MCP_SHARED_KEY` set too. `TERMUX_AGENT_SECRET` is a *different* secret on purpose: it can only poll and post results, it cannot call MCP tools.
 
@@ -63,10 +64,10 @@ Ask Claude to run `termux_exec` with `echo hello`. The first command after the a
 ## Security
 
 - `termux_exec` is arbitrary code execution on your phone, as the Termux app user (Termux's home, plus shared storage if you ran `termux-setup-storage`). Anyone who can call your MCP endpoint can use it, so keep `MCP_SHARED_KEY` and the IP allowlist on.
-- Off by default: with `TERMUX_ENABLED` unset no tool is registered and the `/api/termux/*` routes are not mounted.
+- On by default, but inert until `TERMUX_AGENT_SECRET` is set. With `TERMUX_ENABLED=false` no tool is registered and the `/api/termux/*` routes are not mounted.
 - The agent endpoints fail closed (401) without the exact bearer token and have their own rate limit.
 - Jobs expire from Redis after `TERMUX_JOB_TTL_SECONDS` (default 600), output is capped (`TERMUX_MAX_OUTPUT_CHARS`, default 50000), commands are killed at their timeout, and the queue refuses more than `TERMUX_MAX_QUEUE_DEPTH` (default 20) waiting jobs.
-- To revoke access: stop the agent, rotate `TERMUX_AGENT_SECRET`, or unset `TERMUX_ENABLED`.
+- To revoke access: stop the agent, rotate or unset `TERMUX_AGENT_SECRET`, or set `TERMUX_ENABLED=false`.
 
 ## Redis cost
 
@@ -76,7 +77,7 @@ An idle agent makes one poll per `POLL_IDLE_MS` (default 10s), each costing abou
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TERMUX_ENABLED` | off | Must be exactly `true` to register the tools and mount the agent routes. |
+| `TERMUX_ENABLED` | on | Set to exactly `false` to unregister the tools and not mount the agent routes. |
 | `TERMUX_AGENT_SECRET` | none | Bearer token the phone agent presents. Required. |
 | `TERMUX_JOB_TTL_SECONDS` | `600` | How long a job record lives in Redis. |
 | `TERMUX_DEFAULT_TIMEOUT_SECONDS` | `60` | Command timeout when the caller doesn't set one. |
