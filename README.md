@@ -278,6 +278,24 @@ Delete: `cf_delete` (`resource`: d1 | kv | r2 | hyperdrive, `id`, `confirm`), re
 separate backfill/repair tool for the entity_id → page_id dedup index, not part of the
 consolidation.
 
+`checkpoint` (`action`: `save` | `load` | `edit` | `append` | `park` | `unpark` | `clear_log`) — a
+handoff note for the current session, so a fresh session can pick up where it left off. The note
+lives on a Notion page between two markers, and every write only touches the text between them.
+Pass `key` to keep several independent checkpoints (default `checkpoint-latest`).
+- `save` rewrites the whole note from `notes`; `load` reads it back (on the default key it also
+  returns a short log of recent GitHub commits made through this server).
+- `edit` makes small changes without resending the note: `edits` is a list of
+  `{ find, replace?, replace_all? }` literal find/replace pairs. An empty or omitted `replace`
+  deletes the matched text. Each `find` must match exactly once unless `replace_all` is set, and
+  the edits are all-or-nothing: if any one fails, nothing is written.
+- `append` adds the text in `notes` as new lines at the end of the saved note. It fails if there
+  is no checkpoint yet (use `save` to create one).
+- `park` copies a note to another key (`to`), and blanks `checkpoint-latest` afterwards; `unpark`
+  moves a parked note back into `checkpoint-latest`. `clear_log` empties the commit log.
+
+`edit` and `append` refuse to run if the note contains anything other than plain paragraphs (for
+example a heading added by hand), since a text round-trip would flatten it; use `save` then.
+
 `notion_chart` (`action`: `create` | `update` | `get` | `list` | `delete` | `create_dashboard` |
 `create_from_data`) — creates and manages native Notion chart views (column, bar, line, donut,
 number) through the Views API. Without `page_id`/`dashboard_id` a chart becomes a view tab on the
