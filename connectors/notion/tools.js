@@ -1018,7 +1018,10 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
       const created = await doCreatePage({
         parent_id: NOTION_SYNC_PARENT_PAGE_ID,
         parent_type: "page",
-        title: "Session Checkpoint",
+        // Titled with the key (2026-10-28): every checkpoint page used to be
+        // called "Session Checkpoint", so with several keys in the sidebar the
+        // only way to tell them apart was to open each one.
+        title: key,
         entity_id: key,
         content: contentText,
       });
