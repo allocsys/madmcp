@@ -278,7 +278,7 @@ Delete: `cf_delete` (`resource`: d1 | kv | r2 | hyperdrive, `id`, `confirm`), re
 separate backfill/repair tool for the entity_id → page_id dedup index, not part of the
 consolidation.
 
-`checkpoint` (`action`: `save` | `load` | `edit` | `append` | `park` | `unpark` | `clear_log`) — a
+`checkpoint` (`action`: `save` | `load` | `list` | `edit` | `append` | `park` | `unpark` | `clear_log`) — a
 handoff note for the current session, so a fresh session can pick up where it left off. The note
 lives on a Notion page between two markers, and every write only touches the text between them.
 Pass `key` to keep several independent checkpoints (default `checkpoint-latest`); a new checkpoint
@@ -291,6 +291,8 @@ page is titled with its key, so they are easy to tell apart in Notion.
   the edits are all-or-nothing: if any one fails, nothing is written.
 - `append` adds the text in `notes` as new lines at the end of the saved note. It fails if there
   is no checkpoint yet (use `save` to create one).
+- `list` shows every checkpoint as its name (the key) and Notion page ID. It looks at the child
+  pages of the checkpoint parent page, so a checkpoint page moved elsewhere is not listed.
 - `park` copies a note to another key (`to`), and blanks `checkpoint-latest` afterwards; `unpark`
   moves a parked note back into `checkpoint-latest`. `clear_log` empties the commit log.
 
