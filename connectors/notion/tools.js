@@ -942,6 +942,26 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     const saved = await doCheckpoint({ action: "save", notes: text, key });
     return `Edited "${key}": ${replaced} replacement${replaced === 1 ? "" : "s"}, ${deleted} deletion${deleted === 1 ? "" : "s"}.\n${saved}`;
   }
+  if (action === "append") {
+    // Adds `notes` as new line(s) at the end of the saved notes of `key`
+    // (2026-10-28), without resending the rest. Reads the current notes, joins
+    // the new text on, and writes the result back through the normal save path,
+    // so only the notes between the markers are touched (markers and commit log
+    // untouched). Same guard as edit: refuses if the range holds blocks other
+    // than plain paragraphs, which a text round-trip would flatten.
+    if (typeof notes !== "string" || !notes.trim()) {
+      throw new Error("append requires 'notes' (the text to add to the end of the saved notes).");
+    }
+    const current = await readCheckpointNotesWithPage(key);
+    if (current === null) return `No checkpoint found for key "${key}"; nothing appended. Use 'save' to create it.`;
+    if (!current.plain) {
+      throw new Error(`append: the notes of "${key}" contain blocks other than plain paragraphs (edited by hand?), so a text append could flatten them. Use 'save' to rewrite them in full.`);
+    }
+    const text = current.text.trim() ? `${current.text}\n${notes}` : notes;
+    const added = notes.split("\n").filter(Boolean).length;
+    const saved = await doCheckpoint({ action: "save", notes: text, key });
+    return `Appended ${added} line${added === 1 ? "" : "s"} to "${key}".\n${saved}`;
+  }
   if (action === "park") {
     // Copy the notes under `key` (default: the active checkpoint-latest) to the
     // key given in `to`. Parking checkpoint-latest also BLANKS it afterwards
@@ -1103,7 +1123,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark" or "edit").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit" or "append").`);
   }
 }
 
@@ -1173,16 +1193,16 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. Anything bigger than a few small changes — use 'save' (full rewrite).",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Anything bigger than a few small changes — use 'save' (full rewrite).",
     {
-      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit"]).describe("Action to perform: 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
+      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append"]).describe("Action to perform: 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
       edits:  z.array(z.object({
         find:        z.string().min(1).describe("Exact text to find in the saved notes. Must match exactly once unless replace_all is true."),
         replace:     z.string().optional().describe("Replacement text. Omit or pass an empty string to delete the matched text."),
         replace_all: z.boolean().optional().describe("Replace every match instead of requiring a single one (default: false)."),
       })).optional().describe("Edits to apply in order (only used for action: 'edit'). All-or-nothing: if any edit fails, nothing is written."),
-      notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
+      notes:  z.string().optional().describe("Freeform plain-text handoff notes (action 'save': the full text, a full rewrite; action 'append': the line(s) to add to the end of the existing notes)"),
       key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
     async ({ action, notes, key, to, edits }) => {
