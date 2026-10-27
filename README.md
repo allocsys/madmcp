@@ -281,7 +281,8 @@ consolidation.
 `checkpoint` (`action`: `save` | `load` | `edit` | `append` | `park` | `unpark` | `clear_log`) — a
 handoff note for the current session, so a fresh session can pick up where it left off. The note
 lives on a Notion page between two markers, and every write only touches the text between them.
-Pass `key` to keep several independent checkpoints (default `checkpoint-latest`).
+Pass `key` to keep several independent checkpoints (default `checkpoint-latest`); a new checkpoint
+page is titled with its key, so they are easy to tell apart in Notion.
 - `save` rewrites the whole note from `notes`; `load` reads it back (on the default key it also
   returns a short log of recent GitHub commits made through this server).
 - `edit` makes small changes without resending the note: `edits` is a list of
