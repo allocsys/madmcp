@@ -899,7 +899,49 @@ async function retireParkedKey(key, destKey) {
   }
 }
 
+// Finds every checkpoint page (2026-10-28) so they can be listed by name.
+// Checkpoint pages are created under NOTION_SYNC_PARENT_PAGE_ID, so this lists
+// that page's child pages and keeps the ones holding a checkpoint start marker.
+// Only the first blocks of each page are read: the entity_id marker and the
+// start marker both sit right at the top. Returns { found: [{ key, id }], skipped }
+// where `skipped` counts pages that could not be read. A checkpoint page moved
+// out of that parent page is not found.
+async function listCheckpointPages() {
+  const startPrefix = buildCheckpointStartText("\u0000").split("\u0000")[0];
+  const children = await readAllBlocks(NOTION_SYNC_PARENT_PAGE_ID);
+  const ids = children.filter((b) => b.type === "child_page").map((b) => b.id);
+  const found = [];
+  let skipped = 0;
+  let next = 0;
+  // Small bounded concurrency (Notion rate-limits ~3 req/s), same as deleteBlocks.
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      try {
+        const data = await notionRequest(`/blocks/${id}/children?page_size=50`);
+        const blocks = data.results || [];
+        const isCheckpoint = startPrefix && blocks.some((b) => b.type === "paragraph" && notionBlockPlainText(b).startsWith(startPrefix));
+        if (!isCheckpoint) continue;
+        const { entity_id } = parseMarkers(blocks);
+        if (entity_id) found.push({ key: entity_id, id });
+      } catch {
+        skipped++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
+  // The default checkpoint first, then the rest by name.
+  found.sort((a, b) => (a.key === "checkpoint-latest" ? -1 : b.key === "checkpoint-latest" ? 1 : a.key.localeCompare(b.key)));
+  return { found, skipped };
+}
+
 export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits }) {
+  if (action === "list") {
+    const { found, skipped } = await listCheckpointPages();
+    const skippedNote = skipped ? `\n(${skipped} page${skipped === 1 ? "" : "s"} could not be read and ${skipped === 1 ? "was" : "were"} skipped.)` : "";
+    if (!found.length) return `No checkpoints found.${skippedNote}`;
+    return `Checkpoints (${found.length}):\n${found.map((c) => `${c.key} \u2014 ${c.id}`).join("\n")}${skippedNote}`;
+  }
   if (action === "edit") {
     // Small targeted edits to the saved notes of `key` (2026-10-27). Each edit
     // is a literal find/replace on the notes text; an empty/omitted `replace`
@@ -1123,7 +1165,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit" or "append").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit", "append" or "list").`);
   }
 }
 
@@ -1193,9 +1235,9 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Anything bigger than a few small changes — use 'save' (full rewrite).",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'list' shows every checkpoint as its name (the key) and Notion page ID. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Anything bigger than a few small changes — use 'save' (full rewrite).",
     {
-      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append"]).describe("Action to perform: 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
+      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append", "list"]).describe("Action to perform: 'list' to show all checkpoint names and page IDs, 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
       edits:  z.array(z.object({
         find:        z.string().min(1).describe("Exact text to find in the saved notes. Must match exactly once unless replace_all is true."),
