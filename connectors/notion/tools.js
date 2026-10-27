@@ -847,7 +847,11 @@ async function readCheckpointNotesWithPage(key) {
   if (!range) return null;
   const blockMap = new Map(blocks.map((b) => [b.id, b]));
   const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
-  return { pageId: existing.pageId, text: notionBlocksToText(innerBlocks) };
+  // `plain` is false when anything other than a plain paragraph sits inside the
+  // checkpoint range (e.g. a hand-edited heading or list), so callers that
+  // round-trip the text (edit) can refuse instead of flattening those blocks.
+  const plain = innerBlocks.every((b) => b.type === "paragraph");
+  return { pageId: existing.pageId, text: notionBlocksToText(innerBlocks), plain };
 }
 
 async function readCheckpointNotes(key) {
@@ -895,7 +899,49 @@ async function retireParkedKey(key, destKey) {
   }
 }
 
-export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to }) {
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits }) {
+  if (action === "edit") {
+    // Small targeted edits to the saved notes of `key` (2026-10-27). Each edit
+    // is a literal find/replace on the notes text; an empty/omitted `replace`
+    // deletes the matched text (a line that ends up empty is dropped by save).
+    // Without replace_all, `find` must match exactly once. Edits are applied in
+    // memory, in order, so any failure aborts BEFORE anything is written; the
+    // result is then written back through the normal save path, which only ever
+    // touches the notes between the markers (markers and commit log untouched).
+    if (!Array.isArray(edits) || !edits.length) {
+      throw new Error("edit requires 'edits' (a non-empty array of { find, replace, replace_all }).");
+    }
+    const current = await readCheckpointNotesWithPage(key);
+    if (current === null) return `No checkpoint found for key "${key}"; nothing edited.`;
+    if (!current.plain) {
+      throw new Error(`edit: the notes of "${key}" contain blocks other than plain paragraphs (edited by hand?), so a text edit could flatten them. Use 'save' to rewrite them in full.`);
+    }
+    const trunc = (s) => s.slice(0, 60) + (s.length > 60 ? "…" : "");
+    let text = current.text;
+    let replaced = 0;
+    let deleted = 0;
+    for (const [i, e] of edits.entries()) {
+      const n = i + 1;
+      const find = e?.find;
+      if (typeof find !== "string" || !find) throw new Error(`Edit aborted, nothing written — edit #${n}: 'find' must be a non-empty string.`);
+      const replace = e.replace ?? "";
+      if (typeof replace !== "string") throw new Error(`Edit aborted, nothing written — edit #${n}: 'replace' must be a string.`);
+      const count = text.split(find).length - 1;
+      if (count === 0) {
+        throw new Error(`Edit aborted, nothing written — edit #${n}: "${trunc(find)}" was not found in the notes of "${key}".`);
+      }
+      if (count > 1 && !e.replace_all) {
+        throw new Error(`Edit aborted, nothing written — edit #${n}: "${trunc(find)}" matches ${count} places in the notes of "${key}". Make 'find' longer so it is unique, or set replace_all.`);
+      }
+      // Function replacer / split-join: '$&' and friends in `replace` stay literal.
+      text = e.replace_all ? text.split(find).join(replace) : text.replace(find, () => replace);
+      if (replace === "") deleted += e.replace_all ? count : 1;
+      else replaced += e.replace_all ? count : 1;
+    }
+    if (text === current.text) return `Edit made no change to "${key}"; nothing written.`;
+    const saved = await doCheckpoint({ action: "save", notes: text, key });
+    return `Edited "${key}": ${replaced} replacement${replaced === 1 ? "" : "s"}, ${deleted} deletion${deleted === 1 ? "" : "s"}.\n${saved}`;
+  }
   if (action === "park") {
     // Copy the notes under `key` (default: the active checkpoint-latest) to the
     // key given in `to`. Parking checkpoint-latest also BLANKS it afterwards
@@ -1057,7 +1103,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park" or "unpark").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark" or "edit").`);
   }
 }
 
@@ -1127,16 +1173,21 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). (The 'update' targeted-edit action has been disabled — use 'save' for any change, full rewrite only.)",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. Anything bigger than a few small changes — use 'save' (full rewrite).",
     {
-      action: z.enum(["save", "load", "clear_log", "park", "unpark"]).describe("Action to perform: 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
+      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit"]).describe("Action to perform: 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
+      edits:  z.array(z.object({
+        find:        z.string().min(1).describe("Exact text to find in the saved notes. Must match exactly once unless replace_all is true."),
+        replace:     z.string().optional().describe("Replacement text. Omit or pass an empty string to delete the matched text."),
+        replace_all: z.boolean().optional().describe("Replace every match instead of requiring a single one (default: false)."),
+      })).optional().describe("Edits to apply in order (only used for action: 'edit'). All-or-nothing: if any edit fails, nothing is written."),
       notes:  z.string().optional().describe("Freeform plain-text handoff notes to save (only used for action: 'save' — full rewrite)"),
       key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
-    async ({ action, notes, key, to }) => {
+    async ({ action, notes, key, to, edits }) => {
       try {
-        const text = await doCheckpoint({ action, notes, key, to });
+        const text = await doCheckpoint({ action, notes, key, to, edits });
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
