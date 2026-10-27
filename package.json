@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@babel/parser": "^8.0.8",
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@upstash/qstash": "^2.12.1",
     "@upstash/redis": "^1.38.4",
     "@vercel/functions": "^3.10.3",
