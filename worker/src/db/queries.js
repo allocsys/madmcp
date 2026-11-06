@@ -172,6 +172,78 @@ export async function insertEdges({ repoId, fileId, edges }) {
   }
 }
 
+// --- Re-resolution of edges that have no target yet (see resolve.js
+// planReResolution). Rows are returned camelCased, ready for the planner.
+
+export async function getUnresolvedImportEdges(repoId) {
+  const { rows } = await query(
+    `SELECT e.id, e.src_file_id, f.path AS src_path, e.import_specifier
+     FROM edges e JOIN files f ON f.id = e.src_file_id
+     WHERE e.repo_id = $1 AND e.edge_type = 'imports'
+       AND e.dst_file_id IS NULL AND e.import_specifier IS NOT NULL`,
+    [repoId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    srcFileId: r.src_file_id,
+    srcPath: r.src_path,
+    importSpecifier: r.import_specifier,
+  }));
+}
+
+// src file id -> Set of file ids it imports, from import edges that already resolve.
+export async function getResolvedImportTargets(repoId) {
+  const { rows } = await query(
+    `SELECT src_file_id, dst_file_id FROM edges
+     WHERE repo_id = $1 AND edge_type = 'imports' AND dst_file_id IS NOT NULL`,
+    [repoId]
+  );
+  const byFile = new Map();
+  for (const r of rows) {
+    if (!byFile.has(r.src_file_id)) byFile.set(r.src_file_id, new Set());
+    byFile.get(r.src_file_id).add(r.dst_file_id);
+  }
+  return byFile;
+}
+
+export async function getUnresolvedCallEdges(repoId) {
+  const { rows } = await query(
+    `SELECT id, src_file_id, callee_name FROM edges
+     WHERE repo_id = $1 AND edge_type = 'calls'
+       AND dst_symbol_id IS NULL AND callee_name IS NOT NULL`,
+    [repoId]
+  );
+  return rows.map((r) => ({ id: r.id, srcFileId: r.src_file_id, calleeName: r.callee_name }));
+}
+
+const UPDATE_BATCH = 5000;
+
+// updates: [{ id, dstFileId }]
+export async function setEdgeDstFiles(updates) {
+  for (let i = 0; i < updates.length; i += UPDATE_BATCH) {
+    const batch = updates.slice(i, i + UPDATE_BATCH);
+    await query(
+      `UPDATE edges e SET dst_file_id = u.dst
+       FROM unnest($1::int[], $2::int[]) AS u(id, dst)
+       WHERE e.id = u.id AND e.dst_file_id IS NULL`,
+      [batch.map((u) => u.id), batch.map((u) => u.dstFileId)]
+    );
+  }
+}
+
+// updates: [{ id, dstSymbolId }]
+export async function setEdgeDstSymbols(updates) {
+  for (let i = 0; i < updates.length; i += UPDATE_BATCH) {
+    const batch = updates.slice(i, i + UPDATE_BATCH);
+    await query(
+      `UPDATE edges e SET dst_symbol_id = u.dst
+       FROM unnest($1::int[], $2::int[]) AS u(id, dst)
+       WHERE e.id = u.id AND e.dst_symbol_id IS NULL`,
+      [batch.map((u) => u.id), batch.map((u) => u.dstSymbolId)]
+    );
+  }
+}
+
 export async function insertChunks({ repoId, fileId, chunks }) {
   for (const c of chunks) {
     await query(
