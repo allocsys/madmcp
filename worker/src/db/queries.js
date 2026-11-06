@@ -257,18 +257,18 @@ export async function insertChunks({ repoId, fileId, chunks }) {
   }
 }
 
-// name -> [{symbolId, fileId, qualifiedName}], across the WHOLE repo (both
+// name -> [{symbolId, fileId, qualifiedName, kind}], across the WHOLE repo (both
 // files touched by this scan and untouched ones already in the db). Used to
 // resolve `calls` edges (graph.js only knows the raw callee name).
 export async function getSymbolIndex(repoId) {
   const { rows } = await query(
-    `SELECT id, file_id, name, qualified_name FROM symbols WHERE repo_id = $1`,
+    `SELECT id, file_id, name, qualified_name, kind FROM symbols WHERE repo_id = $1`,
     [repoId]
   );
   const byName = new Map();
   for (const r of rows) {
     if (!byName.has(r.name)) byName.set(r.name, []);
-    byName.get(r.name).push({ symbolId: r.id, fileId: r.file_id, qualifiedName: r.qualified_name });
+    byName.get(r.name).push({ symbolId: r.id, fileId: r.file_id, qualifiedName: r.qualified_name, kind: r.kind });
   }
   return byName;
 }
