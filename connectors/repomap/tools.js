@@ -21,9 +21,34 @@ function renderBar(done = 0, total = 0) {
   return `[${"■".repeat(filled)}${"□".repeat(20 - filled)}] ${pct}% (${done}/${total})`;
 }
 
+// A scan can end 'done' with scan_jobs.error set: some files failed pass 2
+// (they stay not-fully-indexed and are retried next scan) and/or the edge
+// re-resolve pass failed. Such a scan must not be reported as plainly fresh, so
+// the error text is shown as a warning, trimmed to keep the readout short.
+const MAX_PROBLEM_LINES = 6;
+const MAX_PROBLEM_LINE_CHARS = 200;
+
+function describeScanProblems(error) {
+  const lines = String(error).split("\n").map((l) => l.trim()).filter(Boolean);
+  const shown = lines.slice(0, MAX_PROBLEM_LINES).map((l) =>
+    l.length > MAX_PROBLEM_LINE_CHARS ? `${l.slice(0, MAX_PROBLEM_LINE_CHARS)}...` : l
+  );
+  const more = lines.length - shown.length;
+  return `WARNING: scan finished with problems -- the index is incomplete, results may miss edges or chunks:\n${shown.join("\n")}${more > 0 ? `\n... (+${more} more line${more === 1 ? "" : "s"})` : ""}`;
+}
+
+// Note for the "already fresh" path: the repo's HEAD matches the last scan, but
+// some files never finished pass 2 (files.fully_indexed_at is NULL).
+function unindexedNote(status) {
+  const n = status?.unindexedFiles;
+  if (!n) return "";
+  return `WARNING: ${n} file${n === 1 ? " is" : "s are"} not fully indexed (pass 2 failed in an earlier scan; retried on the next scan), so results may be incomplete.`;
+}
+
 function jobLine(job) {
   if (job.status === "done") {
-    return `done (${job.files_scanned ?? "?"} files scanned, ${job.files_changed ?? "?"} changed, ${job.chunks_embedded ?? "?"} chunks embedded)`;
+    const base = `done (${job.files_scanned ?? "?"} files scanned, ${job.files_changed ?? "?"} changed, ${job.chunks_embedded ?? "?"} chunks embedded)`;
+    return job.error ? `${base}\n${describeScanProblems(job.error)}` : base;
   }
   if (job.status === "failed") return `failed -- ${job.error || "unknown error"}`;
   if (job.status === "running" && job.files_total) {
@@ -91,7 +116,10 @@ export function register(server) {
           }
           const doneText = `Job ${jobId}: ${jobLine(job)}`;
           if (!mode) {
-            return { content: [{ type: "text", text: `${doneText}\nRepo is now fresh -- call map again with mode/query to search or traverse it.` }] };
+            const next = job.error
+              ? "Repo is scanned but not fully indexed (see warning above) -- call map again with mode/query to search or traverse it, knowing results may be incomplete."
+              : "Repo is now fresh -- call map again with mode/query to search or traverse it.";
+            return { content: [{ type: "text", text: `${doneText}\n${next}` }] };
           }
           if (!repo) {
             return { content: [{ type: "text", text: `${doneText}\nPass repo (and owner if not "${DEFAULT_OWNER}") alongside mode/query to run the query now that it's fresh.` }] };
@@ -109,12 +137,14 @@ export function register(server) {
         const status = await getFreshness({ owner, repo, ref });
 
         if (status.scanned && status.fresh) {
+          const note = unindexedNote(status);
           if (!mode) {
-            return { content: [{ type: "text", text: `${owner}/${repo} is up to date (commit ${status.lastScannedCommit}). Pass mode: "search" or "graph" to query it.` }] };
+            const upToDate = `${owner}/${repo} is up to date (commit ${status.lastScannedCommit}). Pass mode: "search" or "graph" to query it.`;
+            return { content: [{ type: "text", text: note ? `${upToDate}\n${note}` : upToDate }] };
           }
           const results = await runQuery({ owner, repo, mode, query, topK, symbol, file, direction, depth });
           if (results.error) return results.error;
-          return { content: [{ type: "text", text: results.text }] };
+          return { content: [{ type: "text", text: note ? `${note}\n\n${results.text}` : results.text }] };
         }
 
         // never scanned, or stale -- scan (blocking, bounded) before anything else
