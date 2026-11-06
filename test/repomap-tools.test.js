@@ -238,6 +238,104 @@ describe("connectors/repomap/tools.js", () => {
     });
   });
 
+  describe("scans that finished with problems are not reported as plainly fresh", () => {
+    const ERR = "2 file(s) failed pass 2, will retry next scan:\nsrc/a.js: Gemini 401\nsrc/b.js: Gemini 401";
+
+    it("jobId resume, done with error, no mode: shows the warning and does not say 'now fresh'", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "done", files_scanned: 9, files_changed: 2, chunks_embedded: 0, error: ERR });
+
+      const result = await map({ jobId: "job-20" });
+      const text = result.content[0].text;
+
+      expect(text).toMatch(/Job job-20: done \(9 files scanned, 2 changed, 0 chunks embedded\)/);
+      expect(text).toContain("WARNING: scan finished with problems");
+      expect(text).toContain("2 file(s) failed pass 2");
+      expect(text).toContain("src/a.js: Gemini 401");
+      expect(text).not.toMatch(/Repo is now fresh/);
+      expect(text).toMatch(/not fully indexed/);
+    });
+
+    it("jobId resume, done with error, mode + repo: still runs the query, warning stays above the results", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "done", error: ERR });
+      searchChunks.mockResolvedValueOnce({ results: [] });
+
+      const result = await map({ jobId: "job-21", repo: "widgets", mode: "search", query: "q" });
+      const text = result.content[0].text;
+
+      expect(text).toContain("WARNING: scan finished with problems");
+      expect(text.endsWith("No results.")).toBe(true);
+    });
+
+    it("truncates a long error to a handful of lines and says how many were dropped", async () => {
+      const many = ["20 file(s) failed pass 2, will retry next scan:", ...Array.from({ length: 19 }, (_, i) => `src/f${i}.js: boom`)].join("\n");
+      getScanStatus.mockResolvedValueOnce({ status: "done", error: many });
+
+      const result = await map({ jobId: "job-22" });
+      const text = result.content[0].text;
+
+      expect(text).toContain("src/f0.js: boom");
+      expect(text).not.toContain("src/f18.js: boom");
+      expect(text).toMatch(/\.\.\. \(\+14 more lines\)/);
+    });
+
+    it("truncates a very long single line", async () => {
+      getScanStatus.mockResolvedValueOnce({ status: "done", error: `1 file(s) failed pass 2:\nsrc/a.js: ${"x".repeat(500)}` });
+
+      const result = await map({ jobId: "job-23" });
+
+      expect(result.content[0].text).not.toContain("x".repeat(300));
+      expect(result.content[0].text).toContain("...");
+    });
+
+    it("blocking scan that finishes with an error: the warning is part of the progress readout", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: false });
+      startScan.mockResolvedValueOnce({ jobId: "job-24", status: "queued" });
+      getScanStatus.mockResolvedValueOnce({ status: "done", files_scanned: 4, files_changed: 4, chunks_embedded: 0, error: ERR });
+
+      const result = await map({ repo: "widgets" });
+
+      expect(result.content[0].text).toMatch(/has never been scanned -- scanning now\./);
+      expect(result.content[0].text).toContain("WARNING: scan finished with problems");
+    });
+
+    it("fresh repo with unindexed files, no mode: up-to-date line plus a not-fully-indexed warning", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: true, lastScannedCommit: "abc123", branch: "main", unindexedFiles: 3 });
+
+      const result = await map({ repo: "widgets" });
+      const text = result.content[0].text;
+
+      expect(text).toMatch(/allocsys\/widgets is up to date \(commit abc123\)/);
+      expect(text).toContain("WARNING: 3 files are not fully indexed");
+    });
+
+    it("fresh repo with one unindexed file: singular wording", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: true, lastScannedCommit: "abc123", branch: "main", unindexedFiles: 1 });
+
+      const result = await map({ repo: "widgets" });
+
+      expect(result.content[0].text).toContain("WARNING: 1 file is not fully indexed");
+    });
+
+    it("fresh repo with unindexed files, with mode: warning is placed before the query results", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: true, lastScannedCommit: "abc123", branch: "main", unindexedFiles: 2 });
+      queryGraph.mockResolvedValueOnce({ results: [{ name: "foo", qualifiedName: "mod.foo", filePath: "src/a.js", startLine: 1, endLine: 5, depth: 1 }] });
+
+      const result = await map({ repo: "widgets", mode: "graph", symbol: "foo" });
+      const text = result.content[0].text;
+
+      expect(text.startsWith("WARNING: 2 files are not fully indexed")).toBe(true);
+      expect(text).toContain("mod.foo — src/a.js (L1-5) [depth 1]");
+    });
+
+    it("fresh repo with zero unindexed files: no warning", async () => {
+      getFreshness.mockResolvedValueOnce({ scanned: true, fresh: true, lastScannedCommit: "abc123", branch: "main", unindexedFiles: 0 });
+
+      const result = await map({ repo: "widgets" });
+
+      expect(result.content[0].text).not.toContain("WARNING");
+    });
+  });
+
   describe("runQuery validation (shared by the fresh and just-scanned paths)", () => {
     beforeEach(() => {
       getFreshness.mockResolvedValue({ scanned: true, fresh: true, lastScannedCommit: "abc", branch: "main" });
