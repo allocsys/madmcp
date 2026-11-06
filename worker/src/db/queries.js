@@ -140,25 +140,53 @@ export async function deleteFileArtifacts(fileId) {
   await query(`DELETE FROM symbols WHERE file_id = $1`, [fileId]);
 }
 
+// Multi-row INSERT helpers. Postgres caps a statement at 65535 bind
+// parameters, so rows are split into batches that stay well under it. Chunk
+// rows carry a large embedding each, so insertChunks also caps rows per
+// statement to keep individual statements a reasonable size.
+const MAX_BIND_PARAMS = 30000;
+
+function batchRows(rows, colsPerRow, maxRows = Infinity) {
+  const size = Math.max(1, Math.min(maxRows, Math.floor(MAX_BIND_PARAMS / colsPerRow)));
+  const batches = [];
+  for (let i = 0; i < rows.length; i += size) batches.push(rows.slice(i, i + size));
+  return batches;
+}
+
+// '($1,$2),($3,$4),...' for rowCount rows of colsPerRow columns.
+function valuesPlaceholders(rowCount, colsPerRow) {
+  const tuples = [];
+  for (let r = 0; r < rowCount; r++) {
+    const cols = [];
+    for (let c = 1; c <= colsPerRow; c++) cols.push(`$${r * colsPerRow + c}`);
+    tuples.push(`(${cols.join(',')})`);
+  }
+  return tuples.join(',');
+}
+
 export async function insertSymbols({ repoId, fileId, symbols }) {
   const symbolIdByLocal = new Map();
-  for (const s of symbols) {
+  for (const batch of batchRows(symbols, 8)) {
+    const params = [];
+    for (const s of batch) {
+      params.push(repoId, fileId, s.kind, s.name, s.qualifiedName, s.startLine, s.endLine, s.signature);
+    }
+    // RETURNING comes back in VALUES order, so rows[i] is batch[i]'s id.
     const { rows } = await query(
       `INSERT INTO symbols (repo_id, file_id, kind, name, qualified_name, start_line, end_line, signature)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [repoId, fileId, s.kind, s.name, s.qualifiedName, s.startLine, s.endLine, s.signature]
+       VALUES ${valuesPlaceholders(batch.length, 8)} RETURNING id`,
+      params
     );
-    symbolIdByLocal.set(s.localId, rows[0].id);
+    batch.forEach((s, i) => symbolIdByLocal.set(s.localId, rows[i].id));
   }
   return symbolIdByLocal;
 }
 
 export async function insertEdges({ repoId, fileId, edges }) {
-  for (const e of edges) {
-    await query(
-      `INSERT INTO edges (repo_id, src_symbol_id, dst_symbol_id, src_file_id, dst_file_id, edge_type, callee_name, import_specifier)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
+  for (const batch of batchRows(edges, 8)) {
+    const params = [];
+    for (const e of batch) {
+      params.push(
         repoId,
         e.srcSymbolId || null,
         e.dstSymbolId || null,
@@ -166,8 +194,13 @@ export async function insertEdges({ repoId, fileId, edges }) {
         e.dstFileId || null,
         e.edgeType,
         e.calleeName || null, // kept so an unresolved call can be re-resolved from DB state later
-        e.importSpecifier || null,
-      ]
+        e.importSpecifier || null
+      );
+    }
+    await query(
+      `INSERT INTO edges (repo_id, src_symbol_id, dst_symbol_id, src_file_id, dst_file_id, edge_type, callee_name, import_specifier)
+       VALUES ${valuesPlaceholders(batch.length, 8)}`,
+      params
     );
   }
 }
@@ -244,15 +277,21 @@ export async function setEdgeDstSymbols(updates) {
   }
 }
 
+const CHUNK_INSERT_MAX_ROWS = 50;
+
 export async function insertChunks({ repoId, fileId, chunks }) {
-  for (const c of chunks) {
-    await query(
-      `INSERT INTO chunks (repo_id, symbol_id, file_id, content, embedding, content_hash)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
+  for (const batch of batchRows(chunks, 6, CHUNK_INSERT_MAX_ROWS)) {
+    const params = [];
+    for (const c of batch) {
       // pgvector.toSql converts the plain JS number[] into the '[0.1,0.2,...]'
       // text format Postgres' vector type expects — a raw array would be sent
       // as a Postgres array literal ('{0.1,0.2}') and fail against vector(1536).
-      [repoId, c.symbolId || null, fileId, c.content, pgvector.toSql(c.embedding), c.contentHash]
+      params.push(repoId, c.symbolId || null, fileId, c.content, pgvector.toSql(c.embedding), c.contentHash);
+    }
+    await query(
+      `INSERT INTO chunks (repo_id, symbol_id, file_id, content, embedding, content_hash)
+       VALUES ${valuesPlaceholders(batch.length, 6)}`,
+      params
     );
   }
 }
