@@ -34,6 +34,7 @@ vi.mock("../connectors/repomap/queries.js", () => ({
   queryChunksDb: vi.fn(),
   queryGraphDb: vi.fn(),
   getRepoRow: vi.fn(),
+  getUnindexedFileCount: vi.fn(),
 }));
 
 // ensureFresh()'s HEAD-sha check goes through githubRequest, not raw fetch --
@@ -302,6 +303,34 @@ describe("connectors/repomap/client.js", () => {
 
         expect(githubRequest).toHaveBeenCalledWith("/repos/allocsys/widgets/git/ref/heads/feature-branch");
         expect(result.branch).toBe("feature-branch");
+      });
+
+      it("reports how many files are not fully indexed, looked up by the repo id", async () => {
+        const { getRepoRow, getUnindexedFileCount } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 5, last_scanned_commit: "abc123", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "abc123" } });
+        getUnindexedFileCount.mockResolvedValueOnce(3);
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        const result = await getFreshness({ owner: "allocsys", repo: "widgets" });
+
+        expect(getUnindexedFileCount).toHaveBeenCalledWith(5);
+        expect(result).toEqual({ scanned: true, fresh: true, headSha: "abc123", lastScannedCommit: "abc123", branch: "main", unindexedFiles: 3 });
+      });
+
+      it("a failing unindexed-count query does not break the freshness check", async () => {
+        const { getRepoRow, getUnindexedFileCount } = await import("../connectors/repomap/queries.js");
+        const { githubRequest } = await import("../connectors/github/client.js");
+        getRepoRow.mockResolvedValueOnce({ id: 5, last_scanned_commit: "abc123", default_ref: "main" });
+        githubRequest.mockResolvedValueOnce({ object: { sha: "abc123" } });
+        getUnindexedFileCount.mockRejectedValueOnce(new Error("db hiccup"));
+
+        const { getFreshness } = await import("../connectors/repomap/client.js");
+        const result = await getFreshness({ owner: "allocsys", repo: "widgets" });
+
+        expect(result.fresh).toBe(true);
+        expect(result.unindexedFiles).toBe(0);
       });
 
       it("propagates a failure fetching HEAD sha (unlike ensureFresh, which swallows it)", async () => {

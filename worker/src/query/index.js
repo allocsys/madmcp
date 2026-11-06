@@ -50,6 +50,40 @@ export async function queryChunks({ owner, repo, query: text, topK = 10 }) {
   }));
 }
 
+// Module-level callers: calls with no enclosing symbol (top-level script code,
+// or code inside a callback the parser does not record as a symbol) are stored
+// as file-level edges (src_symbol_id NULL, src_file_id set). The symbol walk in
+// queryGraph cannot follow those, so each calling file is reported once as a
+// '<module>' pseudo-symbol, at the depth of the symbol it calls plus one.
+// Keep in sync with connectors/repomap/queries.js.
+async function getModuleCallers(repoId, targetIds, startSet, depthById, hops) {
+  const { rows } = await query(
+    `SELECT DISTINCT f.path AS file_path, e.dst_symbol_id
+     FROM edges e JOIN files f ON f.id = e.src_file_id
+     WHERE e.repo_id = $1 AND e.edge_type = 'calls' AND e.src_symbol_id IS NULL
+       AND e.dst_symbol_id = ANY($2::int[])`,
+    [repoId, targetIds]
+  );
+  const depthByPath = new Map();
+  for (const r of rows) {
+    const base = startSet.has(r.dst_symbol_id) ? 0 : depthById.get(r.dst_symbol_id) ?? 0;
+    const depth = base + 1;
+    if (depth > hops) continue;
+    if (!depthByPath.has(r.file_path) || depth < depthByPath.get(r.file_path)) {
+      depthByPath.set(r.file_path, depth);
+    }
+  }
+  return [...depthByPath].map(([filePath, depth]) => ({
+    name: '<module>',
+    qualifiedName: null,
+    kind: 'module',
+    filePath,
+    startLine: null,
+    endLine: null,
+    depth,
+  }));
+}
+
 // Graph traversal: given a symbol name or a file path, walk `depth` hops of
 // edges in `direction` ('callers' | 'callees' | 'importers' | 'imports') and
 // return the reached symbols/files. Uses a recursive CTE over the edges
@@ -119,21 +153,28 @@ export async function queryGraph({ owner, repo, symbol, file, direction = 'calle
     [startIds, repoRow.id, edgeTypes, hops]
   );
   const nodeIds = rows.map((r) => r.node_id);
-  if (!nodeIds.length) return [];
   const depthById = new Map(rows.map((r) => [r.node_id, r.depth]));
+
+  const moduleCallers =
+    direction === 'callers'
+      ? await getModuleCallers(repoRow.id, [...new Set([...startIds, ...nodeIds])], new Set(startIds), depthById, hops)
+      : [];
+  if (!nodeIds.length && !moduleCallers.length) return [];
 
   if (fileMode) {
     const { rows: files } = await query(`SELECT id, path, language FROM files WHERE id = ANY($1::int[])`, [nodeIds]);
     return files.map((f) => ({ filePath: f.path, language: f.language, depth: depthById.get(f.id) }));
   }
 
-  const { rows: symbols } = await query(
-    `SELECT s.id, s.name, s.qualified_name, s.kind, s.start_line, s.end_line, f.path AS file_path
-     FROM symbols s JOIN files f ON f.id = s.file_id
-     WHERE s.id = ANY($1::int[])`,
-    [nodeIds]
-  );
-  return symbols.map((s) => ({
+  const { rows: symbols } = nodeIds.length
+    ? await query(
+        `SELECT s.id, s.name, s.qualified_name, s.kind, s.start_line, s.end_line, f.path AS file_path
+         FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE s.id = ANY($1::int[])`,
+        [nodeIds]
+      )
+    : { rows: [] };
+  const found = symbols.map((s) => ({
     name: s.name,
     qualifiedName: s.qualified_name,
     kind: s.kind,
@@ -142,4 +183,5 @@ export async function queryGraph({ owner, repo, symbol, file, direction = 'calle
     endLine: s.end_line,
     depth: depthById.get(s.id),
   }));
+  return [...found, ...moduleCallers];
 }

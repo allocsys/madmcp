@@ -16,7 +16,7 @@
 import { REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, DEFAULT_OWNER } from "../../config.js";
 import { getCloneToken } from "../github/app_auth.js";
 import { githubRequest } from "../github/client.js";
-import { queryChunksDb, queryGraphDb, getRepoRow } from "./queries.js";
+import { queryChunksDb, queryGraphDb, getRepoRow, getUnindexedFileCount } from "./queries.js";
 
 function assertConfigured() {
   if (!REPO_MAP_WORKER_URL) throw new Error("REPO_MAP_WORKER_URL is not set -- the repo_map worker hasn't been deployed/configured yet.");
@@ -101,12 +101,22 @@ export async function getFreshness({ owner = DEFAULT_OWNER, repo, ref }) {
   const branch = ref || repoRow.default_ref;
   const { object } = await githubRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
   const headSha = object?.sha;
+  // Files whose pass 2 failed last scan. A 'done' scan with such files still
+  // advances last_scanned_commit, so "fresh" alone would hide them. Soft-fail:
+  // this is extra detail, it must not break the freshness check itself.
+  let unindexedFiles;
+  try {
+    unindexedFiles = await getUnindexedFileCount(repoRow.id);
+  } catch {
+    unindexedFiles = 0;
+  }
   return {
     scanned: true,
     fresh: !!headSha && headSha === repoRow.last_scanned_commit,
     headSha,
     lastScannedCommit: repoRow.last_scanned_commit,
     branch,
+    unindexedFiles,
   };
 }
 

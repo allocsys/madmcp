@@ -26,6 +26,9 @@ describe('queryGraph', () => {
       if (sql.includes('WITH RECURSIVE walk')) {
         return { rows: [] };
       }
+      if (sql.includes('e.src_symbol_id IS NULL')) {
+        return { rows: [] }; // module-level callers: none
+      }
       throw new Error('unexpected sql: ' + sql);
     });
 
