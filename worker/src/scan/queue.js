@@ -5,7 +5,7 @@ import { diffFiles } from './hash.js';
 import { parseFile } from './parse.js';
 import { buildChunks } from './chunk.js';
 import { buildEdges } from './graph.js';
-import { resolveEdge, collectImportedFileIds } from './resolve.js';
+import { resolveEdge, collectImportedFileIds, withEdgeNames } from './resolve.js';
 import { embedTexts } from '../embed/gemini.js';
 import {
   upsertRepo,
@@ -154,7 +154,7 @@ async function processJob(job) {
           importedFileIds: collectImportedFileIds(rawEdges, path, fileIndex),
         };
         const resolvedEdges = rawEdges.map((e) =>
-          resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex, edgeCtx)
+          withEdgeNames(e, resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex, edgeCtx))
         );
 
         // Edges don't depend on embeddings, so write them BEFORE the embedding
