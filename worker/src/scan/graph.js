@@ -24,7 +24,11 @@ export function buildEdges({ filePath, content, tree, symbolLocalIdByNodeId }) {
       }
     }
 
-    if (CALL_NODE_TYPES.has(node.type) && enclosingSymbolLocalId != null) {
+    // A call outside any recorded symbol (top-level script code, or inside a
+    // callback / arrow function the parser does not record as a symbol) is kept
+    // as a file-level edge: srcLocalId null, stored with src_symbol_id NULL and
+    // src_file_id set. It used to be dropped, so such callers never showed up.
+    if (CALL_NODE_TYPES.has(node.type)) {
       const calleeNode = node.childForFieldName?.('function') || node.children?.[0];
       const calleeName = calleeNode ? content.slice(calleeNode.startIndex, calleeNode.endIndex) : null;
       if (calleeName) {
