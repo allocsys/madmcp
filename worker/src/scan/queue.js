@@ -6,6 +6,7 @@ import { parseFile } from './parse.js';
 import { buildChunks } from './chunk.js';
 import { buildEdges } from './graph.js';
 import { resolveEdge, collectImportedFileIds, withEdgeNames } from './resolve.js';
+import { reResolveRepoEdges } from './reresolve.js';
 import { embedTexts } from '../embed/gemini.js';
 import {
   upsertRepo,
@@ -185,6 +186,20 @@ async function processJob(job) {
       }
     }
 
+    // Heal edges that have no target yet (callee file changed, or the target
+    // appeared in this scan) from DB state. Its own try/catch: a failure here
+    // must not fail the job, but it is reported in scan_jobs.error.
+    let reResolveError = null;
+    if (changed.length || deleted.length) {
+      try {
+        const healed = await reResolveRepoEdges({ repoId: job.repo_id, symbolIndex, fileIndex });
+        console.log(`repo-map scan job ${job.id}: re-resolved edges`, healed);
+      } catch (err) {
+        console.error(`repo-map scan job ${job.id}: edge re-resolve failed:`, err);
+        reResolveError = `edge re-resolve failed: ${err.message}`;
+      }
+    }
+
     await updateRepoCommit(job.repo_id, cloned.commit);
     await finishScanJob(job.id, {
       // Still 'done' -- real forward progress was made on every file that
@@ -195,7 +210,13 @@ async function processJob(job) {
       filesScanned: freshFiles.size,
       filesChanged: changed.length,
       chunksEmbedded,
-      error: failedFiles.length ? `${failedFiles.length} file(s) failed pass 2, will retry next scan:\n${failedFiles.join('\n')}` : null,
+      error:
+        [
+          failedFiles.length ? `${failedFiles.length} file(s) failed pass 2, will retry next scan:\n${failedFiles.join('\n')}` : null,
+          reResolveError,
+        ]
+          .filter(Boolean)
+          .join('\n') || null,
     });
   } catch (err) {
     console.error(`repo-map scan job ${job.id} failed:`, err);
