@@ -18,6 +18,19 @@ export async function getRepoRow(owner, repo) {
   return rows[0] || null;
 }
 
+// Number of files whose pass 2 (edges + chunks) has not completed for their
+// current content: files.fully_indexed_at stays NULL for a file whose pass 2
+// failed (the worker retries it on the next scan). A scan that ends 'done' with
+// such files still advances repos.last_scanned_commit, so freshness alone
+// cannot tell the caller the index is incomplete.
+export async function getUnindexedFileCount(repoId) {
+  const { rows } = await query(
+    `SELECT COUNT(*)::int AS n FROM files WHERE repo_id = $1 AND fully_indexed_at IS NULL`,
+    [repoId]
+  );
+  return rows[0]?.n ?? 0;
+}
+
 // Semantic search: embeds `text`, returns the top-K most similar chunks in
 // the repo ordered by cosine distance (pgvector's <=> operator).
 export async function queryChunksDb({ owner, repo, query: text, topK = 10 }) {
