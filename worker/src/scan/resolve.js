@@ -63,6 +63,51 @@ export function collectImportedFileIds(rawEdges, filePath, fileIndex) {
   return ids;
 }
 
+// Re-resolution of edges that are already in the database but have no target
+// (dst_symbol_id / dst_file_id NULL). Edges end up in that state when the target
+// did not exist yet at the time, or when the target's symbol was deleted and
+// reinserted by a later scan (ON DELETE SET NULL). The caller's file is NOT
+// re-parsed: everything needed is stored on the edge (callee_name,
+// import_specifier).
+//
+// Inputs (plain rows, ids as returned by the DB driver):
+//   unresolvedImports: [{ id, srcFileId, srcPath, importSpecifier }]
+//   importedFileIds:   Map<srcFileId, Set<dstFileId>> from imports that already resolve
+//   unresolvedCalls:   [{ id, srcFileId, calleeName }]
+//   symbolIndex / fileIndex: same shapes as getSymbolIndex() / getFileIndex()
+// Returns { importUpdates: [{ id, dstFileId }], callUpdates: [{ id, dstSymbolId }] }.
+//
+// Imports are resolved first and feed the import set used to disambiguate
+// calls, so a call can resolve through an import that was itself healed in the
+// same pass. Dotted callees (this.x, obj.x) are left alone here: member-call
+// resolution has its own, stricter rules.
+export function planReResolution({ unresolvedImports, importedFileIds, unresolvedCalls, symbolIndex, fileIndex }) {
+  const imported = new Map();
+  for (const [fileId, set] of importedFileIds) imported.set(String(fileId), new Set(set));
+
+  const importUpdates = [];
+  for (const e of unresolvedImports) {
+    const dstFileId = resolveImportSpecifier(e.importSpecifier, e.srcPath, fileIndex);
+    if (dstFileId == null) continue;
+    importUpdates.push({ id: e.id, dstFileId });
+    const key = String(e.srcFileId);
+    if (!imported.has(key)) imported.set(key, new Set());
+    imported.get(key).add(dstFileId);
+  }
+
+  const callUpdates = [];
+  for (const e of unresolvedCalls) {
+    if (!e.calleeName || e.calleeName.includes('.')) continue;
+    const dstSymbolId = pickCallee(symbolIndex.get(e.calleeName), {
+      fileId: e.srcFileId,
+      importedFileIds: imported.get(String(e.srcFileId)),
+    });
+    if (dstSymbolId != null) callUpdates.push({ id: e.id, dstSymbolId });
+  }
+
+  return { importUpdates, callUpdates };
+}
+
 // A callee we can store and later re-resolve from the database: a plain
 // identifier or dotted chain (`helper`, `this.load`, `Foo.bar`). Anything else
 // -- an inline function expression, a call on a call result, a very long
