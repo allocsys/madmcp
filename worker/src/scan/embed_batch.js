@@ -1,5 +1,12 @@
 import { embedTexts } from '../embed/gemini.js';
 
+// Auth failures (401/403) and rate limits (429, including a recorded
+// cooldown) are about the API keys, not about any one file's content, so
+// retrying file by file can't help and would just burn calls.
+function isKeyLevelError(err) {
+  return err?.status === 401 || err?.status === 403 || err?.status === 429;
+}
+
 // Embeds the chunks of several files together so embedTexts can fill its
 // batches (up to 100 texts each) across file boundaries, instead of making one
 // small call per file.
@@ -7,10 +14,11 @@ import { embedTexts } from '../embed/gemini.js';
 // items: [{ path, chunks: [{ content, ... }] }]
 // returns Map path -> { embeddings } on success, or { error } on failure.
 //
-// Failure isolation is preserved: if the combined call throws (e.g. one
-// oversized chunk hitting Gemini's input limit, or rate-limited keys), each
+// Failure isolation is preserved for content-related errors: if the combined
+// call throws (e.g. one oversized chunk hitting Gemini's input limit), each
 // file is retried on its own so only the file(s) that actually fail are
-// reported as failed and the rest still get indexed.
+// reported as failed and the rest still get indexed. Key-level errors skip
+// the retries (see isKeyLevelError).
 export async function embedFileChunks(items, embed = embedTexts) {
   const results = new Map();
   const withChunks = [];
@@ -28,8 +36,13 @@ export async function embedFileChunks(items, embed = embedTexts) {
       offset += it.chunks.length;
     }
     return results;
-  } catch {
-    // fall through to per-file retries
+  } catch (batchErr) {
+    if (isKeyLevelError(batchErr)) {
+      // Fail the whole window fast; these files retry on the next scan.
+      for (const it of withChunks) results.set(it.path, { error: batchErr });
+      return results;
+    }
+    // Otherwise fall through to per-file retries.
   }
 
   for (const it of withChunks) {
