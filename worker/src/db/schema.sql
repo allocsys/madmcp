@@ -84,14 +84,44 @@ CREATE TABLE IF NOT EXISTS edges (
   id            SERIAL PRIMARY KEY,
   repo_id       INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
   src_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
-  dst_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
+  -- SET NULL (not CASCADE): when a callee's file is re-indexed its symbols are
+  -- deleted and reinserted with new ids. Cascading here wiped the call edges
+  -- of every OTHER (unchanged, not re-parsed) file pointing at them, and nothing
+  -- ever re-created those edges. With SET NULL the edge survives as unresolved
+  -- and the post-scan re-resolve pass (callee_name below) heals it.
+  dst_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL,
   src_file_id   INTEGER REFERENCES files(id) ON DELETE CASCADE,
   dst_file_id   INTEGER REFERENCES files(id) ON DELETE CASCADE,
-  edge_type     TEXT NOT NULL         -- calls | imports | inherits | references
+  edge_type     TEXT NOT NULL,        -- calls | imports | inherits | references
+  callee_name   TEXT,                 -- calls: callee name as written (member prefix stripped), kept so the edge can be re-resolved from DB state
+  import_specifier TEXT               -- imports: raw specifier as written, kept so the edge can be re-resolved
 );
 CREATE INDEX IF NOT EXISTS idx_edges_repo ON edges (repo_id);
 CREATE INDEX IF NOT EXISTS idx_edges_src_symbol ON edges (src_symbol_id);
 CREATE INDEX IF NOT EXISTS idx_edges_dst_symbol ON edges (dst_symbol_id);
+
+-- Idempotent for existing deployed DBs where edges predates these changes.
+-- Safe to run repeatedly (run it on the Render DB before deploying the worker).
+ALTER TABLE edges ADD COLUMN IF NOT EXISTS callee_name TEXT;
+ALTER TABLE edges ADD COLUMN IF NOT EXISTS import_specifier TEXT;
+DO $$
+BEGIN
+  -- Switch edges.dst_symbol_id from ON DELETE CASCADE to ON DELETE SET NULL,
+  -- only if it is not already SET NULL (confdeltype 'n').
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'edges'::regclass
+      AND conname = 'edges_dst_symbol_id_fkey'
+      AND confdeltype <> 'n'
+  ) THEN
+    ALTER TABLE edges DROP CONSTRAINT edges_dst_symbol_id_fkey;
+    ALTER TABLE edges ADD CONSTRAINT edges_dst_symbol_id_fkey
+      FOREIGN KEY (dst_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+-- Unresolved edges the re-resolve pass scans after each scan.
+CREATE INDEX IF NOT EXISTS idx_edges_unresolved_calls ON edges (repo_id)
+  WHERE edge_type = 'calls' AND dst_symbol_id IS NULL AND callee_name IS NOT NULL;
 
 -- per-function/class chunk text + embedding, for semantic search
 CREATE TABLE IF NOT EXISTS chunks (
