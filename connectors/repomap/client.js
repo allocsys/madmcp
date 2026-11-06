@@ -104,7 +104,7 @@ export async function getFreshness({ owner = DEFAULT_OWNER, repo, ref }) {
   // Files whose pass 2 failed last scan. A 'done' scan with such files still
   // advances last_scanned_commit, so "fresh" alone would hide them. Soft-fail:
   // this is extra detail, it must not break the freshness check itself.
-  let unindexedFiles = 0;
+  let unindexedFiles;
   try {
     unindexedFiles = await getUnindexedFileCount(repoRow.id);
   } catch {
