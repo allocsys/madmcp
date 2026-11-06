@@ -156,9 +156,18 @@ export async function insertSymbols({ repoId, fileId, symbols }) {
 export async function insertEdges({ repoId, fileId, edges }) {
   for (const e of edges) {
     await query(
-      `INSERT INTO edges (repo_id, src_symbol_id, dst_symbol_id, src_file_id, dst_file_id, edge_type)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [repoId, e.srcSymbolId || null, e.dstSymbolId || null, fileId, e.dstFileId || null, e.edgeType]
+      `INSERT INTO edges (repo_id, src_symbol_id, dst_symbol_id, src_file_id, dst_file_id, edge_type, callee_name, import_specifier)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        repoId,
+        e.srcSymbolId || null,
+        e.dstSymbolId || null,
+        fileId,
+        e.dstFileId || null,
+        e.edgeType,
+        e.calleeName || null, // kept so an unresolved call can be re-resolved from DB state later
+        e.importSpecifier || null,
+      ]
     );
   }
 }
