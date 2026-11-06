@@ -63,6 +63,32 @@ export function collectImportedFileIds(rawEdges, filePath, fileIndex) {
   return ids;
 }
 
+// A callee we can store and later re-resolve from the database: a plain
+// identifier or dotted chain (`helper`, `this.load`, `Foo.bar`). Anything else
+// -- an inline function expression, a call on a call result, a very long
+// expression -- is not a name, so it is stored as NULL instead of as source text.
+const CALLEE_CHAIN = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+const MAX_CALLEE_LENGTH = 200;
+const MAX_SPECIFIER_LENGTH = 500;
+
+export function storableCalleeName(raw) {
+  if (typeof raw !== 'string' || raw.length > MAX_CALLEE_LENGTH) return null;
+  return CALLEE_CHAIN.test(raw) ? raw : null;
+}
+
+// Adds the data a later re-resolve pass needs (callee_name for calls,
+// import_specifier for imports) onto an edge already returned by resolveEdge.
+// Kept separate from resolveEdge so its return shape stays unchanged.
+export function withEdgeNames(rawEdge, resolvedEdge) {
+  if (rawEdge.edgeType === 'calls') {
+    return { ...resolvedEdge, calleeName: storableCalleeName(rawEdge.calleeName), importSpecifier: null };
+  }
+  const spec = typeof rawEdge.importSpecifier === 'string' && rawEdge.importSpecifier.length <= MAX_SPECIFIER_LENGTH
+    ? rawEdge.importSpecifier
+    : null;
+  return { ...resolvedEdge, calleeName: null, importSpecifier: spec };
+}
+
 function resolveImportSpecifier(specifier, fromPath, fileIndex) {
   if (!specifier || !specifier.startsWith('.')) return null; // bare/package specifier — not in-repo
   const dir = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/')) : '';
