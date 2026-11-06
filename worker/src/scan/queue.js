@@ -157,6 +157,13 @@ async function processJob(job) {
           resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex, edgeCtx)
         );
 
+        // Edges don't depend on embeddings, so write them BEFORE the embedding
+        // call. If embedTexts throws below (rate-limited/bad Gemini keys), the
+        // file is still reported as failed and retried next scan (its
+        // fully_indexed_at stays NULL), but its graph edges survive instead of
+        // being lost along with the chunks.
+        await insertEdges({ repoId: job.repo_id, fileId: parsed.fileId, edges: resolvedEdges });
+
         const chunks = buildChunks({ filePath: path, content: parsed.content, symbols: parsed.symbols });
         const embeddings = await embedTexts(chunks.map((c) => c.content));
         const chunksWithEmbedding = chunks.map((c, i) => ({
@@ -166,7 +173,6 @@ async function processJob(job) {
           contentHash: c.contentHash,
         }));
 
-        await insertEdges({ repoId: job.repo_id, fileId: parsed.fileId, edges: resolvedEdges });
         await insertChunks({ repoId: job.repo_id, fileId: parsed.fileId, chunks: chunksWithEmbedding });
         await markFileIndexed(parsed.fileId);
         chunksEmbedded += chunksWithEmbedding.length;
