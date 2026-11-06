@@ -70,7 +70,7 @@ describe('buildEdges', () => {
     assert.equal(edges[0].srcLocalId, 0);
   });
 
-  test('drops a call edge with no enclosing symbol (top-level call, no fn/method around it)', () => {
+  test('keeps a call edge with no enclosing symbol as a file-level edge (srcLocalId null)', () => {
     const content = `helper();`;
     const calleeIdx = 0;
     const calleeNode = node({ type: 'identifier', startIndex: calleeIdx, endIndex: 'helper'.length });
@@ -84,7 +84,10 @@ describe('buildEdges', () => {
 
     const edges = buildEdges({ filePath: 'a.js', content, tree: { rootNode: root }, symbolLocalIdByNodeId: new Map() });
 
-    assert.deepEqual(edges, []);
+    assert.equal(edges.length, 1);
+    assert.equal(edges[0].edgeType, 'calls');
+    assert.equal(edges[0].calleeName, 'helper');
+    assert.equal(edges[0].srcLocalId, null);
   });
 
   test('falls back to children[0] for the callee when childForFieldName("function") is unavailable', () => {
