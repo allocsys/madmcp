@@ -18,7 +18,7 @@ const RESOLVE_EXTENSIONS = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.
 export function resolveEdge(edge, filePath, symbolIdByLocal, symbolIndex, fileIndex, ctx = {}) {
   if (edge.edgeType === 'calls') {
     const srcSymbolId = edge.srcLocalId != null ? symbolIdByLocal.get(edge.srcLocalId) : null;
-    const dstSymbolId = pickCallee(symbolIndex.get(edge.calleeName), ctx);
+    const dstSymbolId = lookupCallee(edge.calleeName, symbolIndex, ctx);
     return { edgeType: 'calls', srcSymbolId, dstSymbolId: dstSymbolId ?? null };
   }
 
@@ -52,6 +52,57 @@ function pickCallee(candidates, ctx) {
   return null;
 }
 
+const SELF_RECEIVERS = new Set(['this', 'self']);
+
+// A class/object method rather than a free function. The parser marks
+// JS/TS/Java/Go/C# methods with kind 'method' and gives Python methods (kind
+// 'function') a `Class.name` qualified name.
+function isMethod(c) {
+  return (
+    c.kind === 'method' ||
+    (c.qualifiedName != null && c.qualifiedName !== c.name && c.qualifiedName.endsWith(`.${c.name}`))
+  );
+}
+
+// Resolves the callee text of a call edge to a symbol id, or null.
+//   helper         -> pickCallee (unique / same-file / imported-file)
+//   this.x, self.x -> a method named x defined in the calling file (exactly one)
+//   super.x        -> unresolved (the parent class is not known here)
+//   Foo.bar        -> the symbol whose qualified name is exactly Foo.bar, if unique
+//   obj.x          -> a METHOD named x in the calling file or in a file it imports,
+//                     exactly one. Never a repo-wide guess: the receiver is usually a
+//                     value of unknown type (arr.map, db.query).
+//   a.b.x, calls on call results, anything that is not a plain identifier chain
+//                  -> unresolved (an exact qualified-name hit still resolves).
+// ctx: { fileId, importedFileIds } of the calling file, as for pickCallee.
+export function lookupCallee(calleeName, symbolIndex, ctx = {}) {
+  if (storableCalleeName(calleeName) == null) return null;
+  if (!calleeName.includes('.')) return pickCallee(symbolIndex.get(calleeName), ctx);
+
+  const parts = calleeName.split('.');
+  const candidates = symbolIndex.get(parts[parts.length - 1]);
+  if (!candidates || candidates.length === 0) return null;
+
+  const sameFile = (c) => ctx.fileId != null && String(c.fileId) === String(ctx.fileId);
+  const imported =
+    ctx.importedFileIds && ctx.importedFileIds.size ? new Set([...ctx.importedFileIds].map(String)) : null;
+  const inScope = (c) => sameFile(c) || (imported != null && imported.has(String(c.fileId)));
+
+  if (parts.length === 2 && parts[0] === 'super') return null;
+
+  if (parts.length === 2 && SELF_RECEIVERS.has(parts[0])) {
+    const own = candidates.filter((c) => sameFile(c) && isMethod(c));
+    return own.length === 1 ? own[0].symbolId : null;
+  }
+
+  const exact = candidates.filter((c) => c.qualifiedName === calleeName);
+  if (exact.length === 1) return exact[0].symbolId;
+
+  if (parts.length !== 2) return null;
+  const methods = candidates.filter((c) => isMethod(c) && inScope(c));
+  return methods.length === 1 ? methods[0].symbolId : null;
+}
+
 // File ids this file imports, from its raw `imports` edges.
 export function collectImportedFileIds(rawEdges, filePath, fileIndex) {
   const ids = new Set();
@@ -79,8 +130,8 @@ export function collectImportedFileIds(rawEdges, filePath, fileIndex) {
 //
 // Imports are resolved first and feed the import set used to disambiguate
 // calls, so a call can resolve through an import that was itself healed in the
-// same pass. Dotted callees (this.x, obj.x) are left alone here: member-call
-// resolution has its own, stricter rules.
+// same pass. Callee text goes through lookupCallee, so member calls follow its
+// stricter rules.
 export function planReResolution({ unresolvedImports, importedFileIds, unresolvedCalls, symbolIndex, fileIndex }) {
   const imported = new Map();
   for (const [fileId, set] of importedFileIds) imported.set(String(fileId), new Set(set));
@@ -97,8 +148,7 @@ export function planReResolution({ unresolvedImports, importedFileIds, unresolve
 
   const callUpdates = [];
   for (const e of unresolvedCalls) {
-    if (!e.calleeName || e.calleeName.includes('.')) continue;
-    const dstSymbolId = pickCallee(symbolIndex.get(e.calleeName), {
+    const dstSymbolId = lookupCallee(e.calleeName, symbolIndex, {
       fileId: e.srcFileId,
       importedFileIds: imported.get(String(e.srcFileId)),
     });
