@@ -65,3 +65,25 @@ test('embedFileChunks falls back per file so one bad file does not fail the othe
   assert.equal(res.get('good').embeddings.length, 1);
   assert.equal(res.get('broken').error.message, 'too big');
 });
+
+test('embedFileChunks does not retry per file on auth or rate-limit errors', async () => {
+  for (const status of [401, 403, 429]) {
+    let calls = 0;
+    const embed = async () => {
+      calls++;
+      const err = new Error(`status ${status}`);
+      err.status = status;
+      throw err;
+    };
+    const items = [
+      { path: 'a', chunks: [{ content: 'x' }] },
+      { path: 'b', chunks: [{ content: 'y' }] },
+      { path: 'c', chunks: [] },
+    ];
+    const res = await embedFileChunks(items, embed);
+    assert.equal(calls, 1, `status ${status} should make exactly one call`);
+    assert.equal(res.get('a').error.status, status);
+    assert.equal(res.get('b').error.status, status);
+    assert.deepEqual(res.get('c').embeddings, []);
+  }
+});
