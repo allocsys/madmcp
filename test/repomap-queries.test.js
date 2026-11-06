@@ -254,6 +254,9 @@ describe("connectors/repomap/queries.js", () => {
             }],
           });
         }
+        if (sql.includes("e.src_symbol_id IS NULL")) {
+          return Promise.resolve({ rows: [] }); // module-level callers: none
+        }
         return Promise.reject(new Error("unexpected sql: " + sql));
       });
 
@@ -291,6 +294,9 @@ describe("connectors/repomap/queries.js", () => {
         if (sql.includes("WITH RECURSIVE walk")) {
           return Promise.resolve({ rows: [] }); // no nodes reached
         }
+        if (sql.includes("e.src_symbol_id IS NULL")) {
+          return Promise.resolve({ rows: [] }); // module-level callers: none
+        }
         return Promise.reject(new Error("unexpected sql: " + sql));
       });
 
@@ -316,6 +322,9 @@ describe("connectors/repomap/queries.js", () => {
         }
         if (sql.includes("WITH RECURSIVE walk")) {
           return Promise.resolve({ rows: [] });
+        }
+        if (sql.includes("e.src_symbol_id IS NULL")) {
+          return Promise.resolve({ rows: [] }); // module-level callers: none
         }
         return Promise.reject(new Error("unexpected sql: " + sql));
       });
@@ -345,6 +354,9 @@ describe("connectors/repomap/queries.js", () => {
         }
         if (sql.includes("WITH RECURSIVE walk")) {
           return Promise.resolve({ rows: [] });
+        }
+        if (sql.includes("e.src_symbol_id IS NULL")) {
+          return Promise.resolve({ rows: [] }); // module-level callers: none
         }
         return Promise.reject(new Error("unexpected sql: " + sql));
       });
