@@ -30,30 +30,44 @@ const SYMBOL_NODE_TYPES = new Set([
   'arrow_function', // only kept when assigned to a name — filtered in extractSymbols
 ]);
 
-let initialized = false;
+// Both caches hold promises rather than resolved values, so concurrent
+// parseFile calls (pass 1 runs several at once) share a single Parser.init()
+// and a single grammar load per language instead of racing to do them twice.
+let initPromise = null;
 const parserCache = new Map();
 
 export function detectLanguage(filePath) {
   return LANGUAGE_BY_EXT[path.extname(filePath)] || null;
 }
 
-async function initTreeSitter() {
-  if (!initialized) {
-    await Parser.init();
-    initialized = true;
+function initTreeSitter() {
+  if (!initPromise) {
+    initPromise = Parser.init().catch((err) => {
+      initPromise = null; // let a later call retry instead of caching the failure
+      throw err;
+    });
   }
+  return initPromise;
 }
 
-async function getParserFor(language) {
+async function loadParser(language) {
   await initTreeSitter();
-  if (parserCache.has(language)) return parserCache.get(language);
-
   const wasmPath = new URL(`../../grammars/tree-sitter-${language}.wasm`, import.meta.url);
   const Lang = await Parser.Language.load(wasmPath.pathname);
   const parser = new Parser();
   parser.setLanguage(Lang);
-  parserCache.set(language, parser);
   return parser;
+}
+
+function getParserFor(language) {
+  if (!parserCache.has(language)) {
+    const pending = loadParser(language).catch((err) => {
+      parserCache.delete(language); // don't cache a failed load
+      throw err;
+    });
+    parserCache.set(language, pending);
+  }
+  return parserCache.get(language);
 }
 
 // Parses a file's source into symbols with line ranges + a rough signature.
