@@ -34,6 +34,7 @@ vi.mock("../connectors/repomap/queries.js", () => ({
   queryChunksDb: vi.fn(),
   queryGraphDb: vi.fn(),
   getRepoRow: vi.fn(),
+  getUnindexedFileCount: vi.fn(),
 }));
 
 // ensureFresh()'s HEAD-sha check goes through githubRequest, not raw fetch --
