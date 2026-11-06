@@ -22,6 +22,29 @@ describe("connectors/repomap/queries.js", () => {
     vi.clearAllMocks();
   });
 
+  describe("getUnindexedFileCount", () => {
+    it("counts the repo's files whose fully_indexed_at is NULL", async () => {
+      const { query } = await import("../connectors/repomap/db.js");
+      query.mockResolvedValueOnce({ rows: [{ n: 4 }] });
+
+      const { getUnindexedFileCount } = await import("../connectors/repomap/queries.js");
+      const n = await getUnindexedFileCount(7);
+
+      expect(n).toBe(4);
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/FROM files WHERE repo_id = \$1 AND fully_indexed_at IS NULL/);
+      expect(params).toEqual([7]);
+    });
+
+    it("returns 0 when the query yields no row", async () => {
+      const { query } = await import("../connectors/repomap/db.js");
+      query.mockResolvedValueOnce({ rows: [] });
+
+      const { getUnindexedFileCount } = await import("../connectors/repomap/queries.js");
+      expect(await getUnindexedFileCount(7)).toBe(0);
+    });
+  });
+
   describe("queryChunksDb", () => {
     it("throws if owner or repo is missing", async () => {
       const { queryChunksDb } = await import("../connectors/repomap/queries.js");
