@@ -5,6 +5,7 @@ import { diffFiles } from './hash.js';
 import { parseFile } from './parse.js';
 import { buildChunks } from './chunk.js';
 import { buildEdges } from './graph.js';
+import { resolveEdge, collectImportedFileIds } from './resolve.js';
 import { embedTexts } from '../embed/gemini.js';
 import {
   upsertRepo,
@@ -35,11 +36,6 @@ import {
 // comes from SELECT ... FOR UPDATE SKIP LOCKED, not from this being unique.
 const WORKER_ID = `${process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || 'local'}-${randomUUID().slice(0, 8)}`;
 const POLL_INTERVAL_MS = 5000;
-
-// Extensions tried (in order, with no extension first) when resolving a
-// relative import specifier that omits its extension, e.g. './foo' could be
-// './foo.js' or './foo/index.ts'.
-const RESOLVE_EXTENSIONS = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rb'];
 
 // clone tokens are short-lived and per-request (minted by madmcp via
 // gh_token) and are NOT persisted to scan_jobs. They're stashed
@@ -151,8 +147,14 @@ async function processJob(job) {
           tree: parsed.tree,
           symbolLocalIdByNodeId: parsed.symbolLocalIdByNodeId,
         });
+        // Import context lets resolveEdge disambiguate calls to names that are
+        // defined in several files (same-file, then imported-file candidates).
+        const edgeCtx = {
+          fileId: parsed.fileId,
+          importedFileIds: collectImportedFileIds(rawEdges, path, fileIndex),
+        };
         const resolvedEdges = rawEdges.map((e) =>
-          resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex)
+          resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex, edgeCtx)
         );
 
         const chunks = buildChunks({ filePath: path, content: parsed.content, symbols: parsed.symbols });
@@ -195,48 +197,6 @@ async function processJob(job) {
   } finally {
     if (cloned) await cloned.cleanup();
   }
-}
-
-// Fills in dstSymbolId (for `calls`) or dstFileId (for `imports`) where the
-// target can be determined; leaves them null otherwise (e.g. calls into a
-// third-party package, or an ambiguous name that matches multiple symbols).
-function resolveEdge(edge, filePath, symbolIdByLocal, symbolIndex, fileIndex) {
-  if (edge.edgeType === 'calls') {
-    const srcSymbolId = edge.srcLocalId != null ? symbolIdByLocal.get(edge.srcLocalId) : null;
-    const candidates = symbolIndex.get(edge.calleeName);
-    // Multiple symbols share this name across the repo — resolving to one
-    // of them would likely be wrong, so leave it unresolved rather than guess.
-    const dstSymbolId = candidates && candidates.length === 1 ? candidates[0].symbolId : null;
-    return { edgeType: 'calls', srcSymbolId, dstSymbolId: dstSymbolId || null };
-  }
-
-  // imports
-  const dstFileId = resolveImportSpecifier(edge.importSpecifier, filePath, fileIndex);
-  return { edgeType: 'imports', srcSymbolId: null, dstFileId };
-}
-
-function resolveImportSpecifier(specifier, fromPath, fileIndex) {
-  if (!specifier || !specifier.startsWith('.')) return null; // bare/package specifier — not in-repo
-  const dir = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/')) : '';
-  const base = normalizePath(dir ? `${dir}/${specifier}` : specifier);
-
-  for (const ext of RESOLVE_EXTENSIONS) {
-    if (fileIndex.has(base + ext)) return fileIndex.get(base + ext);
-    if (fileIndex.has(`${base}/index${ext}`)) return fileIndex.get(`${base}/index${ext}`);
-  }
-  return null;
-}
-
-// Collapses '.' and '..' segments in a joined relative path, e.g.
-// 'src/scan/../db/client' -> 'src/db/client'.
-function normalizePath(p) {
-  const parts = [];
-  for (const seg of p.split('/')) {
-    if (seg === '.' || seg === '') continue;
-    if (seg === '..') parts.pop();
-    else parts.push(seg);
-  }
-  return parts.join('/');
 }
 
 // Recover any jobs left `queued` across a restart, and keep polling so a job
