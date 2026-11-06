@@ -1,27 +1,9 @@
 import 'dotenv/config';
 import express from 'express';
 import { requireSharedSecret } from './auth.js';
-import { runMigrations } from './db/migrate.js';
-
-// Bring the database schema up to date before anything else touches it.
-// schema.sql is idempotent (see db/migrate.js), so this is safe on every start.
-// A failed migration exits non-zero so the deploy shows as failed instead of
-// running new code against an old schema. SKIP_MIGRATIONS=1 bypasses it.
-if (process.env.SKIP_MIGRATIONS !== '1') {
-  try {
-    await runMigrations();
-    console.log('repo-map-worker: database schema is up to date');
-  } catch (err) {
-    console.error('repo-map-worker: schema migration failed, exiting:', err);
-    process.exit(1);
-  }
-}
-
-// Loaded only after the migration: scan/queue.js starts its job loop as soon
-// as it is imported, and that loop must not run against an outdated schema.
-const { enqueueScan, getJobStatus, runLoop } = await import('./scan/queue.js');
-const { queryChunks, queryGraph } = await import('./query/index.js');
-const { embedNotionPage } = await import('./notion/embed_notion.js');
+import { enqueueScan, getJobStatus, runLoop } from './scan/queue.js';
+import { queryChunks, queryGraph } from './query/index.js';
+import { embedNotionPage } from './notion/embed_notion.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
