@@ -7,7 +7,8 @@ import { buildChunks } from './chunk.js';
 import { buildEdges } from './graph.js';
 import { resolveEdge, collectImportedFileIds, withEdgeNames } from './resolve.js';
 import { reResolveRepoEdges } from './reresolve.js';
-import { embedTexts } from '../embed/gemini.js';
+import { mapLimit } from './concurrency.js';
+import { embedFileChunks } from './embed_batch.js';
 import {
   upsertRepo,
   getRepoById,
@@ -37,6 +38,16 @@ import {
 // comes from SELECT ... FOR UPDATE SKIP LOCKED, not from this being unique.
 const WORKER_ID = `${process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || 'local'}-${randomUUID().slice(0, 8)}`;
 const POLL_INTERVAL_MS = 5000;
+
+// How many files pass 1 (parse + symbols) and pass 2 (edges, chunk inserts)
+// work on at once. Kept small: each in-flight file holds a DB connection, and
+// the db pool is shared with query traffic. Override with SCAN_CONCURRENCY.
+const SCAN_CONCURRENCY = Math.max(1, Number(process.env.SCAN_CONCURRENCY) || 4);
+// Pass 2 handles files in windows of this many: edges for the window are
+// written concurrently, then the window's chunks are embedded together (full
+// 100-text Gemini batches across files) and inserted. Bounds how many chunk
+// texts + embeddings sit in memory at once.
+const PASS2_WINDOW_FILES = 16;
 
 // clone tokens are short-lived and per-request (minted by madmcp via
 // gh_token) and are NOT persisted to scan_jobs. They're stashed
@@ -106,15 +117,17 @@ async function processJob(job) {
     // Pass 1: parse every changed file and insert its files+symbols rows.
     // This has to happen for ALL changed files before pass 2, because
     // resolving a cross-file `calls` or `imports` edge requires the target
-    // symbol/file to already have a real database id.
-    const parsedByPath = new Map();
-    for (const { path, content, contentHash } of changed) {
+    // symbol/file to already have a real database id. Files are independent
+    // of each other here, so a few run at once; results come back in input
+    // order so pass 2 still sees files in a stable order.
+    const pass1Results = await mapLimit(changed, SCAN_CONCURRENCY, async ({ path, content, contentHash }) => {
       const { language, tree, symbols, symbolLocalIdByNodeId } = await parseFile(path, content);
       const fileRow = await upsertFile({ repoId: job.repo_id, path, language, contentHash });
       await deleteFileArtifacts(fileRow.id);
       const symbolIdByLocal = await insertSymbols({ repoId: job.repo_id, fileId: fileRow.id, symbols });
-      parsedByPath.set(path, { fileId: fileRow.id, content, tree, symbols, symbolLocalIdByNodeId, symbolIdByLocal });
-    }
+      return [path, { fileId: fileRow.id, content, tree, symbols, symbolLocalIdByNodeId, symbolIdByLocal }];
+    });
+    const parsedByPath = new Map(pass1Results);
 
     // Pass 2: build a repo-wide name/path index (covers both the symbols
     // just inserted above and anything from unchanged files already in the
@@ -122,68 +135,91 @@ async function processJob(job) {
     const symbolIndex = await getSymbolIndex(job.repo_id); // name -> [{symbolId, fileId, qualifiedName}]
     const fileIndex = await getFileIndex(job.repo_id); // path -> fileId
 
-    // Each file's pass-2 work (edges + chunks/embeddings) is isolated in its
-    // own try/catch. Previously a single file's embedTexts() call throwing
-    // (e.g. an oversized chunk hitting Gemini's input-size limit -- see
-    // chunk.js) propagated straight out of this loop, aborting the ENTIRE
-    // job. That was bad in two ways: (1) every OTHER changed file in this
-    // scan -- including ones already successfully processed earlier in this
-    // same loop -- got marked 'failed' along with it, and (2) because pass 1
-    // already committed this file's content_hash unconditionally, the next
-    // scan's diff would see "unchanged" and skip it forever, permanently
-    // stranding it half-indexed (symbols present, edges/chunks never
-    // inserted). Isolating the failure here means: other files still get
-    // fully indexed this run, and the failed file's fully_indexed_at stays
-    // NULL (upsertFile reset it in pass 1, and markFileIndexed below is only
+    // Each file's pass-2 work (edges + chunks/embeddings) is isolated so one
+    // file failing never aborts the job. Previously a single file's
+    // embedTexts() call throwing (e.g. an oversized chunk hitting Gemini's
+    // input-size limit -- see chunk.js) propagated straight out of the loop,
+    // aborting the ENTIRE job. That was bad in two ways: (1) every OTHER
+    // changed file in this scan -- including ones already successfully
+    // processed earlier in the same loop -- got marked 'failed' along with
+    // it, and (2) because pass 1 already committed this file's content_hash
+    // unconditionally, the next scan's diff would see "unchanged" and skip it
+    // forever, permanently stranding it half-indexed (symbols present,
+    // edges/chunks never inserted). With isolation: other files still get
+    // fully indexed this run, and a failed file's fully_indexed_at stays NULL
+    // (upsertFile reset it in pass 1, and markFileIndexed below is only
     // reached on success) so getKnownFileHashes won't trust its hash next
     // time -- it keeps getting retried on every future scan instead of
     // silently vanishing from the index.
     let chunksEmbedded = 0;
     const failedFiles = [];
-    for (const [path, parsed] of parsedByPath) {
-      try {
-        const rawEdges = buildEdges({
-          filePath: path,
-          content: parsed.content,
-          tree: parsed.tree,
-          symbolLocalIdByNodeId: parsed.symbolLocalIdByNodeId,
-        });
-        // Import context lets resolveEdge disambiguate calls to names that are
-        // defined in several files (same-file, then imported-file candidates).
-        const edgeCtx = {
-          fileId: parsed.fileId,
-          importedFileIds: collectImportedFileIds(rawEdges, path, fileIndex),
-        };
-        const resolvedEdges = rawEdges.map((e) =>
-          withEdgeNames(e, resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex, edgeCtx))
-        );
+    const recordFailure = (path, err) => {
+      console.error(`repo-map scan job ${job.id}: pass 2 failed for ${path} (will retry next scan):`, err);
+      failedFiles.push(`${path}: ${err.message}`);
+    };
 
-        // Edges don't depend on embeddings, so write them BEFORE the embedding
-        // call. If embedTexts throws below (rate-limited/bad Gemini keys), the
-        // file is still reported as failed and retried next scan (its
-        // fully_indexed_at stays NULL), but its graph edges survive instead of
-        // being lost along with the chunks.
-        await insertEdges({ repoId: job.repo_id, fileId: parsed.fileId, edges: resolvedEdges });
+    const entries = [...parsedByPath];
+    for (let w = 0; w < entries.length; w += PASS2_WINDOW_FILES) {
+      const windowEntries = entries.slice(w, w + PASS2_WINDOW_FILES);
 
-        const chunks = buildChunks({ filePath: path, content: parsed.content, symbols: parsed.symbols });
-        const embeddings = await embedTexts(chunks.map((c) => c.content));
-        const chunksWithEmbedding = chunks.map((c, i) => ({
-          symbolId: c.localId != null ? parsed.symbolIdByLocal.get(c.localId) : null,
-          content: c.content,
-          embedding: embeddings[i],
-          contentHash: c.contentHash,
-        }));
+      // 2a: edges + chunk building, a few files at a time. Edges don't depend
+      // on embeddings, so they are written BEFORE any embedding call. If
+      // embedding fails later (rate-limited/bad Gemini keys), the file is still
+      // reported as failed and retried next scan (its fully_indexed_at stays
+      // NULL), but its graph edges survive instead of being lost along with
+      // the chunks.
+      const prepared = await mapLimit(windowEntries, SCAN_CONCURRENCY, async ([path, parsed]) => {
+        try {
+          const rawEdges = buildEdges({
+            filePath: path,
+            content: parsed.content,
+            tree: parsed.tree,
+            symbolLocalIdByNodeId: parsed.symbolLocalIdByNodeId,
+          });
+          // Import context lets resolveEdge disambiguate calls to names that are
+          // defined in several files (same-file, then imported-file candidates).
+          const edgeCtx = {
+            fileId: parsed.fileId,
+            importedFileIds: collectImportedFileIds(rawEdges, path, fileIndex),
+          };
+          const resolvedEdges = rawEdges.map((e) =>
+            withEdgeNames(e, resolveEdge(e, path, parsed.symbolIdByLocal, symbolIndex, fileIndex, edgeCtx))
+          );
+          await insertEdges({ repoId: job.repo_id, fileId: parsed.fileId, edges: resolvedEdges });
 
-        await insertChunks({ repoId: job.repo_id, fileId: parsed.fileId, chunks: chunksWithEmbedding });
-        await markFileIndexed(parsed.fileId);
-        chunksEmbedded += chunksWithEmbedding.length;
-      } catch (err) {
-        console.error(`repo-map scan job ${job.id}: pass 2 failed for ${path} (will retry next scan):`, err);
-        failedFiles.push(`${path}: ${err.message}`);
-      } finally {
-        // Counts as "done" either way -- see incrementJobFilesDone's docstring.
-        await incrementJobFilesDone(job.id);
-      }
+          const chunks = buildChunks({ filePath: path, content: parsed.content, symbols: parsed.symbols });
+          return { path, parsed, chunks };
+        } catch (err) {
+          recordFailure(path, err);
+          // Counts as "done" either way -- see incrementJobFilesDone's docstring.
+          await incrementJobFilesDone(job.id);
+          return null;
+        }
+      });
+      const ready = prepared.filter(Boolean);
+
+      // 2b: embed the window's chunks together (full batches across files),
+      // then insert + mark indexed per file, a few files at a time.
+      const embedded = await embedFileChunks(ready);
+      await mapLimit(ready, SCAN_CONCURRENCY, async ({ path, parsed, chunks }) => {
+        try {
+          const result = embedded.get(path);
+          if (result.error) throw result.error;
+          const chunksWithEmbedding = chunks.map((c, i) => ({
+            symbolId: c.localId != null ? parsed.symbolIdByLocal.get(c.localId) : null,
+            content: c.content,
+            embedding: result.embeddings[i],
+            contentHash: c.contentHash,
+          }));
+          await insertChunks({ repoId: job.repo_id, fileId: parsed.fileId, chunks: chunksWithEmbedding });
+          await markFileIndexed(parsed.fileId);
+          chunksEmbedded += chunksWithEmbedding.length;
+        } catch (err) {
+          recordFailure(path, err);
+        } finally {
+          await incrementJobFilesDone(job.id);
+        }
+      });
     }
 
     // Heal edges that have no target yet (callee file changed, or the target
