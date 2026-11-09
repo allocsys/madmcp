@@ -490,6 +490,28 @@ export const EDITOR_RISK_FLAG_THRESHOLD = Number.isNaN(_editorRiskFlagThresholdP
 
 export const MCP_SHARED_KEY = process.env.MCP_SHARED_KEY;
 
+// Separate shared-secret auth for the limited Muse endpoint (/mcp/muse).
+// Deliberately a DIFFERENT key from MCP_SHARED_KEY, and fail-closed: when
+// unset the Muse endpoint 401s every request instead of falling back to
+// open access (unlike the legacy /mcp behaviour above). Muse traffic does
+// not come from Anthropic's IP range, so /mcp/muse also skips the IP
+// allowlist in server.js -- this key is the only gate, so make it long,
+// random, and rotate it if it ever leaks. See server.js's
+// MUSE_ALLOWED_TOOLS for the read-only tool set it unlocks.
+export const MUSE_MCP_KEY = process.env.MUSE_MCP_KEY;
+
+// The single Notion page Claude and Muse use as a shared bridge (see
+// connectors/bridge/tools.js). bridge_post appends to THIS page and no
+// other -- there is no page_id parameter, so a caller cannot redirect
+// the write elsewhere. No default: when unset, bridge_post fails closed
+// with a clear error instead of writing nowhere / anywhere. Create the
+// page in Notion, share it with the madmcp integration, and set this to
+// its 32-char page ID (the segment in the page URL).
+export const BRIDGE_PAGE_ID = process.env.BRIDGE_PAGE_ID;
+// Max message length for bridge_post. Over-long messages are refused,
+// not silently truncated, so the sender knows to split them.
+export const BRIDGE_MAX_MESSAGE_CHARS = Number(process.env.BRIDGE_MAX_MESSAGE_CHARS) || 4000;
+
 // repo_map worker (worker/ subfolder, deployed separately on Render) --
 // madmcp talks to it as a client over HTTP, authenticated with a shared
 // secret (worker/src/auth.js expects "Authorization: Bearer <secret>").

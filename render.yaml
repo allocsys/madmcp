@@ -12,6 +12,21 @@ services:
       - key: MCP_SHARED_KEY
         generateValue: true
 
+      # Separate key for the limited Muse endpoint (/mcp/muse, read-only
+      # GitHub + Notion tools only). Auto-generated like MCP_SHARED_KEY
+      # above -- copy its value from the Render dashboard into Muse's
+      # connector config; never reuse the Claude key here.
+      - key: MUSE_MCP_KEY
+        generateValue: true
+
+      # The Notion page Claude and Muse use as their shared bridge
+      # (bridge_post appends to this page and no other). Create the page
+      # in Notion, share it with the madmcp integration, and paste its
+      # 32-char page ID here. Leave blank to disable the bridge (bridge_post
+      # then fails with a clear error instead of posting anywhere).
+      - key: BRIDGE_PAGE_ID
+        sync: false
+
       # Connector tokens are all optional and independent. Leave any of
       # these blank in the Render UI to skip that connector — its tools
       # will just fail at call time rather than blocking the others.

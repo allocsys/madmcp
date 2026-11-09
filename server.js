@@ -9,7 +9,7 @@ import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC, REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, REPO_MAP_DATABASE_URL, TERMUX_ENABLED } from "./config.js";
+import { GITHUB_TOKEN, NOTION_TOKEN, MEM0_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CONTEXT7_API_KEY, GEMINI_API_KEY, JULES_API_KEY, MCP_SHARED_KEY, MUSE_MCP_KEY, IP_ALLOWLIST_ENABLED, ALLOWED_IP_RANGES, TRUST_PROXY_HOPS, GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, DELEGATE_AGENT_ASYNC, EDITOR_AGENT_ASYNC, REPO_MAP_WORKER_URL, REPO_MAP_SHARED_SECRET, REPO_MAP_DATABASE_URL, TERMUX_ENABLED } from "./config.js";
 import { isQStashConfigured, isEditorQStashConfigured } from "./connectors/delegate/qstash_client.js";
 import { safeEqual, isIpInCidr, getClientIp } from "./connectors/security.js";
 import * as github     from "./connectors/github/tools.js";
@@ -28,6 +28,7 @@ import * as sync       from "./connectors/sync/mem0_notion.js";
 import * as jules      from "./connectors/jules/tools.js";
 import * as repomap    from "./connectors/repomap/tools.js";
 import * as termux     from "./connectors/termux/tools.js";
+import * as bridge     from "./connectors/bridge/tools.js";
 import { handleTermuxPoll, handleTermuxResult, termuxAgentLimiter } from "./connectors/termux/agent_routes.js";
 
 // Factory function to build a fresh McpServer instance with all connectors registered.
@@ -43,6 +44,76 @@ export function createMcpServer() {
     version: "2.1.0",
   });
 
+  registerAllConnectors(server, "claude");
+
+  return server;
+}
+
+// --- Muse (limited) server --------------------------------------------
+// Read-only GitHub + Notion tools, plus bridge_post -- the ONE write Muse
+// gets (append-only to the single configured bridge page, sender bound to
+// "muse"). Everything else the full server offers is excluded here,
+// including gh_token (mints single-use contents:write tokens -- Joe
+// decided on 2026-11-09 that Muse doesn't need it, since GitHub access
+// comes from the official GitHub MCP instead), tools that mix reads with
+// writes in a single tool (checkpoint, notion_chart) and every delegate
+// (delegate_* can write and can loop around a tool-level filter), every
+// Cloudflare / Mem0 / Context7 / Jules / fetch tool, and termux_* (runs
+// commands on the owner's phone). This allowlist is enforced server-side
+// at registration time: a tool not in this set is never registered on the
+// Muse server, so no client -- however it is configured -- can call it
+// through /mcp/muse. Adding a tool here is a deliberate, reviewed
+// decision; a new tool added to a connector stays off the Muse surface
+// until it is added to this list.
+//
+// Caveat, stated plainly: the underlying connector tokens (GITHUB_TOKEN,
+// NOTION_TOKEN) are still the shared ones, so this limits the MCP
+// surface, not the tokens themselves. A read-only GitHub token for Muse
+// would be the next hardening step if that distinction ever matters.
+export const MUSE_ALLOWED_TOOLS = new Set([
+  // GitHub, read-only (all GETs against the GitHub API)
+  "read_file",
+  "list_directory",
+  "get_file_tree",
+  "search_code",
+  "pr_read",
+  "repo_inspect",
+  "repo_metadata",
+  "list_notifications",
+  // Notion, read-only
+  "notion_find",
+  "notion_read",
+  // Bridge: the one append-only write (single configured page, sender "muse")
+  "bridge_post",
+]);
+
+// A view of a real McpServer that only forwards tool registrations in
+// MUSE_ALLOWED_TOOLS and drops MCP resources entirely (the github-file
+// resource is read-only, but Muse gets tools only -- smallest surface).
+// Connectors only ever call server.tool() / server.resource() during
+// registration (verified by grep), so this wrapper covers them all
+// without touching any connector code.
+function museServerView(server) {
+  return {
+    tool: (name, ...args) => {
+      if (MUSE_ALLOWED_TOOLS.has(name)) server.tool(name, ...args);
+    },
+    resource: () => {},
+  };
+}
+
+export function createMuseMcpServer() {
+  const server = new McpServer({
+    name: "madmcp-server-muse",
+    version: "2.1.0",
+  });
+
+  registerAllConnectors(museServerView(server), "muse");
+
+  return server;
+}
+
+function registerAllConnectors(server, sender = "claude") {
   github.register(server);
   resource.register(server);
   notion.register(server);
@@ -57,8 +128,7 @@ export function createMcpServer() {
   jules.register(server);
   repomap.register(server);
   termux.register(server); // no-op unless TERMUX_ENABLED=true
-
-  return server;
+  bridge.register(server, sender); // sender bound per server: "claude" on /mcp, "muse" on /mcp/muse
 }
 
 // Adding a new connector:
@@ -104,11 +174,53 @@ function requireMcpKey(req, res, next) {
   });
 }
 
+// Auth for the limited Muse endpoint (/mcp/muse). Same header/path-key
+// shape as requireMcpKey above, but against the SEPARATE MUSE_MCP_KEY --
+// the Claude key is never accepted here, and the Muse key is never
+// accepted on /mcp. Fail-closed: with no MUSE_MCP_KEY configured the
+// endpoint 401s everything instead of opening up (unlike /mcp's legacy
+// open-when-unset behaviour). No IP allowlist is applied to this route:
+// Muse traffic doesn't originate from Anthropic's ranges, so the key is
+// the only gate -- keep it long, random, and separate.
+function requireMuseKey(req, res, next) {
+  if (!MUSE_MCP_KEY) {
+    return res.status(401).json({
+      jsonrpc: "2.0",
+      error: { code: -32001, message: "Unauthorized: Muse access is not configured on this server" },
+      id: null,
+    });
+  }
+  const headerKey = req.get("x-manufact-key");
+  const pathKey   = req.params.key;
+  if ((headerKey && safeEqual(headerKey, MUSE_MCP_KEY)) || (pathKey && safeEqual(pathKey, MUSE_MCP_KEY))) {
+    return next();
+  }
+  res.status(401).json({
+    jsonrpc: "2.0",
+    error: { code: -32001, message: "Unauthorized: missing or invalid Muse key" },
+    id: null,
+  });
+}
+
 // Rate limit auth attempts / tool calls on /mcp so a leaked or guessed key
 // can't be used to hammer GitHub/Cloudflare/etc, and the key itself can't be
 // brute-forced freely. Applied before requireMcpKey so failed-auth attempts
 // count against the limit too.
 const mcpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    jsonrpc: "2.0",
+    error: { code: -32000, message: "Rate limit exceeded. Try again shortly." },
+    id: null,
+  },
+});
+
+// Separate limiter for /mcp/muse with its own counter, so Muse bursts
+// can't eat the Claude quota and vice versa. Same 30/min budget.
+const museLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
   standardHeaders: true,
@@ -161,15 +273,16 @@ app.get("/", requireMcpKey, requireAllowedIp, (_req, res) => {
       map_index: Boolean(REPO_MAP_WORKER_URL && REPO_MAP_SHARED_SECRET), // map.index (write path, via Railway worker)
       map_query: Boolean(REPO_MAP_DATABASE_URL && GEMINI_API_KEY), // map.query search/graph (read path, direct to Neon)
       auth:   Boolean(MCP_SHARED_KEY),
+      muse:   Boolean(MUSE_MCP_KEY),
     },
   });
 });
 
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
-async function handleMcp(req, res) {
+async function handleMcp(req, res, createServer = createMcpServer) {
   try {
-    const mcpServer = createMcpServer();
+    const mcpServer = createServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => { transport.close(); });
     await mcpServer.connect(transport);
@@ -182,8 +295,16 @@ async function handleMcp(req, res) {
   }
 }
 
-app.post("/mcp", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
-app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, handleMcp);
+// Limited Muse endpoint. These routes MUST be registered before the
+// generic /mcp/:key route below: Express matches in registration order,
+// and "/mcp/muse" also matches "/mcp/:key" (with key="muse"), which
+// would 401 it against the wrong key. No IP allowlist here -- see
+// requireMuseKey above for why.
+app.post("/mcp/muse", museLimiter, requireMuseKey, (req, res) => handleMcp(req, res, createMuseMcpServer));
+app.post("/mcp/muse/:key", museLimiter, requireMuseKey, (req, res) => handleMcp(req, res, createMuseMcpServer));
+
+app.post("/mcp", mcpLimiter, requireMcpKey, requireAllowedIp, (req, res) => handleMcp(req, res, createMcpServer));
+app.post("/mcp/:key", mcpLimiter, requireMcpKey, requireAllowedIp, (req, res) => handleMcp(req, res, createMcpServer));
 
 // QStash-invoked worker for delegate_agent's Scenario B self-chaining
 // background loop -- deliberately NOT behind requireMcpKey/
@@ -249,6 +370,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
     if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEYS (or legacy GEMINI_API_KEY) is not set. delegate_agent will fail entirely, and delegate_research's precision mode (url+question) will fail (wide mode is Exa-backed and unaffected).");
     if (!JULES_API_KEY) console.warn("WARNING: JULES_API_KEY is not set. jules_* tools will fail.");
     if (!MCP_SHARED_KEY) console.warn("WARNING: MCP_SHARED_KEY is not set. The /mcp, /mcp/:key, and / endpoints are OPEN to anyone who has the URL.");
+    if (!MUSE_MCP_KEY) console.warn("NOTE: MUSE_MCP_KEY is not set. The limited Muse endpoint /mcp/muse is disabled (401s every request) until it is set.");
     if (!GITHUB_APP_ID || !GITHUB_APP_INSTALLATION_ID || !GITHUB_APP_PRIVATE_KEY) console.warn("NOTE: GITHUB_APP_ID/GITHUB_APP_INSTALLATION_ID/GITHUB_APP_PRIVATE_KEY not fully set. gh_token (private-repo sandbox clone) will fail until the GitHub App is configured.");
     if (DELEGATE_AGENT_ASYNC === "qstash" && !isQStashConfigured()) console.warn("WARNING: DELEGATE_AGENT_ASYNC=qstash but QStash isn't fully configured (QSTASH_TOKEN and/or AGENT_WORKER_URL missing) -- delegate_agent will silently fall back to today's synchronous behavior instead of Scenario B's background chaining.");
     if (EDITOR_AGENT_ASYNC === "qstash" && !isEditorQStashConfigured()) console.warn("WARNING: EDITOR_AGENT_ASYNC=qstash but QStash isn't fully configured for delegate_editor (QSTASH_TOKEN and/or a derivable/explicit EDITOR_WORKER_URL missing -- see config.js's deriveEditorWorkerUrl) -- delegate_editor will silently fall back to today's synchronous behavior instead of background chaining.");
@@ -258,8 +380,10 @@ if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
 
 // Default export so Vercel's Node runtime can invoke this as a serverless
 // function handler (Express apps are callable as (req, res) => {}). Named
-// export `app` is kept for tests/other tooling; `createMcpServer` is exported
-// above so tests (e.g. test/mcp-integration.test.js) can build their own
-// single-connect instance instead of relying on a module-level singleton.
+// export `app` is kept for tests/other tooling; `createMcpServer` and
+// `createMuseMcpServer` are exported above so tests (e.g.
+// test/mcp-integration.test.js, test/muse-readonly.test.js) can build
+// their own single-connect instance instead of relying on a module-level
+// singleton.
 export default app;
 export { app };
