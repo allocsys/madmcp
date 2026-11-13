@@ -13,7 +13,7 @@
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { embedTexts, __resetRotationStateForTests } from '../src/embed/gemini.js';
+import { embedTexts, __resetRotationStateForTests, __setSleepForTests } from '../src/embed/gemini.js';
 
 describe('embedTexts', () => {
   const ORIGINAL_KEY = process.env.GEMINI_API_KEY;
@@ -28,9 +28,13 @@ describe('embedTexts', () => {
     // within this worker's one long-lived process -- reset between test
     // cases so one test's rotation/cooldown state can't leak into another.
     __resetRotationStateForTests();
+    // Never really sleep in tests; the stub doesn't advance the clock, so
+    // cooldowns stay active unless a test's stub clears them.
+    __setSleepForTests(async () => {});
   });
 
   afterEach(() => {
+    __setSleepForTests();
     if (ORIGINAL_KEY === undefined) delete process.env.GEMINI_API_KEY;
     else process.env.GEMINI_API_KEY = ORIGINAL_KEY;
     if (ORIGINAL_KEYS === undefined) delete process.env.GEMINI_API_KEYS;
@@ -187,6 +191,51 @@ describe('embedTexts', () => {
       async () => await embedTexts(['test']),
       /429/
     );
+  });
+
+  test('when all keys are rate limited, waits out the cooldown and retries the batch', async () => {
+    process.env.GEMINI_API_KEYS = 'key-a,key-b';
+    delete process.env.GEMINI_API_KEY;
+
+    const sleeps = [];
+    __setSleepForTests(async (ms) => {
+      sleeps.push(ms);
+      __resetRotationStateForTests(); // simulate the cooldown having elapsed
+    });
+
+    let fetchCalls = 0;
+    globalThis.fetch = async () => {
+      fetchCalls++;
+      if (sleeps.length === 0) {
+        return { ok: false, status: 429, text: async () => 'RESOURCE_EXHAUSTED: please retry in 5s.' };
+      }
+      return { ok: true, status: 200, json: async () => ({ embeddings: [{ values: [7, 7] }] }) };
+    };
+
+    const results = await embedTexts(['only text']);
+
+    assert.deepEqual(results, [[7, 7]]);
+    assert.equal(sleeps.length, 1);
+    assert.ok(sleeps[0] >= 5000 && sleeps[0] <= 6000);
+    assert.equal(fetchCalls, 3); // key-a 429, key-b 429, then success after the wait
+  });
+
+  test('does not wait when the soonest cooldown is longer than the wait cap', async () => {
+    process.env.GEMINI_API_KEYS = 'key-a,key-b';
+    delete process.env.GEMINI_API_KEY;
+
+    let slept = false;
+    __setSleepForTests(async () => {
+      slept = true;
+    });
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 429,
+      text: async () => 'RESOURCE_EXHAUSTED: please retry in 3600s.',
+    });
+
+    await assert.rejects(async () => await embedTexts(['test']), /429/);
+    assert.equal(slept, false);
   });
 
   test('a 5xx error on one key throws immediately and does not try the next key', async () => {

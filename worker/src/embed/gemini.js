@@ -31,6 +31,22 @@ const BATCH_SIZE = 100;
 // so this is a conservative fallback, not the common case. Mirrors
 // connectors/shared/cooldown.js's DEFAULT_COOLDOWN_SECONDS.
 const DEFAULT_COOLDOWN_SECONDS = 60;
+// When EVERY key is rate limited, embedBatchWithWait sleeps until the
+// soonest cooldown ends and retries, up to this many times. If the soonest
+// cooldown is longer than MAX_COOLDOWN_WAIT_SECONDS (e.g. a daily quota), it
+// gives up immediately: waiting that long inside a scan isn't useful, and the
+// file is retried on the next scan anyway.
+const MAX_RATE_LIMIT_RETRIES = 3;
+const MAX_COOLDOWN_WAIT_SECONDS = 90;
+const WAIT_PADDING_MS = 250;
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let sleep = defaultSleep;
+
+// Test-only: swap the sleep used between rate-limit retries (pass nothing to restore).
+export function __setSleepForTests(fn) {
+  sleep = fn || defaultSleep;
+}
 
 // Parses GEMINI_API_KEYS (comma-separated) if set, falling back to the
 // legacy singular GEMINI_API_KEY -- same shape/precedence as config.js's
@@ -103,7 +119,7 @@ async function embedBatchWithRotation(batch, apiKeys) {
 
     if (isCoolingDown(keyIndex)) {
       if (!lastErr) {
-        lastErr = new Error(`Gemini embeddings: key #${keyIndex} is in a recorded cooldown from a recent rate limit.`);
+        lastErr = new Error(`Gemini embeddings: key #${keyIndex} is in a recorded cooldown from a recent rate limit (429).`);
         lastErr.status = 429; // same class of failure as a live rate limit
       }
       continue;
@@ -150,6 +166,34 @@ async function embedBatchWithRotation(batch, apiKeys) {
   throw lastErr;
 }
 
+// Milliseconds until the soonest-ending key cooldown, or Infinity if no key is cooling down.
+function shortestCooldownMs(apiKeys) {
+  const now = Date.now();
+  let min = Infinity;
+  for (let i = 0; i < apiKeys.length; i++) {
+    const until = cooldownUntil.get(i);
+    if (until !== undefined && until > now) min = Math.min(min, until - now);
+  }
+  return min;
+}
+
+// embedBatchWithRotation, but when every key is rate limited (429) it waits
+// for the soonest cooldown to end and retries instead of failing the batch
+// right away. Non-429 errors, and cooldowns longer than
+// MAX_COOLDOWN_WAIT_SECONDS, still throw immediately.
+async function embedBatchWithWait(batch, apiKeys) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await embedBatchWithRotation(batch, apiKeys);
+    } catch (err) {
+      if (err.status !== 429 || attempt >= MAX_RATE_LIMIT_RETRIES) throw err;
+      const waitMs = shortestCooldownMs(apiKeys);
+      if (!Number.isFinite(waitMs) || waitMs > MAX_COOLDOWN_WAIT_SECONDS * 1000) throw err;
+      await sleep(waitMs + WAIT_PADDING_MS);
+    }
+  }
+}
+
 // Embeds a list of chunk texts and returns embeddings in the same order as
 // the input (so callers can zip results back onto their chunk objects by
 // index). Returns [] for an empty input without making a network call.
@@ -161,7 +205,7 @@ export async function embedTexts(texts) {
 
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     const batch = texts.slice(i, i + BATCH_SIZE);
-    const batchEmbeddings = await embedBatchWithRotation(batch, apiKeys);
+    const batchEmbeddings = await embedBatchWithWait(batch, apiKeys);
     for (let j = 0; j < batchEmbeddings.length; j++) {
       embeddings[i + j] = batchEmbeddings[j];
     }
