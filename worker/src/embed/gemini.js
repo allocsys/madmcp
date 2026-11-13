@@ -119,7 +119,7 @@ async function embedBatchWithRotation(batch, apiKeys) {
 
     if (isCoolingDown(keyIndex)) {
       if (!lastErr) {
-        lastErr = new Error(`Gemini embeddings: key #${keyIndex} is in a recorded cooldown from a recent rate limit.`);
+        lastErr = new Error(`Gemini embeddings: key #${keyIndex} is in a recorded cooldown from a recent rate limit (429).`);
         lastErr.status = 429; // same class of failure as a live rate limit
       }
       continue;
