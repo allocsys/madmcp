@@ -17,7 +17,7 @@
     "@babel/parser": "^8.1.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@upstash/qstash": "^2.12.1",
-    "@upstash/redis": "^1.38.4",
+    "@upstash/redis": "^1.41.0",
     "@vercel/functions": "^3.10.3",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.3",
