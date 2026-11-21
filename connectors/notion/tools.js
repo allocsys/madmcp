@@ -647,7 +647,7 @@ function protectedBlockIds(blocks) {
 // a gap. New content is written as plain paragraphs, one per line; omit
 // content to just delete. Nested children of a deleted block go with it.
 async function applyBlockEdit(page_id, { start, end, content }, n) {
-  const fail = (msg) => new Error(`Block edit #${n} aborted, nothing further written — ${msg}`);
+  const fail = (msg, cause) => new Error(`Block edit #${n} aborted, nothing further written — ${msg}`, cause ? { cause } : undefined);
   const blocks = await readAllBlocks(page_id);
   if (findCheckpointRange(blocks)) {
     throw fail("this page holds a checkpoint; use the checkpoint tool's replace_block / delete_block instead.");
@@ -656,7 +656,7 @@ async function applyBlockEdit(page_id, { start, end, content }, n) {
   try {
     range = resolveRange(blocks.map(notionBlockPlainText), start, end);
   } catch (err) {
-    throw fail(err.message);
+    throw fail(err.message, err);
   }
   const targets = blocks.slice(range.start, range.end + 1);
   const guarded = protectedBlockIds(blocks);
@@ -1082,7 +1082,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     try {
       edit = applyLineEdit(current.text ? current.text.split("\n") : [], { start, end, content: action === "replace_block" ? notes : "" });
     } catch (err) {
-      throw new Error(`${action} aborted, nothing written — ${err.message}`);
+      throw new Error(`${action} aborted, nothing written — ${err.message}`, { cause: err });
     }
     const saved = await doCheckpoint({ action: "save", notes: edit.lines.join("\n"), key });
     const span = edit.from === edit.to ? `line ${edit.from}` : `lines ${edit.from}-${edit.to}`;
