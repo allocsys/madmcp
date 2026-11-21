@@ -74,12 +74,15 @@ describe("connectors/github/clone_token.js", () => {
     );
   });
 
-  it("surfaces the GitHub-issued expiry in the response text", async () => {
+  it("states scope, auto-revoke and the set-url cleanup command", async () => {
     getCloneToken.mockResolvedValueOnce({ token: "ghs_abc123", expiresAt: "2026-08-01T12:34:56Z" });
 
     const result = await server.tools.gh_token({ owner: "someorg", repo: "widgets" });
 
-    expect(result.content[0].text).toContain("2026-08-01T12:34:56Z");
+    const text = result.content[0].text;
+    expect(text).toContain("contents:write");
+    expect(text).toContain("auto-revoked");
+    expect(text).toContain("git remote set-url origin https://github.com/someorg/widgets.git");
   });
 
   it("does not emit the raw token anywhere outside the embedded clone URL", async () => {
