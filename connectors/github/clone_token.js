@@ -38,11 +38,9 @@ export function register(server) {
       }
       const cloneUrl = `https://x-access-token:${result.token}@github.com/${owner}/${repo}.git`;
       const text =
-        `Freshly minted token (contents:write, ${owner}/${repo} only -- can push, not just clone), GitHub-issued expiry ${result.expiresAt} -- but this server will auto-revoke it a few minutes from now regardless, so it's single-use in practice, not just in intent.\n\n` +
-        `Run this in your sandbox to clone:\n` +
-        `git clone ${cloneUrl}\n\n` +
-        `It can also be used to push (e.g. via 'git remote set-url' then 'git push') before it's revoked. Use it now -- it won't be reusable shortly after, whether or not you reference it again.\n\n` +
-        `Note: cloning with this URL stores the token in the clone's .git/config. It is revoked shortly anyway, but to remove it earlier run: git remote set-url origin https://github.com/${owner}/${repo}.git`;
+        `Token: ${owner}/${repo} only, contents:write (can push), auto-revoked in minutes.\n` +
+        `Clone: git clone ${cloneUrl}\n` +
+        `After cloning: git remote set-url origin https://github.com/${owner}/${repo}.git`;
       return { content: [{ type: "text", text }] };
     }
   );
