@@ -21,6 +21,7 @@ import { triggerNotionEmbed } from "./embed_client.js";
 import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 import { fetchPageMarkdown, patchPageMarkdown, parseMarkdownMarkers, splitChangelog, withPreservedMarkers } from "./markdown.js";
 import { paginateText } from "../output.js";
+import { resolveRange, applyLineEdit, contentToLines } from "./block_range.js";
 import { register as registerChartTool } from "./chart_tool.js";
 
 // Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
@@ -612,6 +613,69 @@ async function appendChangelogEntry(page_id, summary) {
 // unsupported block type) -- the single-item tool catches this to preserve
 // its existing isError response shape; the batch tool lets Promise.allSettled
 // catch it per item, same pattern as mem/tools.js.
+// Blocks block_edits must never delete or overwrite: the entity_id / status
+// markers, relation lines, changelog entries, the commit-log marker, and
+// everything inside a mem0 sync range (start marker through end marker).
+function protectedBlockIds(blocks) {
+  const ids = new Set();
+  const markers = parseMarkers(blocks);
+  if (markers.entityBlockId) ids.add(markers.entityBlockId);
+  if (markers.statusBlockId) ids.add(markers.statusBlockId);
+  for (const r of parseRelationBlocks(blocks)) ids.add(r.blockId);
+  for (const b of blocks) {
+    if (b.type !== "paragraph") continue;
+    const text = notionBlockPlainText(b);
+    if (isChangelogEntryText(text) || isCommitLogMarkerText(text)) ids.add(b.id);
+  }
+  const sync = findSyncRange(blocks);
+  if (sync) {
+    let inside = false;
+    for (const b of blocks) {
+      if (b.id === sync.startBlockId) inside = true;
+      if (inside) ids.add(b.id);
+      if (b.id === sync.endBlockId) inside = false;
+    }
+  }
+  return ids;
+}
+
+// One block_edits item: { start, end?, content? } over the page's top-level
+// blocks (numbers count every top-level block from the top, markers included;
+// prefixes match the block's plain text). Insert-first, delete-after (same
+// order as swapRangeContent): the new blocks go in right after the LAST block
+// of the range, then the old ones are deleted, so a failure midway can't leave
+// a gap. New content is written as plain paragraphs, one per line; omit
+// content to just delete. Nested children of a deleted block go with it.
+async function applyBlockEdit(page_id, { start, end, content }, n) {
+  const fail = (msg, cause) => new Error(`Block edit #${n} aborted, nothing further written — ${msg}`, cause ? { cause } : undefined);
+  const blocks = await readAllBlocks(page_id);
+  if (findCheckpointRange(blocks)) {
+    throw fail("this page holds a checkpoint; use the checkpoint tool's replace_block / delete_block instead.");
+  }
+  let range;
+  try {
+    range = resolveRange(blocks.map(notionBlockPlainText), start, end);
+  } catch (err) {
+    throw fail(err.message, err);
+  }
+  const targets = blocks.slice(range.start, range.end + 1);
+  const guarded = protectedBlockIds(blocks);
+  const blocker = targets.find((b) => guarded.has(b.id) || b.type === "child_page" || b.type === "child_database");
+  if (blocker) {
+    const what = blocker.type === "paragraph" ? "a marker, relation or changelog" : `a ${blocker.type}`;
+    throw fail(`block ${blocks.indexOf(blocker) + 1} is ${what} block and can't be changed this way (use status/entity_id/relations for markers, and archive subpages directly).`);
+  }
+  const newBlocks = contentToLines(content).map(textBlock);
+  if (newBlocks.length) await appendBlocks(page_id, newBlocks, { after: targets[targets.length - 1].id });
+  const failed = await deleteBlocks(targets.map((b) => b.id));
+  if (failed.length) {
+    throw new Error(`Block edit #${n}: ${newBlocks.length} new block(s) were written, but ${failed.length} of ${targets.length} old block(s) could not be deleted (${failed[0].error}). Old and new content may both be on the page -- retry to finish.`);
+  }
+  const span = range.start === range.end ? `block ${range.start + 1}` : `blocks ${range.start + 1}-${range.end + 1}`;
+  const nested = targets.some((b) => b.has_children) ? " Nested child blocks were removed with them." : "";
+  return `${newBlocks.length ? "Replaced" : "Deleted"} ${span} (${targets.length} removed, ${newBlocks.length} added).${nested}`;
+}
+
 export async function doUpdatePage(args) {
   const results = [];
   try {
@@ -624,7 +688,7 @@ export async function doUpdatePage(args) {
   }
 }
 
-async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content }, results) {
+async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content, block_edits }, results) {
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
   // (archived: true) is deliberately NOT handled here -- see the bottom of
@@ -668,6 +732,15 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
       if (type === "to_do") patchBody[type].checked = block.to_do?.checked ?? false;
       await notionRequest(`/blocks/${block.id}`, { method: "PATCH", body: patchBody });
       results.push(`Replaced block ("${trunc(find)}" → "${trunc(replace)}").`);
+    }
+  }
+  // Anchor-based block edits (2026-11-21): delete or overwrite top-level
+  // blocks by number / text prefix, without quoting their exact text. Applied
+  // one by one, each against a fresh read of the page, so later edits see the
+  // numbering left by earlier ones.
+  if (block_edits?.length) {
+    for (const [i, be] of block_edits.entries()) {
+      results.push(await applyBlockEdit(page_id, be, i + 1));
     }
   }
   // Markdown-based content edits (Notion-Version 2026-03-11). Unlike
@@ -935,7 +1008,7 @@ async function listCheckpointPages() {
   return { found, skipped };
 }
 
-export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits }) {
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end }) {
   if (action === "list") {
     const { found, skipped } = await listCheckpointPages();
     const skippedNote = skipped ? `\n(${skipped} page${skipped === 1 ? "" : "s"} could not be read and ${skipped === 1 ? "was" : "were"} skipped.)` : "";
@@ -983,6 +1056,37 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     if (text === current.text) return `Edit made no change to "${key}"; nothing written.`;
     const saved = await doCheckpoint({ action: "save", notes: text, key });
     return `Edited "${key}": ${replaced} replacement${replaced === 1 ? "" : "s"}, ${deleted} deletion${deleted === 1 ? "" : "s"}.\n${saved}`;
+  }
+  if (action === "replace_block" || action === "delete_block") {
+    // Overwrite or delete a range of lines by ANCHOR (2026-11-21), so the caller
+    // doesn't have to resend the exact text that `edit` needs (token cost, and
+    // a typo aborts the whole edit). `start`/`end` are a 1-based line number
+    // (counting the saved notes only, not the commit log) or a unique prefix of
+    // a line; `end` defaults to `start`. replace_block writes `notes` over the
+    // range, delete_block removes it. Same guards as edit/append: refuses a
+    // range holding non-paragraph blocks, any failure writes nothing, and the
+    // result goes back through the normal save path so markers and the commit
+    // log are never touched. Anchor logic lives in block_range.js.
+    if (start === undefined || start === null || start === "") {
+      throw new Error(`${action} requires 'start' (a 1-based line number, or a unique prefix of the first line to change).`);
+    }
+    if (action === "replace_block" && (typeof notes !== "string" || !notes.trim())) {
+      throw new Error("replace_block requires 'notes' (the replacement text). To remove lines, use delete_block.");
+    }
+    const current = await readCheckpointNotesWithPage(key);
+    if (current === null) return `No checkpoint found for key "${key}"; nothing changed.`;
+    if (!current.plain) {
+      throw new Error(`${action}: the notes of "${key}" contain blocks other than plain paragraphs (edited by hand?), so a text edit could flatten them. Use 'save' to rewrite them in full.`);
+    }
+    let edit;
+    try {
+      edit = applyLineEdit(current.text ? current.text.split("\n") : [], { start, end, content: action === "replace_block" ? notes : "" });
+    } catch (err) {
+      throw new Error(`${action} aborted, nothing written — ${err.message}`, { cause: err });
+    }
+    const saved = await doCheckpoint({ action: "save", notes: edit.lines.join("\n"), key });
+    const span = edit.from === edit.to ? `line ${edit.from}` : `lines ${edit.from}-${edit.to}`;
+    return `${action === "delete_block" ? "Deleted" : "Replaced"} ${span} of "${key}" (${edit.removed} removed, ${edit.added} added).\n${saved}`;
   }
   if (action === "append") {
     // Adds `notes` as new line(s) at the end of the saved notes of `key`
@@ -1168,7 +1272,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit", "append" or "list").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit", "append", "replace_block", "delete_block" or "list").`);
   }
 }
 
@@ -1238,10 +1342,12 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'list' shows every checkpoint as its name (the key) and Notion page ID. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Anything bigger than a few small changes — use 'save' (full rewrite).",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text; each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'replace_block' overwrites a range of lines of the saved notes with 'notes', and 'delete_block' removes it, WITHOUT quoting the old text: 'start' (and optional 'end', default = start, inclusive) is a 1-based line number of the notes (the commit log is not counted) or a unique prefix of the line, e.g. start 'NEXT' end 'NOTES'; nothing is written if an anchor is missing, ambiguous or out of range. 'list' shows every checkpoint as its name (the key) and Notion page ID. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Anything bigger than a few small changes — use 'save' (full rewrite).",
     {
-      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append", "list"]).describe("Action to perform: 'list' to show all checkpoint names and page IDs, 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest"),
+      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append", "replace_block", "delete_block", "list"]).describe("Action to perform: 'list' to show all checkpoint names and page IDs, 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest, 'replace_block' to overwrite lines start..end with 'notes', 'delete_block' to delete lines start..end"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
+      start:  z.union([z.number().int().min(1), z.string()]).optional().describe("First line to change (only for 'replace_block' / 'delete_block'): a 1-based line number of the saved notes, or a unique prefix of that line (e.g. 'NEXT'). A string of only digits counts as a line number."),
+      end:    z.union([z.number().int().min(1), z.string()]).optional().describe("Last line to change, inclusive (only for 'replace_block' / 'delete_block'): line number or a unique prefix of a line at or after 'start'. Defaults to 'start' (a single line)."),
       edits:  z.array(z.object({
         find:        z.string().min(1).describe("Exact text to find in the saved notes. Must match exactly once unless replace_all is true."),
         replace:     z.string().optional().describe("Replacement text. Omit or pass an empty string to delete the matched text."),
@@ -1250,9 +1356,9 @@ export function register(server) {
       notes:  z.string().optional().describe("Freeform plain-text handoff notes (action 'save': the full text, a full rewrite; action 'append': the line(s) to add to the end of the existing notes)"),
       key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
-    async ({ action, notes, key, to, edits }) => {
+    async ({ action, notes, key, to, edits, start, end }) => {
       try {
-        const text = await doCheckpoint({ action, notes, key, to, edits });
+        const text = await doCheckpoint({ action, notes, key, to, edits, start, end });
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
@@ -1562,7 +1668,7 @@ export function register(server) {
 
   server.tool(
     "notion_update",
-    "DOES: Update one or more Notion pages, or one or more Notion databases. `type: 'page'` updates page(s) under `items` (page_id/title/content_updates/replace_content/append_markdown/append_content/archived/replacements/status/entity_id/relations/properties per item). To edit page content, prefer content_updates (substring search/replace over the markdown notion_read returns; handles nested blocks, code, callouts and keeps formatting), append_markdown (add real headings/bullets/code blocks) and replace_content (overwrite the whole body); `replacements` only matches whole top-level blocks and `append_content` writes plain paragraphs. `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
+    "DOES: Update one or more Notion pages, or one or more Notion databases. `type: 'page'` updates page(s) under `items` (page_id/title/content_updates/replace_content/append_markdown/append_content/archived/replacements/status/entity_id/relations/properties per item). To edit page content, prefer content_updates (substring search/replace over the markdown notion_read returns; handles nested blocks, code, callouts and keeps formatting), append_markdown (add real headings/bullets/code blocks) and replace_content (overwrite the whole body); `replacements` only matches whole top-level blocks and `append_content` writes plain paragraphs. To delete or overwrite top-level blocks WITHOUT quoting their text, use block_edits ([{ start, end?, content? }]: start/end are a block number or a unique prefix of the block's text; omit content to delete). `type: 'database'` updates database(s) under `items` (database_id/title/archived per item). Pass a single-element `items` array for a single update, or multiple for a batch. Each item is applied independently; one item failing (e.g. an ambiguous replacement match) does not block the others.\nNote: notion_sync_content stays a separate tool -- it manages a marked content range for external-sync use cases (mem0->Notion sync), a fundamentally different read/write pattern from the field-based updates here.",
     {
       type:  z.enum(["page", "database"]).describe("'page' updates one or more Notion pages. 'database' updates one or more Notion databases."),
       items: z.array(z.object({
@@ -1575,6 +1681,11 @@ export function register(server) {
           find:    z.string().describe("Exact plain text of an existing top-level block (paragraph, heading, list item, or to-do) -- must match exactly one block"),
           replace: z.string().describe("New plain text for that block"),
         })).optional().describe("type 'page' only: list of find-and-replace operations for targeted in-place block edits. Each `find` must match exactly one of the page's top-level blocks by plain text -- fails loudly (no changes made) on zero or multiple matches. Only text-style blocks (paragraph/heading/list-item/to-do) can be edited this way."),
+        block_edits:    z.array(z.object({
+          start:   z.union([z.number().int().min(1), z.string()]).describe("First top-level block to change: a 1-based block number (counts every top-level block from the top of the page, entity_id/status/relation lines included), or a unique prefix of the block's text (preferred -- e.g. 'NEXT'). A string of only digits counts as a number."),
+          end:     z.union([z.number().int().min(1), z.string()]).optional().describe("Last block to change, inclusive: block number or a unique prefix of a block at or after 'start'. Defaults to 'start'."),
+          content: z.string().optional().describe("New plain text for the range, one paragraph block per line. Omit (or empty) to DELETE the range."),
+        })).optional().describe("type 'page' only: delete or overwrite top-level blocks WITHOUT quoting their exact text, so it costs far fewer tokens than replacements/content_updates. Applied in order, each against a fresh read of the page. Aborts (nothing further written) if an anchor is missing, ambiguous or out of range, or the range includes an entity_id/status/relation/changelog marker, a synced range, or a subpage. New content is plain paragraphs; use content_updates or append_markdown when formatting matters."),
         content_updates: z.array(z.object({
           old_str:             z.string().describe("Text to find (markdown as returned by notion_read). Must match exactly one place on the page unless replace_all_matches is true."),
           new_str:             z.string().describe("Replacement markdown. To insert after a line, repeat the line in new_str and add the new content after it; use an empty string to delete."),
@@ -1597,7 +1708,7 @@ export function register(server) {
         const results = await runSequentially(items, (item) => doUpdatePage({
           page_id: item.page_id, title: item.title, append_content: item.append_content, archived: item.archived,
           replacements: item.replacements, status: item.status, entity_id: item.entity_id, relations: item.relations, properties: item.properties,
-          content_updates: item.content_updates, replace_content: item.replace_content, append_markdown: item.append_markdown, allow_deleting_content: item.allow_deleting_content,
+          content_updates: item.content_updates, block_edits: item.block_edits, replace_content: item.replace_content, append_markdown: item.append_markdown, allow_deleting_content: item.allow_deleting_content,
         }));
         const lines = results.map((r, i) => {
           const label = items[i].page_id;

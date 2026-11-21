@@ -278,7 +278,7 @@ Delete: `cf_delete` (`resource`: d1 | kv | r2 | hyperdrive, `id`, `confirm`), re
 separate backfill/repair tool for the entity_id → page_id dedup index, not part of the
 consolidation.
 
-`checkpoint` (`action`: `save` | `load` | `list` | `edit` | `append` | `park` | `unpark` | `clear_log`) — a
+`checkpoint` (`action`: `save` | `load` | `list` | `edit` | `append` | `replace_block` | `delete_block` | `park` | `unpark` | `clear_log`) — a
 handoff note for the current session, so a fresh session can pick up where it left off. The note
 lives on a Notion page between two markers, and every write only touches the text between them.
 Pass `key` to keep several independent checkpoints (default `checkpoint-latest`); a new checkpoint
@@ -289,6 +289,12 @@ page is titled with its key, so they are easy to tell apart in Notion.
   `{ find, replace?, replace_all? }` literal find/replace pairs. An empty or omitted `replace`
   deletes the matched text. Each `find` must match exactly once unless `replace_all` is set, and
   the edits are all-or-nothing: if any one fails, nothing is written.
+- `replace_block` / `delete_block` overwrite or remove a range of lines **without quoting the old
+  text**. `start` (and optional `end`, inclusive, default = `start`) is a 1-based line number of the
+  saved notes (the commit log is not counted) or a unique prefix of the line, e.g. `start: "NEXT"`,
+  `end: "NOTES"`. A string of only digits counts as a line number. `replace_block` writes `notes`
+  over the range; `delete_block` removes it. A missing, ambiguous or out-of-range anchor writes
+  nothing and the error lists the matching line numbers.
 - `append` adds the text in `notes` as new lines at the end of the saved note. It fails if there
   is no checkpoint yet (use `save` to create one).
 - `list` shows every checkpoint as its name (the key) and Notion page ID. It looks at the child
