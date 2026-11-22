@@ -255,7 +255,12 @@ export async function findLinkCandidates({ title, content }) {
   const seenPageIds = new Set();
   const nowIso = new Date().toISOString();
 
-  if (idTokens.length) {
+  // Identifier path (search + one block read per hit, reads in parallel) and
+  // the tag-overlap path (Signal 3) are independent: run them together, then
+  // merge in the original order (identifier hits first, tag matches after,
+  // skipping pages already seen).
+  const identifierPath = async () => {
+    if (!idTokens.length) return [];
     // Repo name is the most specific short deterministic query we can build
     // from an identifier -- Notion's search is keyword-based and a full
     // sentence dilutes relevance.
@@ -270,39 +275,50 @@ export async function findLinkCandidates({ title, content }) {
       // Search unreachable -- fall through with no identifier-based
       // candidates rather than aborting the whole create.
     }
+    const hits = [];
+    const seenHits = new Set();
     for (const hit of searchData.results || []) {
-      if (hit.object !== "page" || seenPageIds.has(hit.id)) continue;
-      seenPageIds.add(hit.id);
-      let candContent, candMarkers;
+      if (hit.object !== "page" || seenHits.has(hit.id)) continue;
+      seenHits.add(hit.id);
+      hits.push(hit);
+    }
+    return Promise.all(hits.map(async (hit) => {
       try {
         const blocksData = await notionRequest(`/blocks/${hit.id}/children?page_size=100`);
         const blocks = blocksData.results || [];
-        candContent = notionBlocksToText(blocks);
-        candMarkers = parseMarkers(blocks);
+        return { hit, candContent: notionBlocksToText(blocks), candMarkers: parseMarkers(blocks) };
       } catch {
-        continue; // unreadable candidate (archived/permissions) -- skip, don't fail the create
+        return null; // unreadable candidate (archived/permissions) -- skip, don't fail the create
       }
-      const candTitle = notionPageTitle(hit);
-      const { tier, reason } = scoreCandidate(
-        { title, content, tags: newTags, createdAt: nowIso },
-        { title: candTitle, content: candContent, createdAt: hit.created_time }
-      );
-      const entryObj = { pageId: hit.id, title: candTitle, url: hit.url, entity_id: candMarkers.entity_id || null, reason };
-      if (tier === "strong") strong.push(entryObj);
-      else if (tier === "medium") medium.push(entryObj);
+    }));
+  };
+  const tagPath = async () => {
+    // Signal 3, structural fix -- see findTagOverlapCandidates above.
+    try {
+      return await findTagOverlapCandidates({ tags: newTags, createdAt: nowIso });
+    } catch {
+      return []; // best-effort, mirrors the rest of this function
     }
-  }
+  };
+  const [read, tagMatches] = await Promise.all([identifierPath(), tagPath()]);
 
-  // Signal 3, structural fix -- see findTagOverlapCandidates above.
-  try {
-    const tagMatches = await findTagOverlapCandidates({ tags: newTags, createdAt: nowIso });
-    for (const c of tagMatches) {
-      if (seenPageIds.has(c.pageId)) continue;
-      seenPageIds.add(c.pageId);
-      medium.push(c);
-    }
-  } catch {
-    // swallow -- best-effort, mirrors the rest of this function
+  for (const item of read) {
+    if (!item) continue;
+    const { hit, candContent, candMarkers } = item;
+    seenPageIds.add(hit.id);
+    const candTitle = notionPageTitle(hit);
+    const { tier, reason } = scoreCandidate(
+      { title, content, tags: newTags, createdAt: nowIso },
+      { title: candTitle, content: candContent, createdAt: hit.created_time }
+    );
+    const entryObj = { pageId: hit.id, title: candTitle, url: hit.url, entity_id: candMarkers.entity_id || null, reason };
+    if (tier === "strong") strong.push(entryObj);
+    else if (tier === "medium") medium.push(entryObj);
+  }
+  for (const c of tagMatches) {
+    if (seenPageIds.has(c.pageId)) continue;
+    seenPageIds.add(c.pageId);
+    medium.push(c);
   }
 
   return { strong, medium };
