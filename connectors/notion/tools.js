@@ -419,7 +419,9 @@ export async function doCreatePage(args) {
   return withLock(`notion-create:${args.entity_id}`, () => doCreatePageUnlocked(args));
 }
 
-async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties, awaitEmbed }) {
+// lean: skip the fuzzy-dedup and link-candidate searches (mem0 sync creates
+// pages from titles only, where both would be noise and cost ~6+ calls).
+async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties, awaitEmbed, lean }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create's entity_id and one_off param descriptions.`);
   }
@@ -449,7 +451,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // for entity_id-tracked pages, matching exact-match dedup's own scope --
   // one_off pages have explicitly opted out of dedup entirely.
   let possibleDuplicates = [];
-  if (entity_id) {
+  if (entity_id && !lean) {
     try {
       possibleDuplicates = await findSimilarPages([title, content].filter(Boolean).join("\n"));
     } catch {
@@ -464,7 +466,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // is a convenience layer on top of an otherwise-complete create call.
   let linkCandidates = { strong: [], medium: [] };
   try {
-    linkCandidates = await findLinkCandidates({ title, content });
+    if (!lean) linkCandidates = await findLinkCandidates({ title, content });
   } catch {
     // swallow -- see comment above
   }
@@ -617,8 +619,9 @@ const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3"
 // to date" case) -- both differences are parameterized here rather than
 // duplicating this whole read/delete/insert/patch sequence twice, which is
 // what this codebase did until 2026-09-27.
-async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged }) {
-  const blocks = await readAllBlocks(page_id);
+async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged, blocks: preloaded }) {
+  // preloaded: caller already read the page's blocks (saves one paginated read).
+  const blocks = preloaded || await readAllBlocks(page_id);
   const range = findRange(blocks);
 
   if (!range) {
@@ -646,9 +649,9 @@ async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange,
 // shared mechanics; this just supplies the sync-marker functions and the
 // skip-if-unchanged behavior, and maps the generic previousTimestamp field
 // back to previousSyncedAt for existing callers (notion_sync_content).
-export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+export async function replaceSyncedRange({ page_id, contentLines, synced_at, blocks }) {
   const result = await replaceMarkerRange({
-    page_id, contentLines, timestamp: synced_at,
+    page_id, contentLines, timestamp: synced_at, blocks,
     findRange: findSyncRange,
     getTimestamp: (range) => range.synced_at,
     buildRangeBlocks: ({ timestamp, contentLines }) => buildSyncRangeBlocks({ synced_at: timestamp, contentLines }),
