@@ -345,20 +345,37 @@ async function archiveIndexRowsForPage(page_id) {
 }
 
 // Restoring an archived page: re-create/repoint its index row from the
-// entity_id marker on the page. Archived rows can't be queried, so this goes
-// through upsertIndexRow. Never takes over an entity_id that a different LIVE
-// page owns now (it may have been re-created after the archive). Returns an
-// error/warning string or null.
+// entity_id marker on the page. Archived rows can't be queried, so a missing
+// row is re-created. Never takes over an entity_id that a different LIVE page
+// owns now (it may have been re-created after the archive). Checkpoint pages
+// get their list tag back, otherwise `checkpoint list` would no longer show
+// them. One block read + one index query (+ one page read only when the row
+// points at another page). Returns an error/warning string or null.
 async function restoreIndexRowForPage(page) {
   try {
-    const blocks = await notionRequest(`/blocks/${page.id}/children?page_size=100`);
-    const { entity_id } = parseMarkers(blocks.results || []);
+    const blocks = await readAllBlocks(page.id);
+    const { entity_id } = parseMarkers(blocks);
     if (!entity_id) return null;
-    const existing = await findPageByEntityId(entity_id);
-    if (existing && !existing.archived && existing.pageId !== page.id) {
-      return `entity_id "${entity_id}" now belongs to another live page (${existing.pageId}), so its index row was not restored`;
+    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+      method: "POST",
+      body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
+    });
+    const row = data?.results?.[0];
+    const ownerId = row ? notionRichTextToString(row.properties?.PageId?.rich_text || []) : "";
+    if (ownerId && ownerId !== page.id) {
+      let owner = null;
+      try {
+        owner = await notionRequest(`/pages/${ownerId}`);
+      } catch (err) {
+        if (!/\(404\)/.test(err.message)) throw err; // deleted owner = stale row
+      }
+      if (owner && owner.archived !== true && owner.in_trash !== true) {
+        return `entity_id "${entity_id}" now belongs to another live page (${ownerId}), so its index row was not restored`;
+      }
     }
-    return await upsertIndexRow({ entity_id, page_id: page.id, url: page.url, tags: [] });
+    const tags = findCheckpointRange(blocks) ? [CHECKPOINT_INDEX_TAG] : [];
+    if (ownerId === page.id && !tags.length) return null; // row already points here
+    return await upsertIndexRow({ entity_id, page_id: page.id, url: page.url, tags, knownRowId: row ? row.id : null });
   } catch (err) {
     return err.message;
   }

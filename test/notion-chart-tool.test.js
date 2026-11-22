@@ -546,10 +546,44 @@ describe("create_from_data", () => {
     route(routes({ page: () => { n += 1; if (n === 2) throw new Error("Notion API error (400): validation_error"); return { id: "row" }; } }));
     const err = await runChartAction(ARGS).catch((e) => e);
     expect(err.message).toMatch(/Created database newdb/);
-    expect(err.message).toMatch(/inserted 1\/3 rows, then row 1 failed/);
+    expect(err.message).toMatch(/inserted 2\/3 rows, then row 1 failed/); // all 3 start together; the other two land
+    expect(err.message).toMatch(/Rows not inserted \(0-based index in the rows array\): 1\./);
     expect(err.message).toMatch(/Nothing was charted/);
     expect(calls("POST").some(([p]) => p === "/views")).toBe(false);
-    expect(calls("POST").filter(([p]) => p === "/pages")).toHaveLength(2); // stops at the first failure
+  });
+
+  it("inserts rows with at most 3 requests in flight", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ Region: `R${i}`, Revenue: i }));
+    let inFlight = 0;
+    let peak = 0;
+    route(routes({ page: async () => { inFlight += 1; peak = Math.max(peak, inFlight); await new Promise((r) => setTimeout(r, 5)); inFlight -= 1; return { id: "row" }; } }));
+    const text = await runChartAction({ ...ARGS, rows: many });
+    expect(peak).toBe(3);
+    expect(calls("POST").filter(([p]) => p === "/pages")).toHaveLength(10);
+    expect(text).toMatch(/with 10 rows/);
+  });
+
+  it("starts no new rows after a failure and lists exactly which are missing", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ Region: `R${i}`, Revenue: i }));
+    let n = 0;
+    const landed = [];
+    route(routes({ page: async (_p, o) => {
+      n += 1;
+      const mine = n;
+      await new Promise((r) => setTimeout(r, 5));
+      if (mine === 2) throw new Error("Notion API error (400): validation_error");
+      landed.push(o.body.properties.Region.title[0].text.content);
+      return { id: "row" };
+    } }));
+    const err = await runChartAction({ ...ARGS, rows: many }).catch((e) => e);
+    const started = calls("POST").filter(([p]) => p === "/pages").length;
+    expect(started).toBeLessThan(12);
+    const missing = err.message.match(/Rows not inserted \(0-based index in the rows array\): ([\d, ]+)\./)[1].split(", ").map(Number);
+    expect(missing).toContain(1);
+    expect(missing).toContain(11);
+    expect(landed.length + missing.length).toBe(12); // every row is either inserted or listed
+    expect(err.message).toMatch(new RegExp(`inserted ${landed.length}/12 rows`));
+    expect(calls("POST").some(([p]) => p === "/views")).toBe(false);
   });
 
   it("reports what was created if the chart fails", async () => {

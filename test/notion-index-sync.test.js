@@ -19,12 +19,14 @@ vi.mock("../connectors/notion/embed_client.js", () => ({ triggerNotionEmbed: vi.
 vi.mock("../connectors/notion/embed_queries.js", () => ({ findSimilarPages: vi.fn(async () => []), rerankByQuery: vi.fn(async (x) => x) }));
 
 import { doCreatePage, doUpdatePage } from "../connectors/notion/tools.js";
-import { queryAllIndexEntries } from "../connectors/notion/client.js";
+import { queryAllIndexEntries, buildCheckpointStartText } from "../connectors/notion/client.js";
 
 const marker = (entity_id) => {
   const text = `\u{1F511} entity_id: ${entity_id}`;
   return { id: `blk-${entity_id}`, type: "paragraph", paragraph: { rich_text: [{ type: "text", plain_text: text, text: { content: text } }] } };
 };
+
+const para = (text, id = `blk-${text.slice(0, 12)}`) => ({ id, type: "paragraph", paragraph: { rich_text: [{ type: "text", plain_text: text, text: { content: text } }] } });
 
 // Small in-memory Notion: pages, Entity Index rows (queried by EntityId or
 // PageId, archived rows disappear from queries like in real Notion) and
@@ -181,7 +183,9 @@ describe("an archived page no longer blocks re-creating its entity_id", () => {
 });
 
 describe("restoring an archived page restores its index row", () => {
-  beforeEach(() => vi.unstubAllGlobals());
+  // Let background work from the previous test finish against its own fetch stub,
+  // so it cannot show up in this test's call list.
+  beforeEach(async () => { await new Promise((r) => setTimeout(r, 50)); vi.unstubAllGlobals(); });
 
   it("re-creates the row from the entity_id marker", async () => {
     const { state, fetchMock } = makeFakeNotion({
@@ -214,6 +218,72 @@ describe("restoring an archived page restores its index row", () => {
     vi.stubGlobal("fetch", fetchMock);
     await doUpdatePage({ page_id: "page-1", archived: false });
     expect(state.rows).toHaveLength(0);
+  });
+
+  it("needs only one block read and one index query for a fresh row", async () => {
+    const { state, fetchMock } = makeFakeNotion({
+      pages: { "page-1": archivedPage("page-1") },
+      blocks: { "page-1": [marker("ent-1")] },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await doUpdatePage({ page_id: "page-1", archived: false });
+    const calls = fetchMock.mock.calls.map(([url, init]) => `${init?.method || "GET"} ${new URL(url).pathname.replace(/^\/v1/, "")}`);
+    expect(calls.filter((c) => /^POST \/databases\/.*\/query$/.test(c))).toHaveLength(1);
+    expect(calls.filter((c) => c === "GET /blocks/page-1/children")).toHaveLength(1);
+    expect(calls.filter((c) => /^GET \/pages\//.test(c))).toHaveLength(0);
+    expect(state.rows).toHaveLength(1);
+  });
+
+  it("gives a restored checkpoint page its list tag back", async () => {
+    const { state, fetchMock } = makeFakeNotion({
+      pages: { "page-1": archivedPage("page-1") },
+      blocks: { "page-1": [marker("my-key"), para(buildCheckpointStartText("2026-11-22T00:00:00Z"), "s"), para("notes", "n"), para("\u2705 End synced checkpoint", "e")] },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await doUpdatePage({ page_id: "page-1", archived: false });
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0].tags).toEqual(["madmcp-checkpoint"]);
+  });
+
+  it("repoints a stale row whose owner page is archived, in place", async () => {
+    const { state, fetchMock } = makeFakeNotion({
+      rows: [{ rowId: "row-1", entity_id: "ent-1", page_id: "page-old" }],
+      pages: { "page-old": archivedPage("page-old"), "page-1": archivedPage("page-1") },
+      blocks: { "page-1": [marker("ent-1")] },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await doUpdatePage({ page_id: "page-1", archived: false });
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0].rowId).toBe("row-1");
+    expect(state.rows[0].page_id).toBe("page-1");
+  });
+
+  it("repoints a row whose owner page no longer exists (404)", async () => {
+    const { state, fetchMock } = makeFakeNotion({
+      rows: [{ rowId: "row-1", entity_id: "ent-1", page_id: "page-gone" }],
+      pages: { "page-1": archivedPage("page-1") },
+      blocks: { "page-1": [marker("ent-1")] },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await doUpdatePage({ page_id: "page-1", archived: false });
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0].page_id).toBe("page-1");
+  });
+
+  it("writes nothing when the row already points at the restored page", async () => {
+    const { state, fetchMock } = makeFakeNotion({
+      rows: [{ rowId: "row-1", entity_id: "ent-1", page_id: "page-1" }],
+      pages: { "page-1": archivedPage("page-1") },
+      blocks: { "page-1": [marker("ent-1")] },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await doUpdatePage({ page_id: "page-1", archived: false });
+    const writes = fetchMock.mock.calls
+      .map(([url, init]) => `${init?.method || "GET"} ${new URL(url).pathname.replace(/^\/v1/, "")}`)
+      .filter((c) => /^(POST|PATCH) \/pages(\/row-.*)?$/.test(c));
+    expect(writes).toEqual([]);
+    expect(writes).toHaveLength(0);
+    expect(state.rows).toHaveLength(1);
   });
 });
 
