@@ -33,7 +33,12 @@ export async function fetchPageMarkdown(id, { includeTranscript = false } = {}) 
   };
 }
 
-const ASYNC_MAX_POLLS = 30;
+// Poll fast and give up on a wall-clock budget. Notion's poll_after_seconds is a
+// hint: waiting out a large one (it used to sleep up to 10s per poll, 30 polls)
+// could stall a tool call for minutes.
+const ASYNC_BUDGET_MS = 30_000;
+const ASYNC_MAX_WAIT_S = 2;
+const ASYNC_DEFAULT_WAIT_S = 1;
 
 // PATCH /pages/{id}/markdown with one command. The sync response is the whole
 // page as markdown; if Notion hands back an async_task instead, poll it.
@@ -41,16 +46,17 @@ export async function patchPageMarkdown(id, command) {
   let data = await notionRequest(`/pages/${id}/markdown`, {
     method: "PATCH", body: command, version: NOTION_MARKDOWN_VERSION,
   });
-  for (let i = 0; data?.object === "async_task" && i < ASYNC_MAX_POLLS; i++) {
+  const deadline = Date.now() + ASYNC_BUDGET_MS;
+  while (data?.object === "async_task" && Date.now() < deadline) {
     if (data.status === "failed") {
       throw new Error(`Notion API error (${data.error?.status ?? 400}): ${data.error?.message || "async markdown update failed"}`);
     }
     if (data.status === "succeeded") { data = data.result; break; }
     const wait = Number(data.poll_after_seconds);
-    await sleep((Number.isFinite(wait) && wait >= 0 ? Math.min(wait, 10) : 2) * 1000);
+    await sleep((Number.isFinite(wait) && wait >= 0 ? Math.min(wait, ASYNC_MAX_WAIT_S) : ASYNC_DEFAULT_WAIT_S) * 1000);
     data = await notionRequest(`/async_tasks/${data.id}`, { version: NOTION_MARKDOWN_VERSION });
   }
-  if (data?.object === "async_task") throw new Error("Notion markdown update is still running after polling; check the page before retrying.");
+  if (data?.object === "async_task") throw new Error(`Notion markdown update is still running after ${ASYNC_BUDGET_MS / 1000}s of polling (task ${data.id}); check the page before retrying.`);
   return {
     truncated: data?.truncated === true,
     length: typeof data?.markdown === "string" ? data.markdown.length : null,

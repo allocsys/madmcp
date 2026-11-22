@@ -423,7 +423,7 @@ export async function doCreatePage(args) {
 
 // lean: skip the fuzzy-dedup and link-candidate searches (mem0 sync creates
 // pages from titles only, where both would be noise and cost ~6+ calls).
-async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties, awaitEmbed, lean }) {
+async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties, awaitEmbed, lean, index_tags }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create's entity_id and one_off param descriptions.`);
   }
@@ -550,7 +550,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
         return { skipped: true, entity_id, existingId: winner.pageId, existingTitle: winner.title, existingUrl: winner.url };
       }
     }
-    indexError = await upsertIndexRow({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")], knownRowId });
+    indexError = await upsertIndexRow({ entity_id, page_id: data.id, url: data.url, tags: [...new Set([...extractTags(content || ""), ...(index_tags || [])])], knownRowId });
     if (!indexError && !batchError) {
       try {
         const lost = await reconcileEntityIndex({ entity_id, page_id: data.id });
@@ -1076,40 +1076,35 @@ async function retireParkedKey(key, destKey) {
   }
 }
 
-// Finds every checkpoint page (2026-10-28) so they can be listed by name.
-// Checkpoint pages are created under NOTION_SYNC_PARENT_PAGE_ID, so this lists
-// that page's child pages and keeps the ones holding a checkpoint start marker.
-// Only the first blocks of each page are read: the entity_id marker and the
-// start marker both sit right at the top. Returns { found: [{ key, id }], skipped }
-// where `skipped` counts pages that could not be read. A checkpoint page moved
-// out of that parent page is not found.
+// Lists every checkpoint with ONE filtered Entity Index query (was: read the
+// parent page's children, then one block read per child page). Checkpoint
+// saves tag their index row with CHECKPOINT_INDEX_TAG; rows created before the
+// tag existed must be tagged once (backfill) or they are not listed.
+// Returns { found: [{ key, id }], skipped } (skipped is always 0 now; kept for
+// the caller's output format).
+export const CHECKPOINT_INDEX_TAG = "madmcp-checkpoint";
+
 async function listCheckpointPages() {
-  const startPrefix = buildCheckpointStartText("\u0000").split("\u0000")[0];
-  const children = await readAllBlocks(NOTION_SYNC_PARENT_PAGE_ID);
-  const ids = children.filter((b) => b.type === "child_page").map((b) => b.id);
   const found = [];
-  let skipped = 0;
-  let next = 0;
-  // Small bounded concurrency (Notion rate-limits ~3 req/s), same as deleteBlocks.
-  const worker = async () => {
-    while (next < ids.length) {
-      const id = ids[next++];
-      try {
-        const data = await notionRequest(`/blocks/${id}/children?page_size=50`);
-        const blocks = data.results || [];
-        const isCheckpoint = startPrefix && blocks.some((b) => b.type === "paragraph" && notionBlockPlainText(b).startsWith(startPrefix));
-        if (!isCheckpoint) continue;
-        const { entity_id } = parseMarkers(blocks);
-        if (entity_id) found.push({ key: entity_id, id });
-      } catch {
-        skipped++;
-      }
+  let cursor;
+  for (let page = 0; page < 10; page++) {
+    const body = {
+      filter: { property: "Tags", multi_select: { contains: CHECKPOINT_INDEX_TAG } },
+      page_size: 100,
+    };
+    if (cursor) body.start_cursor = cursor;
+    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, { method: "POST", body });
+    for (const row of data?.results || []) {
+      const key = notionRichTextToString(row.properties?.EntityId?.rich_text || []);
+      const id = notionRichTextToString(row.properties?.PageId?.rich_text || []);
+      if (key && id) found.push({ key, id });
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
+    if (!data?.has_more || !data.next_cursor) break;
+    cursor = data.next_cursor;
+  }
   // The default checkpoint first, then the rest by name.
   found.sort((a, b) => (a.key === "checkpoint-latest" ? -1 : b.key === "checkpoint-latest" ? 1 : a.key.localeCompare(b.key)));
-  return { found, skipped };
+  return { found, skipped: 0 };
 }
 
 // `pre` (internal, same-key save only): { pageId, url, blocks } already read by the
@@ -1276,6 +1271,8 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
         title: key,
         entity_id: key,
         content: contentText,
+        // Marks the Entity Index row so `list` is one filtered query.
+        index_tags: [CHECKPOINT_INDEX_TAG],
       });
       return `Checkpoint saved successfully.\nURL: ${created.url}`;
     }

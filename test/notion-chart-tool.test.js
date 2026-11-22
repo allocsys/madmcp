@@ -342,6 +342,27 @@ describe("list", () => {
     expect(text).toContain("Ok \u2014 chart/bar \u2014 id: v2");
   });
 
+  it("details: false lists ids only and makes no per-view requests", async () => {
+    route([[/^GET \/views\?database_id=db1$/, () => ({ results: [{ id: "v1" }, { id: "v2" }, { id: "v3" }] })]]);
+    const text = await runChartAction({ action: "list", database_id: "db1", details: false });
+    expect(text).toContain("3 view(s):");
+    expect(text).toContain("- id: v1 \u2014 (details not fetched)");
+    expect(text).toContain("- id: v3 \u2014 (details not fetched)");
+    expect(client.notionRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps view order when details are fetched concurrently", async () => {
+    route([
+      [/^GET \/views\?database_id=db1$/, () => ({ results: [{ id: "v1" }, { id: "v2" }, { id: "v3" }] })],
+      [/^GET \/views\/v1$/, async () => { await new Promise((r) => setTimeout(r, 15)); return { id: "v1", name: "A", type: "table" }; }],
+      [/^GET \/views\/v2$/, () => ({ id: "v2", name: "B", type: "table" })],
+      [/^GET \/views\/v3$/, () => ({ id: "v3", name: "C", type: "table" })],
+    ]);
+    const text = await runChartAction({ action: "list", database_id: "db1" });
+    expect(text.indexOf("id: v1")).toBeLessThan(text.indexOf("id: v2"));
+    expect(text.indexOf("id: v2")).toBeLessThan(text.indexOf("id: v3"));
+  });
+
   it("reports when there are no views", async () => {
     route([[/^GET \/views\?database_id=db1$/, () => ({ results: [] })]]);
     expect(await runChartAction({ action: "list", database_id: "db1" })).toBe("No views found.");

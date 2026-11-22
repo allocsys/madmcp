@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doUpdatePage, register } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
 import {
-  extractMarkerLines, parseMarkdownMarkers, splitChangelog, withPreservedMarkers,
+  extractMarkerLines, parseMarkdownMarkers, splitChangelog, withPreservedMarkers, patchPageMarkdown,
 } from "../connectors/notion/markdown.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
@@ -222,6 +222,47 @@ describe("notion_update (markdown edits)", () => {
       page_id: "p1",
       replacements: [{ find: "one", replace: "uno" }, { find: "missing", replace: "x" }],
     })).rejects.toThrow(/use content_updates[\s\S]*Already applied before the failure: Replaced block \("one"/);
+  });
+});
+
+describe("patchPageMarkdown async polling", () => {
+  const cmd = { type: "insert_content", insert_content: { content: "x", position: { type: "end" } } };
+
+  beforeEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it("caps a large poll_after_seconds hint at 2s", async () => {
+    vi.useFakeTimers();
+    let polls = 0;
+    route([
+      [/^PATCH \/pages\/p1\/markdown$/, () => ({ object: "async_task", id: "t1", status: "queued", poll_after_seconds: 60 })],
+      [/^GET \/async_tasks\/t1$/, () => { polls++; return { object: "async_task", id: "t1", status: "succeeded", result: { markdown: "ok", truncated: false } }; }],
+    ]);
+    let done = false;
+    const p = patchPageMarkdown("p1", cmd).then((r) => { done = true; return r; });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await p).toEqual({ truncated: false, length: 2 });
+    expect(polls).toBe(1);
+  });
+
+  it("gives up after a wall-clock budget instead of polling for minutes", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 10_000));
+    route([
+      [/^PATCH \/pages\/p1\/markdown$/, () => ({ object: "async_task", id: "t1", status: "queued", poll_after_seconds: 0 })],
+      [/^GET \/async_tasks\/t1$/, () => ({ object: "async_task", id: "t1", status: "running", poll_after_seconds: 0 })],
+    ]);
+    await expect(patchPageMarkdown("p1", cmd)).rejects.toThrow(/still running after 30s of polling \(task t1\)/);
+    const polls = client.notionRequest.mock.calls.filter(([path]) => path === "/async_tasks/t1").length;
+    expect(polls).toBeLessThanOrEqual(4);
+  });
+
+  it("surfaces a failed task right away", async () => {
+    route([
+      [/^PATCH \/pages\/p1\/markdown$/, () => ({ object: "async_task", id: "t1", status: "failed", error: { status: 409, message: "conflict" } })],
+    ]);
+    await expect(patchPageMarkdown("p1", cmd)).rejects.toThrow(/\(409\): conflict/);
   });
 });
 
