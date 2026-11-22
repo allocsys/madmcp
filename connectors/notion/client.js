@@ -314,7 +314,10 @@ export function parseMarkers(blocks = []) {
 // just as immediately-consistent (no search-index lag either way, since
 // this never goes through notion_search) but isn't bound by that 100-block
 // limit -- database queries paginate independently of page block counts.
-export async function findPageByEntityId(entity_id) {
+// withMarkers (default false): also read the page's first blocks and parse the
+// marker blocks (status etc.). Most callers only need pageId/title/url/archived,
+// so the light path is 2 requests instead of 3.
+export async function findPageByEntityId(entity_id, { withMarkers = false } = {}) {
   let rows;
   try {
     const data = await clientInternals.notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
@@ -345,17 +348,20 @@ export async function findPageByEntityId(entity_id) {
     throw new Error(`Could not read Notion page ${page_id} for entity_id "${entity_id}": ${err.message}`, { cause: err });
   }
   const archived = page.archived === true || page.in_trash === true;
-  let blocksData;
-  try {
-    blocksData = await clientInternals.notionRequest(`/blocks/${page_id}/children?page_size=20`);
-  } catch (err) {
-    if (/\(404\)/.test(err.message)) return null;
-    // Archived pages may refuse block reads; the archived flag is enough
-    // for callers, so return empty markers rather than failing.
-    if (archived) blocksData = { results: [] };
-    else throw new Error(`Could not read blocks of Notion page ${page_id} for entity_id "${entity_id}": ${err.message}`, { cause: err });
+  let markers = {};
+  if (withMarkers) {
+    let blocksData;
+    try {
+      blocksData = await clientInternals.notionRequest(`/blocks/${page_id}/children?page_size=20`);
+    } catch (err) {
+      if (/\(404\)/.test(err.message)) return null;
+      // Archived pages may refuse block reads; the archived flag is enough
+      // for callers, so return empty markers rather than failing.
+      if (archived) blocksData = { results: [] };
+      else throw new Error(`Could not read blocks of Notion page ${page_id} for entity_id "${entity_id}": ${err.message}`, { cause: err });
+    }
+    markers = parseMarkers(blocksData.results || []);
   }
-  const markers = parseMarkers(blocksData.results || []);
   return { pageId: page_id, title: notionPageTitle(page), url: page.url, markers, archived };
 }
 
