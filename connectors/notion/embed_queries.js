@@ -83,8 +83,10 @@ export function cosineDistance(a, b) {
 // relative order -- degrade to keyword rank rather than dropping them.
 export async function rerankByQuery(text, candidates) {
   if (!candidates.length) return candidates;
-  const queryEmbedding = await embedQuery(text);
-  const embeddings = await getEmbeddingsForPageIds(candidates.map((c) => c.pageId));
+  const [queryEmbedding, embeddings] = await Promise.all([
+    embedQuery(text),
+    getEmbeddingsForPageIds(candidates.map((c) => c.pageId)),
+  ]);
 
   const scored = [];
   const unscored = [];
