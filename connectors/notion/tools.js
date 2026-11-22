@@ -23,6 +23,7 @@ import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 import { fetchPageMarkdown, patchPageMarkdown, parseMarkdownMarkers, splitChangelog, withPreservedMarkers } from "./markdown.js";
 import { paginateText } from "../output.js";
 import { resolveRange, applyLineEdit, contentToLines } from "./block_range.js";
+import { addTodos, setTodoState, listOpenTodos, openTodoCount, clearDoneTodos } from "./todo.js";
 import { register as registerChartTool } from "./chart_tool.js";
 
 // Phase 2 (plan-madmcp-notion-overhaul on Notion) -- re-reads a page's
@@ -1126,7 +1127,53 @@ async function listCheckpointPages() {
 
 // `pre` (internal, same-key save only): { pageId, url, blocks } already read by the
 // caller, so the save skips its own page lookup and block read.
-export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end, pre }) {
+// Todo actions (todo_add / todo_done / todo_doing / todo_list / todo_clear):
+// todos are lines inside the checkpoint notes (see todo.js). Each action reads
+// the notes, edits the lines and writes back through the normal save path.
+async function doTodo({ action, notes, key, ids }) {
+  const current = await readCheckpointNotesWithPage(key);
+  if (current === null) {
+    if (action !== "todo_add") return `No checkpoint found for key "${key}"; no todos.`;
+    const { lines, ids: newIds } = addTodos([], contentToLines(notes));
+    await doCheckpoint({ action: "save", notes: lines.join("\n"), key });
+    return `Added ${newIds.map((i) => `#${i}`).join(", ")} (created "${key}").`;
+  }
+  if (!current.plain) {
+    throw new Error(`${action}: the notes of "${key}" contain blocks other than plain paragraphs (edited by hand?), so a text edit could flatten them. Use 'save' to rewrite them in full.`);
+  }
+  const lines = current.text ? current.text.split("\n") : [];
+  if (action === "todo_list") {
+    const open = listOpenTodos(lines);
+    return open.length ? open.join("\n") : "No open todos.";
+  }
+  let result;
+  let msg;
+  if (action === "todo_add") {
+    const r = addTodos(lines, contentToLines(notes));
+    result = r.lines;
+    msg = `Added ${r.ids.map((i) => `#${i}`).join(", ")}.`;
+  } else if (action === "todo_done" || action === "todo_doing") {
+    const r = setTodoState(lines, ids, action === "todo_done" ? "done" : "doing");
+    if (!r.changed.length) throw new Error(`${action}: no todo with id ${r.missing.map((i) => `#${i}`).join(", ")}; nothing written.`);
+    result = r.lines;
+    msg = `${action === "todo_done" ? "Done" : "Doing"}: ${r.changed.map((i) => `#${i}`).join(", ")}.${r.missing.length ? ` Not found: ${r.missing.map((i) => `#${i}`).join(", ")}.` : ""}`;
+  } else {
+    const r = clearDoneTodos(lines);
+    if (!r.removed) return "No done todos to clear.";
+    result = r.lines;
+    msg = `Cleared ${r.removed} done todo${r.removed === 1 ? "" : "s"}.`;
+  }
+  await doCheckpoint({ action: "save", notes: result.join("\n"), key, pre: current });
+  return `${msg} ${openTodoCount(result)} open.`;
+}
+
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end, ids, pre }) {
+  if (typeof action === "string" && action.startsWith("todo_")) {
+    if (!["todo_add", "todo_done", "todo_doing", "todo_list", "todo_clear"].includes(action)) {
+      throw new Error(`Invalid checkpoint action: "${action}".`);
+    }
+    return doTodo({ action, notes, key, ids });
+  }
   if (action === "list") {
     const { found, skipped } = await listCheckpointPages();
     const skippedNote = skipped ? `\n(${skipped} page${skipped === 1 ? "" : "s"} could not be read and ${skipped === 1 ? "was" : "were"} skipped.)` : "";
@@ -1360,7 +1407,9 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     const blockMap = new Map(blocks.map((b) => [b.id, b]));
     const innerBlocks = range.innerBlockIds.map((id) => blockMap.get(id)).filter(Boolean);
     const notesContent = notionBlocksToText(innerBlocks);
-    return logSection + (notesContent || "(empty checkpoint)");
+    const openTodos = openTodoCount(notesContent ? notesContent.split("\n") : []);
+    const todoNote = openTodos ? `\n\nTodos: ${openTodos} open (checkpoint todo_list).` : "";
+    return logSection + (notesContent || "(empty checkpoint)") + todoNote;
   } else if (action === "clear_log") {
     // Deletes the commit log entries sitting between the log marker and the
     // checkpoint start marker. Both markers and the saved notes are left
@@ -1393,7 +1442,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     return `Commit log cleared: ${logBlocks.length} entr${logBlocks.length === 1 ? "y" : "ies"} removed.\nURL: ${existing.url}`;
   } else {
-    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit", "append", "replace_block", "delete_block" or "list").`);
+    throw new Error(`Invalid checkpoint action: "${action}" (expected "save", "load", "clear_log", "park", "unpark", "edit", "append", "replace_block", "delete_block", "list", "todo_add", "todo_done", "todo_doing", "todo_list" or "todo_clear").`);
   }
 }
 
@@ -1463,9 +1512,9 @@ export function register(server) {
 
   server.tool(
     "checkpoint",
-    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text (whole lines: use delete_block/replace_block); each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'replace_block' overwrites a range of lines of the saved notes with 'notes', and 'delete_block' removes it, WITHOUT quoting the old text: 'start' (and optional 'end', default = start, inclusive) is a 1-based line number of the notes (the commit log is not counted) or a unique prefix of the line, e.g. start 'NEXT' end 'NOTES'; nothing is written if an anchor is missing, ambiguous or out of range. 'list' shows every checkpoint as its name (the key) and Notion page ID. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Anything bigger than a few small changes — use 'save' (full rewrite).",
+    "Save or load a handoff note for the CURRENT session so a fresh session can recover context — NOT a general-purpose notes tool. Defaults to a single global checkpoint entity ('checkpoint-latest'); pass 'key' to keep a separate, named checkpoint. 'save' fully rewrites the stored note; 'load' retrieves it (on the default key, 'load' also returns a short log of recent GitHub commits made through this server, newest first, above the notes). 'clear_log' deletes the commit log entries between the log marker and the checkpoint start marker, leaving the markers and notes intact. 'park' copies the notes of 'key' (default checkpoint-latest) to the key given in 'to' (when parking checkpoint-latest it is blanked afterwards; other keys are left untouched); 'unpark' moves the notes of a parked 'key' into checkpoint-latest (overwrites the active notes; the parked page and its index row are archived afterwards, unless the parked key shares a page with another key). 'edit' applies small targeted edits to the saved notes of 'key': pass 'edits' as [{ find, replace?, replace_all? }], a literal find/replace on the notes text where an empty or omitted 'replace' deletes the matched text (whole lines: use delete_block/replace_block); each 'find' must match exactly once unless replace_all is true; all edits succeed or nothing is written, and the markers and commit log are never touched. 'replace_block' overwrites a range of lines of the saved notes with 'notes', and 'delete_block' removes it, WITHOUT quoting the old text: 'start' (and optional 'end', default = start, inclusive) is a 1-based line number of the notes (the commit log is not counted) or a unique prefix of the line, e.g. start 'NEXT' end 'NOTES'; nothing is written if an anchor is missing, ambiguous or out of range. 'list' shows every checkpoint as its name (the key) and Notion page ID. 'append' adds the text in 'notes' as new line(s) at the end of the saved notes of 'key' without resending the rest (fails if there is no checkpoint yet; use 'save' to create one). Todos live as lines in the notes (\"#3 [ ] text\"): 'todo_add' (one per line in 'notes'), 'todo_done' / 'todo_doing' ('ids'), 'todo_list' (open only), 'todo_clear' (drops done). Anything bigger than a few small changes — use 'save' (full rewrite).",
     {
-      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append", "replace_block", "delete_block", "list"]).describe("Action to perform: 'list' to show all checkpoint names and page IDs, 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest, 'replace_block' to overwrite lines start..end with 'notes', 'delete_block' to delete lines start..end"),
+      action: z.enum(["save", "load", "clear_log", "park", "unpark", "edit", "append", "replace_block", "delete_block", "list", "todo_add", "todo_done", "todo_doing", "todo_list", "todo_clear"]).describe("Action to perform: 'list' to show all checkpoint names and page IDs, 'append' to add line(s) to the end of the saved notes, 'edit' to make small find/replace/delete edits to the saved notes, 'save' to fully (re)write the handoff notes, 'load' to retrieve them, 'clear_log' to delete the commit log entries (notes are kept), 'park' to copy notes from 'key' to 'to', 'unpark' to restore a parked 'key' into checkpoint-latest, 'replace_block' to overwrite lines start..end with 'notes', 'delete_block' to delete lines start..end, 'todo_add' to add todos (one per line in 'notes'), 'todo_done' / 'todo_doing' to mark todos by 'ids', 'todo_list' to show open todos, 'todo_clear' to remove done todos"),
       to:     z.string().optional().describe("Target key (only used for action: 'park'), e.g. 'checkpoint2'."),
       start:  z.union([z.number().int().min(1), z.string()]).optional().describe("First line to change (only for 'replace_block' / 'delete_block'): a 1-based line number of the saved notes, or a unique prefix of that line (e.g. 'NEXT'). A string of only digits counts as a line number."),
       end:    z.union([z.number().int().min(1), z.string()]).optional().describe("Last line to change, inclusive (only for 'replace_block' / 'delete_block'): line number or a unique prefix of a line at or after 'start'. Defaults to 'start' (a single line)."),
@@ -1475,11 +1524,12 @@ export function register(server) {
         replace_all: z.boolean().optional().describe("Replace every match instead of requiring a single one (default: false)."),
       })).optional().describe("Edits to apply in order (only used for action: 'edit'). All-or-nothing: if any edit fails, nothing is written."),
       notes:  z.string().optional().describe("Freeform plain-text handoff notes (action 'save': the full text, a full rewrite; action 'append': the line(s) to add to the end of the existing notes)"),
+      ids:    z.array(z.number().int().min(1)).optional().describe("Todo numbers (only for 'todo_done' / 'todo_doing'), e.g. [2, 3]."),
       key:    z.string().optional().describe("Checkpoint identifier, for keeping more than one independent checkpoint. Defaults to 'checkpoint-latest'."),
     },
-    async ({ action, notes, key, to, edits, start, end }) => {
+    async ({ action, notes, key, to, edits, start, end, ids }) => {
       try {
-        const text = await doCheckpoint({ action, notes, key, to, edits, start, end });
+        const text = await doCheckpoint({ action, notes, key, to, edits, start, end, ids });
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: err.message }], isError: true };
