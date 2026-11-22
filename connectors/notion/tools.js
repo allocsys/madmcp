@@ -598,6 +598,9 @@ async function runSequentially(items, fn) {
   return results;
 }
 
+// Max lazy-backfill embeds queued by one notion_find search.
+const LAZY_EMBED_CAP = 2;
+
 const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "to_do"];
 
 // ---------------------------------------------------------------------------
@@ -1497,15 +1500,20 @@ export function register(server) {
             // Fix #5.3: a page edited directly in Notion never re-triggers
             // embed-on-write, so also re-embed a SCORED candidate whose
             // stored updatedAt is older than Notion's own last_edited_time.
+            // Capped (LAZY_EMBED_CAP per search): each trigger costs ~2 Notion
+            // requests in the shared serial throttle, so an uncapped batch of
+            // ~10 delayed the NEXT tool call. Unscored pages go first; the
+            // rest are picked up by later searches.
+            let queued = 0;
+            const lazyEmbed = (pageId) => { if (queued < LAZY_EMBED_CAP) { queued++; triggerEmbedForPage(pageId); } };
             for (const c of reranked) {
-              if (c.pageId && c.distance === undefined) {
-                triggerEmbedForPage(c.pageId);
-              } else if (c.pageId && c.updatedAt && c.result?.last_edited_time) {
+              if (c.pageId && c.distance === undefined) lazyEmbed(c.pageId);
+            }
+            for (const c of reranked) {
+              if (c.pageId && c.distance !== undefined && c.updatedAt && c.result?.last_edited_time) {
                 const embeddedAt = new Date(c.updatedAt).getTime();
                 const editedAt = new Date(c.result.last_edited_time).getTime();
-                if (Number.isFinite(embeddedAt) && Number.isFinite(editedAt) && editedAt > embeddedAt) {
-                  triggerEmbedForPage(c.pageId);
-                }
+                if (Number.isFinite(embeddedAt) && Number.isFinite(editedAt) && editedAt > embeddedAt) lazyEmbed(c.pageId);
               }
             }
           }

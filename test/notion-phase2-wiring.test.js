@@ -274,6 +274,34 @@ describe("Phase 2 semantic wiring in connectors/notion/tools.js", () => {
       });
     });
 
+    it("queues at most 2 lazy backfill embeds per search, unscored pages first", async () => {
+      const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
+      const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
+      // p1 scored+stale, p2-p5 unscored: the cap must go to the unscored ones.
+      rerankByQuery.mockImplementationOnce(async (_query, candidates) =>
+        candidates.map((c, i) => (i === 0 ? { ...c, distance: 0.5, updatedAt: "2026-09-01T00:00:00.000Z" } : { ...c }))
+      );
+      const page = (id, extra = {}) => ({ object: "page", id, url: `https://notion.so/${id}`, ...extra, properties: { title: { type: "title", title: [{ plain_text: id }] } } });
+      client.notionRequest.mockImplementation(async (path, opts = {}) => {
+        const method = opts.method || "GET";
+        if (path === "/search" && method === "POST") {
+          return { results: [page("p1", { last_edited_time: "2026-09-27T00:00:00.000Z" }), page("p2"), page("p3"), page("p4"), page("p5")] };
+        }
+        const m = path.match(/^\/pages\/(p\d)$/);
+        if (m) return { id: m[1], properties: { title: { type: "title", title: [{ plain_text: m[1] }] } } };
+        if (path.startsWith("/blocks/")) return { results: [] };
+        throw new Error(`Unexpected notionRequest call: ${method} ${path}`);
+      });
+
+      await notionFind({ mode: "search", query: "anything" });
+
+      await vi.waitFor(() => expect(triggerNotionEmbed).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(triggerNotionEmbed).toHaveBeenCalledTimes(2);
+      const ids = triggerNotionEmbed.mock.calls.map((c) => c[0].page_id).sort();
+      expect(ids).toEqual(["p2", "p3"]);
+    });
+
     it("does NOT re-embed a scored page whose embedding is already newer than (or equal to) its last_edited_time", async () => {
       const { rerankByQuery } = await import("../connectors/notion/embed_queries.js");
       const { triggerNotionEmbed } = await import("../connectors/notion/embed_client.js");
