@@ -17,6 +17,19 @@ describe("connectors/repomap/embed.js", () => {
     vi.resetModules();
   });
 
+  it("passes an abort signal so a hung request cannot hang the caller", async () => {
+    global.fetch = vi.fn(async (url, opts) => {
+      if (opts.signal?.aborted) throw opts.signal.reason;
+      return new Promise(() => {});
+    });
+    vi.doMock("../config.js", () => ({ GEMINI_API_KEYS: ["key-1"] }));
+    const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(new Error("timed out")));
+    const { embedQuery } = await import("../connectors/repomap/embed.js");
+    await expect(embedQuery("q")).rejects.toThrow("timed out");
+    expect(spy).toHaveBeenCalledWith(5000);
+    spy.mockRestore();
+  });
+
   it("throws an error when GEMINI_API_KEYS is empty", async () => {
     vi.doMock("../config.js", () => ({
       GEMINI_API_KEYS: [],
