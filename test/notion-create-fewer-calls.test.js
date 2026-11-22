@@ -54,7 +54,7 @@ function makeFakeNotion({ rows = [] } = {}) {
     if (path === "/pages" && method === "POST") {
       if (body.parent.database_id) {
         const props = body.properties;
-        const row = { rowId: `row-${++rowSeq}`, entity_id: props.EntityId.rich_text[0].text.content, page_id: props.PageId.rich_text[0].text.content, createdAt: Date.now() + rowSeq };
+        const row = { rowId: `row-${++rowSeq}`, entity_id: props.EntityId.rich_text[0].text.content, page_id: props.PageId.rich_text[0].text.content, tags: (props.Tags?.multi_select || []).map((t) => t.name), createdAt: Date.now() + rowSeq };
         state.rows.push(row);
         return ok({ id: row.rowId });
       }
@@ -127,6 +127,13 @@ describe("doCreatePage request count and overlap", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].page_id).toBe("page-1");
     expect(state.rowPatches).toBe(1);
+  });
+
+  it("index_tags are written to the new index row", async () => {
+    const { state, fetchMock } = makeFakeNotion();
+    vi.stubGlobal("fetch", fetchMock);
+    await doCreatePage(args({ index_tags: ["madmcp-checkpoint"] }));
+    expect(state.rows.find((x) => x.entity_id === "ent-1").tags).toEqual(["madmcp-checkpoint"]);
   });
 
   it("link/dup lookup failures do not block the create", async () => {
