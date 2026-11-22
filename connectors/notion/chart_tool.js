@@ -23,6 +23,9 @@ import {
 } from "./chart_config.js";
 import { buildDataset, syntheticSchema, COLUMN_TYPE_NAMES, MAX_ROWS } from "./chart_data.js";
 
+// How many create_from_data row inserts may be in flight at once.
+const ROW_INSERT_CONCURRENCY = 3;
+
 const ACTIONS = ["create", "update", "get", "list", "delete", "create_dashboard", "create_from_data"];
 const MAX_LIST_DETAILS = 25; // retrieveView calls per list (Notion rate-limits ~3 req/s)
 
@@ -117,18 +120,34 @@ async function doCreateFromData(args) {
 
   const dbBody = { parent: { type: "page_id", page_id: parent_page_id }, title: chunkRichText(data.title), properties: data.schema };
   if (args.dry_run) {
-    return `DRY RUN \u2014 nothing was written.\n1. POST /v1/databases\n${json(dbBody)}\n\n2. POST /v1/pages \u00d7 ${data.rows.length} (one request per row). First row:\n${json({ parent: { type: "database_id", database_id: "<new database id>" }, properties: data.rows[0] })}\n\n3. POST /v1/views (Notion-Version ${VIEWS_API_VERSION}). Property ids appear as column names here; the real ids are resolved once the database exists:\n${json(previewBody)}`;
+    return `DRY RUN \u2014 nothing was written.\n1. POST /v1/databases\n${json(dbBody)}\n\n2. POST /v1/pages \u00d7 ${data.rows.length} (one request per row, up to ${ROW_INSERT_CONCURRENCY} in parallel). First row:\n${json({ parent: { type: "database_id", database_id: "<new database id>" }, properties: data.rows[0] })}\n\n3. POST /v1/views (Notion-Version ${VIEWS_API_VERSION}). Property ids appear as column names here; the real ids are resolved once the database exists:\n${json(previewBody)}`;
   }
 
   const db = await notionRequest("/databases", { method: "POST", body: dbBody });
-  let inserted = 0;
-  for (const properties of data.rows) {
-    try {
-      await notionRequest("/pages", { method: "POST", body: { parent: { type: "database_id", database_id: db.id }, properties } });
-      inserted += 1;
-    } catch (err) {
-      throw new Error(`Created database ${db.id}${db.url ? ` (${db.url})` : ""} and inserted ${inserted}/${data.rows.length} rows, then row ${inserted} failed: ${err.message}\nNothing was charted. The database was left in place: archive it, or add the missing rows and chart it with action "create" and database_id ${db.id}.`, { cause: err });
+  // Rows go in with bounded concurrency (the Notion throttle spaces the request
+  // starts). After the first failure no further row is started; rows already in
+  // flight finish, so the error can say exactly which rows are missing.
+  const done = new Set();
+  const failures = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < data.rows.length && !failures.length) {
+      const i = next++;
+      try {
+        await notionRequest("/pages", { method: "POST", body: { parent: { type: "database_id", database_id: db.id }, properties: data.rows[i] } });
+        done.add(i);
+      } catch (err) {
+        failures.push({ i, message: err.message, err });
+      }
     }
+  };
+  await Promise.all(Array.from({ length: Math.min(ROW_INSERT_CONCURRENCY, data.rows.length) }, worker));
+  const inserted = done.size;
+  if (failures.length) {
+    failures.sort((a, b) => a.i - b.i);
+    const first = failures[0];
+    const missing = data.rows.map((_, i) => i).filter((i) => !done.has(i));
+    throw new Error(`Created database ${db.id}${db.url ? ` (${db.url})` : ""} and inserted ${inserted}/${data.rows.length} rows, then row ${first.i} failed: ${first.message}\nRows not inserted (0-based index in the rows array): ${missing.join(", ")}.\nNothing was charted. The database was left in place: archive it, or add the missing rows and chart it with action "create" and database_id ${db.id}.`, { cause: first.err });
   }
 
   let view;
