@@ -17,6 +17,7 @@ import {
 import { findLinkCandidates, extractTags } from "./linking.js";
 import { trimCommitLogBlocks } from "./commit_log.js";
 import { withLock } from "../shared/lock.js";
+import { waitUntil } from "@vercel/functions";
 import { triggerNotionEmbed } from "./embed_client.js";
 import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 import { fetchPageMarkdown, patchPageMarkdown, parseMarkdownMarkers, splitChangelog, withPreservedMarkers } from "./markdown.js";
@@ -34,6 +35,17 @@ import { register as registerChartTool } from "./chart_tool.js";
 // same-batch update-then-create/update sequences. triggerNotionEmbed
 // itself never throws (see embed_client.js), so awaiting it adds latency
 // but never risk of failing the update this is attached to.
+// Embed-on-write runs OFF the request path by default: a cold Render worker
+// can take ~15s, which a single create/update must not wait for. Only a
+// multi-item batch awaits it (awaitEmbed), because a later item's fuzzy-dedup
+// check could otherwise run before this page's embedding landed. Embed
+// functions never throw, so neither branch can fail the write.
+function embedAfter(promise, awaitEmbed) {
+  if (awaitEmbed) return promise;
+  try { waitUntil(promise); } catch { /* no request context: promise still runs */ }
+  return undefined;
+}
+
 async function triggerEmbedForPage(page_id) {
   try {
     // Markdown covers the whole page, nested blocks included; the block read
@@ -345,7 +357,7 @@ export async function doCreatePage(args) {
   return withLock(`notion-create:${args.entity_id}`, () => doCreatePageUnlocked(args));
 }
 
-async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
+async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties, awaitEmbed }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create's entity_id and one_off param descriptions.`);
   }
@@ -493,7 +505,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // fully in hand here (unlike doUpdatePage, which has to re-read the
   // page), so no extra Notion round trip is needed to embed it -- the only
   // added cost is waiting on the worker+Gemini call itself.
-  await triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") });
+  await embedAfter(triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") }), awaitEmbed);
 
   return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError, linkCandidates, autoRelations, possibleDuplicates };
 }
@@ -688,7 +700,7 @@ export async function doUpdatePage(args) {
   }
 }
 
-async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content, block_edits }, results) {
+async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content, block_edits, awaitEmbed }, results) {
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
   // (archived: true) is deliberately NOT handled here -- see the bottom of
@@ -870,7 +882,7 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   // page is no longer relevant to search/dedup) or when nothing actually
   // changed (results is empty).
   if (results.length && archived !== true) {
-    await triggerEmbedForPage(page_id);
+    await embedAfter(triggerEmbedForPage(page_id), awaitEmbed);
   }
   return results;
 }
@@ -1619,6 +1631,7 @@ export function register(server) {
         const results = await runSequentially(items, (item) => doCreatePage({
           parent_id: item.parent_id, parent_type: item.parent_type, title: item.title, content: item.content,
           entity_id: item.entity_id, status: item.status, relations: item.relations, one_off: item.one_off, properties: item.properties,
+          awaitEmbed: items.length > 1,
         }));
         const lines = results.map((r, i) => {
           const label = items[i].title;
@@ -1709,6 +1722,7 @@ export function register(server) {
           page_id: item.page_id, title: item.title, append_content: item.append_content, archived: item.archived,
           replacements: item.replacements, status: item.status, entity_id: item.entity_id, relations: item.relations, properties: item.properties,
           content_updates: item.content_updates, block_edits: item.block_edits, replace_content: item.replace_content, append_markdown: item.append_markdown, allow_deleting_content: item.allow_deleting_content,
+          awaitEmbed: items.length > 1,
         }));
         const lines = results.map((r, i) => {
           const label = items[i].page_id;
