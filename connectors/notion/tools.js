@@ -176,6 +176,68 @@ async function swapRangeContent({ page_id, range, contentBlocks, startText }) {
   });
 }
 
+// Runs fn over items with bounded concurrency; returns the failures.
+async function runLimited(items, fn, concurrency = 3) {
+  const failed = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      try { await fn(item); } catch (err) { failed.push({ id: item.id, error: err.message }); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return failed;
+}
+
+// Writes `newLines` (one paragraph per line) into a range by DIFFING against
+// the current inner blocks instead of deleting and re-appending all of them:
+// unchanged leading/trailing lines are left alone, changed lines in between are
+// PATCHed in place, and only the surplus is appended or deleted. A one-line
+// change or an append costs ~2 writes instead of ~2N. Order is safe: extra
+// blocks are appended first, existing ones patched, surplus deleted last, and
+// the start marker's timestamp bumped only at the very end, so a failure
+// midway never wipes the saved notes and a retry is never skipped.
+// Returns null when the inner blocks are not all plain paragraphs (hand-edited
+// range): the caller then falls back to swapRangeContent.
+async function diffRangeContent({ page_id, range, blocks, newLines, startText }) {
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  const oldInner = range.innerBlockIds.map((id) => byId.get(id));
+  if (oldInner.some((b) => !b || b.type !== "paragraph")) return null;
+  const oldText = oldInner.map(notionBlockPlainText);
+  const n = oldText.length;
+  const m = newLines.length;
+  let p = 0;
+  while (p < n && p < m && oldText[p] === newLines[p]) p++;
+  let sfx = 0;
+  while (sfx < n - p && sfx < m - p && oldText[n - 1 - sfx] === newLines[m - 1 - sfx]) sfx++;
+  const oldMid = oldInner.slice(p, n - sfx);
+  const newMid = newLines.slice(p, m - sfx);
+  const k = Math.min(oldMid.length, newMid.length);
+
+  if (newMid.length > k) {
+    const anchor = k > 0 ? oldMid[k - 1].id : p > 0 ? oldInner[p - 1].id : range.startBlockId;
+    await appendBlocks(page_id, newMid.slice(k).map(textBlock), { after: anchor });
+  }
+  const patchFailed = await runLimited(
+    oldMid.slice(0, k).map((b, i) => ({ id: b.id, text: newMid[i] })),
+    (it) => notionRequest(`/blocks/${it.id}`, { method: "PATCH", body: { paragraph: { rich_text: chunkRichText(it.text) } } }),
+  );
+  if (patchFailed.length) {
+    throw new Error(`${patchFailed.length} of ${k} changed block(s) could not be updated (${patchFailed[0].error}). The notes may be partly updated -- run the save again to retry.`);
+  }
+  const surplus = oldMid.slice(k).map((b) => b.id);
+  const failed = await deleteBlocks(surplus);
+  if (failed.length) {
+    throw new Error(`New content was written, but ${failed.length} of ${surplus.length} old block(s) could not be deleted (${failed[0].error}). The range may show old and new content together -- run the save/sync again to retry.`);
+  }
+  await notionRequest(`/blocks/${range.startBlockId}`, {
+    method: "PATCH",
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: startText } }] } },
+  });
+  return { kept: p + sfx, patched: k, appended: newMid.length - k, deleted: surplus.length };
+}
+
 // N3: notionRequest errors are `Notion API error (<status>): ...`.
 function notionErrorStatus(err) {
   const m = /\((\d{3})\)/.exec(err?.message || "");
@@ -895,8 +957,8 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
 // callers (mem0 sync vs. checkpoint save) have historically diverged in
 // small ways and mem0-specific skip/logging behavior in replaceSyncedRange
 // shouldn't silently start applying to checkpoint saves or vice versa.
-export async function replaceCheckpointRange({ page_id, contentLines, updated_at }) {
-  const blocks = await readAllBlocks(page_id);
+export async function replaceCheckpointRange({ page_id, contentLines, updated_at, blocks: prefetched }) {
+  const blocks = prefetched ?? await readAllBlocks(page_id);
   const range = findCheckpointRange(blocks);
 
   if (!range) {
@@ -910,10 +972,15 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
   // skip case the way there is for a mem0 memory that hasn't changed.
   // Insert-first, delete-after (see swapRangeContent): a failure midway must
   // not wipe the saved checkpoint.
-  const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  await swapRangeContent({ page_id, range, contentBlocks, startText: buildCheckpointStartText(updated_at) });
+  const lines = (contentLines || []).filter(Boolean);
+  const startText = buildCheckpointStartText(updated_at);
+  const diff = await diffRangeContent({ page_id, range, blocks, newLines: lines, startText });
+  if (!diff) {
+    // Range holds non-paragraph blocks (hand-edited): full replace.
+    await swapRangeContent({ page_id, range, contentBlocks: lines.map(textBlock), startText });
+  }
 
-  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousUpdatedAt: range.updated_at };
+  return { action: "updated", removed: range.innerBlockIds.length, added: lines.length, previousUpdatedAt: range.updated_at, ...(diff ? { diff } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -936,7 +1003,7 @@ async function readCheckpointNotesWithPage(key) {
   // checkpoint range (e.g. a hand-edited heading or list), so callers that
   // round-trip the text (edit) can refuse instead of flattening those blocks.
   const plain = innerBlocks.every((b) => b.type === "paragraph");
-  return { pageId: existing.pageId, text: notionBlocksToText(innerBlocks), plain };
+  return { pageId: existing.pageId, url: existing.url, blocks, text: notionBlocksToText(innerBlocks), plain };
 }
 
 async function readCheckpointNotes(key) {
@@ -1020,7 +1087,9 @@ async function listCheckpointPages() {
   return { found, skipped };
 }
 
-export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end }) {
+// `pre` (internal, same-key save only): { pageId, url, blocks } already read by the
+// caller, so the save skips its own page lookup and block read.
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end, pre }) {
   if (action === "list") {
     const { found, skipped } = await listCheckpointPages();
     const skippedNote = skipped ? `\n(${skipped} page${skipped === 1 ? "" : "s"} could not be read and ${skipped === 1 ? "was" : "were"} skipped.)` : "";
@@ -1066,7 +1135,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
       else replaced += e.replace_all ? count : 1;
     }
     if (text === current.text) return `Edit made no change to "${key}"; nothing written.`;
-    const saved = await doCheckpoint({ action: "save", notes: text, key });
+    const saved = await doCheckpoint({ action: "save", notes: text, key, pre: current });
     return `Edited "${key}": ${replaced} replacement${replaced === 1 ? "" : "s"}, ${deleted} deletion${deleted === 1 ? "" : "s"}.\n${saved}`;
   }
   if (action === "replace_block" || action === "delete_block") {
@@ -1096,7 +1165,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     } catch (err) {
       throw new Error(`${action} aborted, nothing written — ${err.message}`, { cause: err });
     }
-    const saved = await doCheckpoint({ action: "save", notes: edit.lines.join("\n"), key });
+    const saved = await doCheckpoint({ action: "save", notes: edit.lines.join("\n"), key, pre: current });
     const span = edit.from === edit.to ? `line ${edit.from}` : `lines ${edit.from}-${edit.to}`;
     return `${action === "delete_block" ? "Deleted" : "Replaced"} ${span} of "${key}" (${edit.removed} removed, ${edit.added} added).\n${saved}`;
   }
@@ -1117,7 +1186,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     const text = current.text.trim() ? `${current.text}\n${notes}` : notes;
     const added = notes.split("\n").filter(Boolean).length;
-    const saved = await doCheckpoint({ action: "save", notes: text, key });
+    const saved = await doCheckpoint({ action: "save", notes: text, key, pre: current });
     return `Appended ${added} line${added === 1 ? "" : "s"} to "${key}".\n${saved}`;
   }
   if (action === "park") {
@@ -1158,7 +1227,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     return `Unparked "${key}" -> "checkpoint-latest" (previous active notes were overwritten). ${retired}\n${saved}`;
   }
   if (action === "save") {
-    const found = await findPageByEntityId(key);
+    const found = pre ? { pageId: pre.pageId, url: pre.url, archived: false } : await findPageByEntityId(key);
     // An archived checkpoint page can't be written to: treat it as missing so
     // a fresh page is created and the index row is repointed.
     const existing = found && !found.archived ? found : null;
@@ -1186,12 +1255,14 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
       return `Checkpoint saved successfully.\nURL: ${created.url}`;
     }
 
-    await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
+    // One block read serves the range write AND the commit-log maintenance below:
+    // the log sits before the start marker, which the notes write never touches.
+    const blocks = pre?.blocks ?? await readAllBlocks(existing.pageId);
+    await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at, blocks });
 
     let logWarning = "";
     if (logForKey) {
       try {
-        const blocks = await readAllBlocks(existing.pageId);
         const range = findCheckpointRange(blocks);
         if (range) {
           const startIdx = blocks.findIndex(b => b.id === range.startBlockId);
@@ -1212,8 +1283,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
 
           // Backstop: recordCommit already trims on every insert; this catches
           // anything that slipped past it (e.g. a page edited by hand).
-          const freshBlocks = await readAllBlocks(existing.pageId);
-          const { failed } = await trimCommitLogBlocks(freshBlocks);
+          const { failed } = await trimCommitLogBlocks(blocks);
           for (const f of failed) {
             console.warn(`[commit-log] Failed to trim old entry ${f.id}: ${f.error}`);
           }
