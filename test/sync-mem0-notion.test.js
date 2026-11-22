@@ -132,7 +132,8 @@ describe("A1: listing memories from mem0", () => {
 
     expect(textOf(result)).toContain("Synced 1 memory.");
     expect(textOf(result)).toContain("Hard-deletion check skipped — entity_ids filter was used.");
-    expect(queryAllIndexEntries).not.toHaveBeenCalled();
+    // The index is still read once (per-memory lookups), but no orphan is archived.
+    expect(queryAllIndexEntries).toHaveBeenCalledTimes(1);
     expect(doUpdatePage).not.toHaveBeenCalled();
   });
 });
@@ -488,8 +489,7 @@ describe("time budget (45s)", () => {
       // e1 starts at 0s, e2 at 30s, e3 would start at 60s -> not started
       expect(doCreatePage).toHaveBeenCalledTimes(2);
       expect(textOf(result)).toContain("Processed 2 of 3 memories");
-      expect(textOf(result)).toContain("rerun to continue");
-      expect(textOf(result)).toContain("entity_ids");
+      expect(textOf(result)).toContain("rerun with offset: 2");
     });
   });
 
@@ -531,5 +531,90 @@ describe("time budget (45s)", () => {
     expect(textOf(result)).toContain("Synced 2 memories.");
     expect(textOf(result)).not.toContain("time budget");
     expect(textOf(result)).not.toContain("Processed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F13: preloaded index, one block read per memory, offset, lean creates
+// ---------------------------------------------------------------------------
+describe("F13: sync performance", () => {
+  const paragraph = (text) => ({ id: `b-${text}`, type: "paragraph", paragraph: { rich_text: [{ type: "text", plain_text: text, text: { content: text } }] } });
+  const indexed = (id, n = 1) => ({ entity_id: `mem0:${id}`, page_id: `page-${n}`, url: `https://notion.so/page-${n}`, tags: [] });
+
+  it("uses the preloaded index: no findPageByEntityId, one block read, blocks passed to replaceSyncedRange", async () => {
+    mem0Request.mockImplementation(mem0Pages([[mem("e1")]]));
+    queryAllIndexEntries.mockResolvedValue([indexed("e1")]);
+    notionRequest.mockResolvedValue({ results: [paragraph("🏷 status: open")], has_more: false });
+
+    await getSync()({ dry_run: false });
+
+    expect(queryAllIndexEntries).toHaveBeenCalledTimes(1);
+    expect(findPageByEntityId).not.toHaveBeenCalled();
+    expect(notionRequest).toHaveBeenCalledTimes(1);
+    const arg = replaceSyncedRange.mock.calls[0][0];
+    expect(arg.page_id).toBe("page-1");
+    expect(arg.blocks).toHaveLength(1);
+  });
+
+  it("falls back to findPageByEntityId when the index row's page is gone (404)", async () => {
+    mem0Request.mockImplementation(mem0Pages([[mem("e1")]]));
+    queryAllIndexEntries.mockResolvedValue([indexed("e1")]);
+    notionRequest.mockRejectedValue(new Error("Notion API error (404): object_not_found"));
+    findPageByEntityId.mockResolvedValue(null);
+
+    const result = await getSync()({ dry_run: false });
+
+    expect(findPageByEntityId).toHaveBeenCalledTimes(1);
+    expect(doCreatePage).toHaveBeenCalledTimes(1);
+    expect(textOf(result)).toContain("created-and-");
+  });
+
+  it("an archive rejection on the write of an indexed page is reported as skip-page-archived", async () => {
+    mem0Request.mockImplementation(mem0Pages([[mem("e1")]]));
+    queryAllIndexEntries.mockResolvedValue([indexed("e1")]);
+    notionRequest.mockResolvedValue({ results: [], has_more: false });
+    replaceSyncedRange.mockRejectedValue(new Error("Can't edit block that is archived"));
+
+    const result = await getSync()({ dry_run: false });
+
+    expect(textOf(result)).toContain("skip-page-archived");
+  });
+
+  it("creates pages with lean: true", async () => {
+    mem0Request.mockImplementation(mem0Pages([[mem("e1")]]));
+    doCreatePage.mockResolvedValue({ id: "new", url: "u" });
+
+    await getSync()({ dry_run: false });
+
+    expect(doCreatePage.mock.calls[0][0].lean).toBe(true);
+  });
+
+  it("offset skips the first N memories (id-sorted) and the output names where to continue", async () => {
+    mem0Request.mockImplementation(mem0Pages([[mem("e3"), mem("e1"), mem("e2")]]));
+
+    const result = await getSync()({ dry_run: false, offset: 2 });
+
+    expect(doCreatePage).toHaveBeenCalledTimes(1);
+    expect(doCreatePage.mock.calls[0][0].entity_id).toBe("mem0:e3");
+    expect(textOf(result)).toContain("Synced 3 memories");
+  });
+
+  it("no continue hint when an offset run finishes within the budget", async () => {
+    const real = Date.now;
+    let t = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => t);
+    try {
+      mem0Request.mockImplementation(mem0Pages([[mem("e1"), mem("e2"), mem("e3")]]));
+      findPageByEntityId.mockImplementation(async () => { t += 30_000; return null; });
+
+      const result = await getSync()({ dry_run: false, offset: 1 });
+
+      // e2 starts at 0s, e3 at 30s -> both run; offset 1 leaves nothing unfinished
+      expect(doCreatePage).toHaveBeenCalledTimes(2);
+      expect(textOf(result)).not.toContain("rerun with offset");
+    } finally {
+      Date.now = real;
+      vi.restoreAllMocks();
+    }
   });
 });

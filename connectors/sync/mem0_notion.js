@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { mem0Request } from "../mem/client.js";
-import { notionRequest, parseRelationBlocks, queryAllIndexEntries, findPageByEntityId, findSyncRange } from "../notion/client.js";
+import { notionRequest, parseRelationBlocks, parseMarkers, queryAllIndexEntries, findPageByEntityId, findSyncRange } from "../notion/client.js";
 import { doCreatePage, doUpdatePage, replaceSyncedRange } from "../notion/tools.js";
 import { MEM0_USER_ID, NOTION_SYNC_PARENT_PAGE_ID } from "../../config.js";
 
@@ -114,14 +114,34 @@ async function readSyncedIndexEntries() {
   return entries.filter((e) => e.entity_id?.startsWith(MEM0_ENTITY_PREFIX));
 }
 
-async function syncOneMemory(memory, { dry_run }) {
+// Stale Entity Index row (page deleted outside these tools) or an archived page
+// whose blocks refuse to be read: re-resolve through findPageByEntityId.
+const STALE_PAGE_RE = /\(404\)|archived/i;
+
+async function syncOneMemory(memory, { dry_run, indexMap }) {
   const notionEntityId = notionEntityIdFor(memory);
   const synced_at = memory.updated_at || memory.created_at || new Date().toISOString();
   const status = statusFor(memory);
   const relations = relationsFor(memory);
   const contentLines = contentLinesFor(memory);
 
-  const existing = await findPageByEntityId(notionEntityId, { withMarkers: true });
+  // Preloaded Entity Index (one query per sync) replaces the 2-3 request
+  // findPageByEntityId per memory. Superseded memories and ids missing from
+  // the index still go through findPageByEntityId: it knows about archived
+  // pages, whose index rows the database query does not return.
+  let existing;
+  const entry = status === "superseded" ? null : indexMap?.get(notionEntityId);
+  if (entry) {
+    existing = { pageId: entry.page_id, url: entry.url, archived: false };
+    try {
+      existing.blocks = await readAllBlocks(existing.pageId);
+    } catch (err) {
+      if (!STALE_PAGE_RE.test(err.message)) throw err;
+      existing = await findPageByEntityId(notionEntityId, { withMarkers: true });
+    }
+  } else {
+    existing = await findPageByEntityId(notionEntityId, { withMarkers: true });
+  }
 
   // Superseded -> archive and stop; don't also try to write/update content
   // on a page we're archiving in the same pass.
@@ -152,7 +172,7 @@ async function syncOneMemory(memory, { dry_run }) {
     if (dry_run) return { entity_id: notionEntityId, action: "would-create" };
     const created = await doCreatePage({
       parent_id: NOTION_SYNC_PARENT_PAGE_ID, parent_type: "page",
-      title: titleFor(memory), entity_id: notionEntityId, status, relations,
+      title: titleFor(memory), entity_id: notionEntityId, status, relations, lean: true,
     });
     if (created.skipped) {
       // Lost a create-vs-create race against another sync run -- fall
@@ -168,11 +188,11 @@ async function syncOneMemory(memory, { dry_run }) {
   // only touch status/relations if they actually differ, to avoid the same
   // needless-write/changelog-spam problem synced_at solves for content.
   if (dry_run) {
-    const blocks = await readAllBlocks(existing.pageId);
+    const blocks = existing.blocks || await readAllBlocks(existing.pageId);
     const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
     // Audit A8: an unset mem0 status never changes the page (doUpdatePage
     // with status: undefined is a no-op), so don't report it as a change.
-    const statusChanged = status !== undefined && (existing.markers.status || undefined) !== status;
+    const statusChanged = status !== undefined && (currentStatusOf(existing, blocks) || undefined) !== status;
     const relationsChanged = !relationsEqual(currentRelations, relations);
     // Content is rewritten only when the synced_at stamp differs (same test
     // replaceSyncedRange applies), so a dry run can say "unchanged" too.
@@ -181,14 +201,23 @@ async function syncOneMemory(memory, { dry_run }) {
     return { entity_id: notionEntityId, action, pageUrl: existing.url, statusChanged, relationsChanged };
   }
 
-  const range = await replaceSyncedRange({ page_id: existing.pageId, contentLines, synced_at });
-
-  // Full (paginated) read: relation blocks sit at the end of the page, past
-  // the first 100 on long pages, and would otherwise look "missing" and be
-  // rewritten on every sync.
-  const blocks = await readAllBlocks(existing.pageId);
+  // ONE full (paginated) read per memory, shared by the range check, the
+  // status check and the relation check. Relation blocks sit at the end of
+  // the page, past the first 100 on long pages, and would otherwise look
+  // "missing" and be rewritten on every sync. The range write only touches
+  // blocks between the markers, so these blocks stay valid for the checks.
+  const blocks = existing.blocks || await readAllBlocks(existing.pageId);
+  let range;
+  try {
+    range = await replaceSyncedRange({ page_id: existing.pageId, contentLines, synced_at, blocks });
+  } catch (err) {
+    // A page archived by hand after its index row was written (reads work,
+    // writes do not): report and skip, same as the findPageByEntityId path.
+    if (ALREADY_ARCHIVED_RE.test(err.message)) return { entity_id: notionEntityId, action: "skip-page-archived", pageUrl: existing.url };
+    throw err;
+  }
   const currentRelations = parseRelationBlocks(blocks).map((r) => ({ to_entity_id: r.to_entity_id, relation: r.relation }));
-  const statusChanged = status !== undefined && (existing.markers.status || undefined) !== status; // A8
+  const statusChanged = status !== undefined && (currentStatusOf(existing, blocks) || undefined) !== status; // A8
   const relationsChanged = !relationsEqual(currentRelations, relations);
   if (statusChanged || relationsChanged) {
     await doUpdatePage({
@@ -198,6 +227,12 @@ async function syncOneMemory(memory, { dry_run }) {
     });
   }
   return { entity_id: notionEntityId, action: range.action, pageUrl: existing.url, statusChanged, relationsChanged };
+}
+
+// Status marker of an existing page: from its blocks (already in hand), or
+// from the markers findPageByEntityId returned when it had to be used.
+function currentStatusOf(existing, blocks) {
+  return existing.markers?.status ?? parseMarkers(blocks).status;
 }
 
 // Reads every top-level block of a page (Notion caps a request at 100). Kept
@@ -220,11 +255,24 @@ export function register(server) {
     "One-way sync from mem0 into the Notion Memory Index (mem0 -> Notion only, no reverse direction) -- creates/updates a Notion page per mem0 memory, protecting any manual edits a person has added directly on those pages. Skips no-op writes automatically (unchanged content isn't rewritten). Superseded mem0 memories get their Notion page archived, not deleted. Full syncs (no entity_ids filter) also detect and archive Notion pages whose source memory has been hard-deleted from mem0 entirely.",
     {
       dry_run:    z.boolean().optional().describe("If true, report what WOULD change (create/update/archive counts + per-item detail) without writing anything to Notion. Default: false."),
+      offset:     z.number().int().min(0).optional().describe("Start at this position in the (id-sorted) memory list. When a run hits the time budget its output says which offset to pass to continue where it stopped. Default: 0."),
       entity_ids: z.array(z.string()).optional().describe("Optional filter to sync only mem0 memories with one of these mem0 entity_ids (not the mem0:-prefixed Notion form), instead of the full workspace. NOTE: using this filter disables hard-deletion detection for this run, since a partial sync can't tell 'deleted from mem0' apart from 'not in this batch'."),
     },
-    async ({ dry_run = false, entity_ids }) => {
+    async ({ dry_run = false, entity_ids, offset = 0 }) => {
       const { memories, truncated } = await listAllMemories({ user_id: MEM0_USER_ID, entity_ids });
+      // Stable order, so an offset from an earlier run points at the same memories.
+      memories.sort((a, b) => notionEntityIdFor(a).localeCompare(notionEntityIdFor(b)));
+      // One Entity Index read for the whole run (also feeds the deletion pass).
+      let indexEntries = null;
+      let indexMap = null;
+      try {
+        indexEntries = await readSyncedIndexEntries();
+        indexMap = new Map(indexEntries.map((e) => [e.entity_id, e]));
+      } catch {
+        // Per-memory findPageByEntityId lookups still work without it.
+      }
       const results = [];
+      let nextOffset = offset;
       const startedAt = Date.now();
       let budgetHit = false;
       // Sequential, not Promise.all -- every item's dedup check reads the
@@ -232,20 +280,21 @@ export function register(server) {
       // notion_create_pages_batch's items did before that was fixed
       // 2026-07-17 (see runSequentially in notion/tools.js). Trades
       // throughput for correctness at this tool's expected scale.
-      for (const memory of memories) {
+      for (const memory of memories.slice(offset)) {
         // Checked BEFORE starting an item, so an item is never cut off midway.
         if (Date.now() - startedAt >= SYNC_TIME_BUDGET_MS) { budgetHit = true; break; }
         try {
-          results.push(await syncOneMemory(memory, { dry_run }));
+          results.push(await syncOneMemory(memory, { dry_run, indexMap }));
         } catch (err) {
           results.push({ entity_id: notionEntityIdFor(memory), action: "error", error: err.message });
         }
+        nextOffset++;
       }
 
       let deletionLines = [];
       if (!entity_ids?.length) {
         const currentEntityIds = new Set(memories.map((m) => notionEntityIdFor(m)));
-        const indexEntries = await readSyncedIndexEntries();
+        indexEntries = indexEntries || await readSyncedIndexEntries();
         // Audit A1: the hard-deletion pass treats "not in this list" as
         // "deleted from mem0", so it is only safe when the list is trustworthy.
         // Skip it (with a visible warning) if the listing may be incomplete, or
@@ -294,11 +343,14 @@ export function register(server) {
           ? `  ✗ ${r.entity_id} — ${r.error}`
           : `  ${r.action} — ${r.entity_id}${r.pageUrl ? ` (${r.pageUrl})` : ""}${r.statusChanged ? " [status changed]" : ""}${r.relationsChanged ? " [relations changed]" : ""}`
       );
-      const header = budgetHit && results.length < memories.length
-        ? `${dry_run ? "[DRY RUN] " : ""}Processed ${results.length} of ${memories.length} memories (stopped at the ${SYNC_TIME_BUDGET_MS / 1000}s time budget). ${summary || "nothing done yet"}.`
+      const unfinished = nextOffset < memories.length;
+      const header = budgetHit && unfinished
+        ? `${dry_run ? "[DRY RUN] " : ""}Processed ${results.length} of ${memories.length - offset} memories${offset ? ` (from offset ${offset})` : ""} (stopped at the ${SYNC_TIME_BUDGET_MS / 1000}s time budget). ${summary || "nothing done yet"}.`
         : `${dry_run ? "[DRY RUN] " : ""}Synced ${memories.length} memor${memories.length === 1 ? "y" : "ies"}. ${summary || "nothing to do"}.`;
       const budgetNote = budgetHit
-        ? "\n\n⚠ Time budget reached: rerun to continue (memories already synced are skipped cheaply). For a large workspace you can also batch with entity_ids."
+        ? (unfinished
+          ? `\n\n⚠ Time budget reached: rerun with offset: ${nextOffset} to continue where this run stopped.`
+          : "\n\n⚠ Time budget reached: rerun to continue.")
         : "";
       const truncationNote = truncated && entity_ids?.length ? "\n\n⚠ mem0 listing hit the page cap; some requested memories may not have been found." : "";
       const deletionHeader = truncationNote + (deletionLines.length ? `\n\nHard-deletion check:\n${deletionLines.join("\n")}` : (entity_ids?.length ? "\n\n(Hard-deletion check skipped — entity_ids filter was used.)" : ""));
