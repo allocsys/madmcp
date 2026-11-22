@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
+import { finalNoteTexts } from "./_notion-notes-sim.js";
 import { buildCheckpointStartText, buildCheckpointEndText } from "../connectors/notion/client.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
@@ -65,7 +66,9 @@ function blockText(block) {
 // exhausted, further queries return no results. An entry is either a page id
 // string (one row pointing at that page) or an array of
 // { pageId, entityId, id } specs (several rows, for PageId-filter queries).
+let lastPages = {};
 function mockNotion({ pages, indexResults }) {
+  lastPages = pages;
   const queue = [...indexResults];
   client.notionRequest.mockImplementation(async (path, opts = {}) => {
     const method = opts.method || "GET";
@@ -251,13 +254,8 @@ describe("Notion checkpoint park / unpark", () => {
     expect(result).toContain("archived");
     expect(result).toContain("https://notion.so/page-active");
 
-    // The active page's old note was replaced, new content inserted after its start marker.
-    expect(client.notionRequest).toHaveBeenCalledWith("/blocks/note-active", { method: "DELETE" });
-    const insertCall = client.notionRequest.mock.calls.find(
-      ([path, opts]) => path === "/blocks/page-active/children" && opts?.method === "PATCH" && opts?.body?.after === "start-active"
-    );
-    expect(insertCall).toBeTruthy();
-    expect(insertCall[1].body.children.map(blockText).join(" ")).toContain("Parked MahPari notes");
+    // The active page's old note was rewritten in place with the parked notes.
+    expect(finalNoteTexts(client.notionRequest.mock.calls, "page-active", lastPages["page-active"])).toEqual(["Parked MahPari notes"]);
 
     // The parked page was archived, then its index row; the active page was not.
     expect(archivedPaths()).toEqual(["/pages/page-parked", "/pages/row-parked"]);
@@ -329,10 +327,7 @@ describe("Notion checkpoint park / unpark", () => {
     expect(result).toContain("could not be archived");
     expect(result).toContain("boom");
     // The restore itself went through.
-    const insertCall = client.notionRequest.mock.calls.find(
-      ([path, opts]) => path === "/blocks/page-active/children" && opts?.method === "PATCH" && opts?.body?.after === "start-active"
-    );
-    expect(insertCall).toBeTruthy();
+    expect(finalNoteTexts(client.notionRequest.mock.calls, "page-active", lastPages["page-active"])).toEqual(["Parked notes"]);
   });
 
   it("unpark reports a clear message and changes nothing when the parked key has no checkpoint", async () => {

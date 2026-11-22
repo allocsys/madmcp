@@ -17,6 +17,7 @@ import {
 import { findLinkCandidates, extractTags } from "./linking.js";
 import { trimCommitLogBlocks } from "./commit_log.js";
 import { withLock } from "../shared/lock.js";
+import { waitUntil } from "@vercel/functions";
 import { triggerNotionEmbed } from "./embed_client.js";
 import { findSimilarPages, rerankByQuery } from "./embed_queries.js";
 import { fetchPageMarkdown, patchPageMarkdown, parseMarkdownMarkers, splitChangelog, withPreservedMarkers } from "./markdown.js";
@@ -34,6 +35,17 @@ import { register as registerChartTool } from "./chart_tool.js";
 // same-batch update-then-create/update sequences. triggerNotionEmbed
 // itself never throws (see embed_client.js), so awaiting it adds latency
 // but never risk of failing the update this is attached to.
+// Embed-on-write runs OFF the request path by default: a cold Render worker
+// can take ~15s, which a single create/update must not wait for. Only a
+// multi-item batch awaits it (awaitEmbed), because a later item's fuzzy-dedup
+// check could otherwise run before this page's embedding landed. Embed
+// functions never throw, so neither branch can fail the write.
+function embedAfter(promise, awaitEmbed) {
+  if (awaitEmbed) return promise;
+  try { waitUntil(promise); } catch { /* no request context: promise still runs */ }
+  return undefined;
+}
+
 async function triggerEmbedForPage(page_id) {
   try {
     // Markdown covers the whole page, nested blocks included; the block read
@@ -164,6 +176,68 @@ async function swapRangeContent({ page_id, range, contentBlocks, startText }) {
   });
 }
 
+// Runs fn over items with bounded concurrency; returns the failures.
+async function runLimited(items, fn, concurrency = 3) {
+  const failed = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      try { await fn(item); } catch (err) { failed.push({ id: item.id, error: err.message }); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return failed;
+}
+
+// Writes `newLines` (one paragraph per line) into a range by DIFFING against
+// the current inner blocks instead of deleting and re-appending all of them:
+// unchanged leading/trailing lines are left alone, changed lines in between are
+// PATCHed in place, and only the surplus is appended or deleted. A one-line
+// change or an append costs ~2 writes instead of ~2N. Order is safe: extra
+// blocks are appended first, existing ones patched, surplus deleted last, and
+// the start marker's timestamp bumped only at the very end, so a failure
+// midway never wipes the saved notes and a retry is never skipped.
+// Returns null when the inner blocks are not all plain paragraphs (hand-edited
+// range): the caller then falls back to swapRangeContent.
+async function diffRangeContent({ page_id, range, blocks, newLines, startText }) {
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  const oldInner = range.innerBlockIds.map((id) => byId.get(id));
+  if (oldInner.some((b) => !b || b.type !== "paragraph")) return null;
+  const oldText = oldInner.map(notionBlockPlainText);
+  const n = oldText.length;
+  const m = newLines.length;
+  let p = 0;
+  while (p < n && p < m && oldText[p] === newLines[p]) p++;
+  let sfx = 0;
+  while (sfx < n - p && sfx < m - p && oldText[n - 1 - sfx] === newLines[m - 1 - sfx]) sfx++;
+  const oldMid = oldInner.slice(p, n - sfx);
+  const newMid = newLines.slice(p, m - sfx);
+  const k = Math.min(oldMid.length, newMid.length);
+
+  if (newMid.length > k) {
+    const anchor = k > 0 ? oldMid[k - 1].id : p > 0 ? oldInner[p - 1].id : range.startBlockId;
+    await appendBlocks(page_id, newMid.slice(k).map(textBlock), { after: anchor });
+  }
+  const patchFailed = await runLimited(
+    oldMid.slice(0, k).map((b, i) => ({ id: b.id, text: newMid[i] })),
+    (it) => notionRequest(`/blocks/${it.id}`, { method: "PATCH", body: { paragraph: { rich_text: chunkRichText(it.text) } } }),
+  );
+  if (patchFailed.length) {
+    throw new Error(`${patchFailed.length} of ${k} changed block(s) could not be updated (${patchFailed[0].error}). The notes may be partly updated -- run the save again to retry.`);
+  }
+  const surplus = oldMid.slice(k).map((b) => b.id);
+  const failed = await deleteBlocks(surplus);
+  if (failed.length) {
+    throw new Error(`New content was written, but ${failed.length} of ${surplus.length} old block(s) could not be deleted (${failed[0].error}). The range may show old and new content together -- run the save/sync again to retry.`);
+  }
+  await notionRequest(`/blocks/${range.startBlockId}`, {
+    method: "PATCH",
+    body: { paragraph: { rich_text: [{ type: "text", text: { content: startText } }] } },
+  });
+  return { kept: p + sfx, patched: k, appended: newMid.length - k, deleted: surplus.length };
+}
+
 // N3: notionRequest errors are `Notion API error (<status>): ...`.
 function notionErrorStatus(err) {
   const m = /\((\d{3})\)/.exec(err?.message || "");
@@ -257,12 +331,9 @@ async function archiveIndexRowsForPage(page_id) {
       method: "POST",
       body: { filter: { property: "PageId", rich_text: { equals: page_id } }, page_size: 20 },
     });
-    let count = 0;
-    for (const row of data?.results || []) {
-      await notionRequest(`/pages/${row.id}`, { method: "PATCH", body: { archived: true } });
-      count++;
-    }
-    return { count, error: null };
+    const rows = data?.results || [];
+    const failed = await runLimited(rows, (row) => notionRequest(`/pages/${row.id}`, { method: "PATCH", body: { archived: true } }));
+    return { count: rows.length - failed.length, error: failed.length ? failed[0].error : null };
   } catch (err) {
     return { count: 0, error: err.message };
   }
@@ -345,7 +416,9 @@ export async function doCreatePage(args) {
   return withLock(`notion-create:${args.entity_id}`, () => doCreatePageUnlocked(args));
 }
 
-async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties }) {
+// lean: skip the fuzzy-dedup and link-candidate searches (mem0 sync creates
+// pages from titles only, where both would be noise and cost ~6+ calls).
+async function doCreatePageUnlocked({ parent_id, parent_type, title, content, entity_id, status, relations, one_off, properties, awaitEmbed, lean }) {
   if (!entity_id && !one_off) {
     throw new Error(`Refusing to create "${title}" without a tracking decision -- pass either entity_id (if this represents an ongoing/stable thing that should be deduped and indexed) or one_off: true (if it's genuinely disposable, e.g. a scratch note or test page). This is a deliberate choice, not a bug -- see notion_create's entity_id and one_off param descriptions.`);
   }
@@ -375,7 +448,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // for entity_id-tracked pages, matching exact-match dedup's own scope --
   // one_off pages have explicitly opted out of dedup entirely.
   let possibleDuplicates = [];
-  if (entity_id) {
+  if (entity_id && !lean) {
     try {
       possibleDuplicates = await findSimilarPages([title, content].filter(Boolean).join("\n"));
     } catch {
@@ -390,7 +463,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // is a convenience layer on top of an otherwise-complete create call.
   let linkCandidates = { strong: [], medium: [] };
   try {
-    linkCandidates = await findLinkCandidates({ title, content });
+    if (!lean) linkCandidates = await findLinkCandidates({ title, content });
   } catch {
     // swallow -- see comment above
   }
@@ -493,7 +566,7 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // fully in hand here (unlike doUpdatePage, which has to re-read the
   // page), so no extra Notion round trip is needed to embed it -- the only
   // added cost is waiting on the worker+Gemini call itself.
-  await triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") });
+  await embedAfter(triggerNotionEmbed({ page_id: data.id, content: [title, content].filter(Boolean).join("\n") }), awaitEmbed);
 
   return { skipped: false, id: data.id, url: data.url, title, markerCount: markerBlocks.length, relationCount: relationBlocks.length, entity_id, status, indexError, linkCandidates, autoRelations, possibleDuplicates };
 }
@@ -522,6 +595,9 @@ async function runSequentially(items, fn) {
   return results;
 }
 
+// Max lazy-backfill embeds queued by one notion_find search.
+const LAZY_EMBED_CAP = 2;
+
 const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "to_do"];
 
 // ---------------------------------------------------------------------------
@@ -543,8 +619,9 @@ const EDITABLE_BLOCK_TYPES = ["paragraph", "heading_1", "heading_2", "heading_3"
 // to date" case) -- both differences are parameterized here rather than
 // duplicating this whole read/delete/insert/patch sequence twice, which is
 // what this codebase did until 2026-09-27.
-async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged }) {
-  const blocks = await readAllBlocks(page_id);
+async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange, getTimestamp, buildRangeBlocks, buildStartText, skipIfUnchanged, blocks: preloaded }) {
+  // preloaded: caller already read the page's blocks (saves one paginated read).
+  const blocks = preloaded || await readAllBlocks(page_id);
   const range = findRange(blocks);
 
   if (!range) {
@@ -572,9 +649,9 @@ async function replaceMarkerRange({ page_id, contentLines, timestamp, findRange,
 // shared mechanics; this just supplies the sync-marker functions and the
 // skip-if-unchanged behavior, and maps the generic previousTimestamp field
 // back to previousSyncedAt for existing callers (notion_sync_content).
-export async function replaceSyncedRange({ page_id, contentLines, synced_at }) {
+export async function replaceSyncedRange({ page_id, contentLines, synced_at, blocks }) {
   const result = await replaceMarkerRange({
-    page_id, contentLines, timestamp: synced_at,
+    page_id, contentLines, timestamp: synced_at, blocks,
     findRange: findSyncRange,
     getTimestamp: (range) => range.synced_at,
     buildRangeBlocks: ({ timestamp, contentLines }) => buildSyncRangeBlocks({ synced_at: timestamp, contentLines }),
@@ -688,7 +765,7 @@ export async function doUpdatePage(args) {
   }
 }
 
-async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content, block_edits }, results) {
+async function doUpdatePageInner({ page_id, title, append_content, archived, replacements, status, entity_id, relations, properties, content_updates, replace_content, append_markdown, allow_deleting_content, block_edits, awaitEmbed }, results) {
   // Unarchive (or a title-only change) runs first, same as before -- this
   // leaves the page editable for any block-level edits below. Archiving
   // (archived: true) is deliberately NOT handled here -- see the bottom of
@@ -767,10 +844,16 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
     await patchPageMarkdown(page_id, { type: "insert_content", insert_content: { content: append_markdown, position: { type: "end" } } });
     results.push(`Appended markdown content (${append_markdown.length} chars).`);
   }
+  // status, entity_id and relations each need the page's full block list. One
+  // read serves all three: none of them changes what the next one looks for
+  // (status marker / entity_id marker / relation lines are separate blocks),
+  // and every content edit above has already finished by now.
+  let markerBlocks;
+  const getMarkerBlocks = async () => (markerBlocks ??= await readAllBlocks(page_id));
   if (status !== undefined) {
     // Read ALL blocks: a status marker appended at the end of a long page sits
     // past the first 100, and missing it would add a duplicate marker each time.
-    const markers = parseMarkers(await readAllBlocks(page_id));
+    const markers = parseMarkers(await getMarkerBlocks());
     if (markers.statusBlockId) {
       await notionRequest(`/blocks/${markers.statusBlockId}`, {
         method: "PATCH",
@@ -789,7 +872,7 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   // `replacements` and silently leaving the index stale/pointing nowhere.
   // Same marker-block-in-place pattern as `status` above.
   if (entity_id !== undefined) {
-    const markers = parseMarkers(await readAllBlocks(page_id));
+    const markers = parseMarkers(await getMarkerBlocks());
     const previousEntityId = markers.entity_id;
     if (markers.entityBlockId) {
       await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: { paragraph: entityMarkerBlock(entity_id).paragraph } });
@@ -823,9 +906,12 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   if (relations !== undefined) {
     // Read ALL blocks: replaced relation blocks are appended at the end of
     // the page, so on a long page they sit past the first 100 (audit fix N4).
-    const existingRelations = parseRelationBlocks(await readAllBlocks(page_id));
-    for (const r of existingRelations) {
-      await notionRequest(`/blocks/${r.blockId}`, { method: "DELETE" });
+    const existingRelations = parseRelationBlocks(await getMarkerBlocks());
+    // Bounded-concurrency deletes (the throttle now lets calls overlap); a
+    // block that is already gone counts as deleted.
+    const failedDeletes = await deleteBlocks(existingRelations.map((r) => r.blockId));
+    if (failedDeletes.length) {
+      throw new Error(`Relations not replaced, nothing added: ${failedDeletes.length} of ${existingRelations.length} existing relation block(s) could not be deleted (${failedDeletes[0].error}).`);
     }
     const newBlocks = buildRelationBlocks(relations);
     if (newBlocks.length) {
@@ -870,7 +956,7 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   // page is no longer relevant to search/dedup) or when nothing actually
   // changed (results is empty).
   if (results.length && archived !== true) {
-    await triggerEmbedForPage(page_id);
+    await embedAfter(triggerEmbedForPage(page_id), awaitEmbed);
   }
   return results;
 }
@@ -883,8 +969,8 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
 // callers (mem0 sync vs. checkpoint save) have historically diverged in
 // small ways and mem0-specific skip/logging behavior in replaceSyncedRange
 // shouldn't silently start applying to checkpoint saves or vice versa.
-export async function replaceCheckpointRange({ page_id, contentLines, updated_at }) {
-  const blocks = await readAllBlocks(page_id);
+export async function replaceCheckpointRange({ page_id, contentLines, updated_at, blocks: prefetched }) {
+  const blocks = prefetched ?? await readAllBlocks(page_id);
   const range = findCheckpointRange(blocks);
 
   if (!range) {
@@ -898,10 +984,15 @@ export async function replaceCheckpointRange({ page_id, contentLines, updated_at
   // skip case the way there is for a mem0 memory that hasn't changed.
   // Insert-first, delete-after (see swapRangeContent): a failure midway must
   // not wipe the saved checkpoint.
-  const contentBlocks = (contentLines || []).filter(Boolean).map(textBlock);
-  await swapRangeContent({ page_id, range, contentBlocks, startText: buildCheckpointStartText(updated_at) });
+  const lines = (contentLines || []).filter(Boolean);
+  const startText = buildCheckpointStartText(updated_at);
+  const diff = await diffRangeContent({ page_id, range, blocks, newLines: lines, startText });
+  if (!diff) {
+    // Range holds non-paragraph blocks (hand-edited): full replace.
+    await swapRangeContent({ page_id, range, contentBlocks: lines.map(textBlock), startText });
+  }
 
-  return { action: "updated", removed: range.innerBlockIds.length, added: contentBlocks.length, previousUpdatedAt: range.updated_at };
+  return { action: "updated", removed: range.innerBlockIds.length, added: lines.length, previousUpdatedAt: range.updated_at, ...(diff ? { diff } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -924,7 +1015,7 @@ async function readCheckpointNotesWithPage(key) {
   // checkpoint range (e.g. a hand-edited heading or list), so callers that
   // round-trip the text (edit) can refuse instead of flattening those blocks.
   const plain = innerBlocks.every((b) => b.type === "paragraph");
-  return { pageId: existing.pageId, text: notionBlocksToText(innerBlocks), plain };
+  return { pageId: existing.pageId, url: existing.url, blocks, text: notionBlocksToText(innerBlocks), plain };
 }
 
 async function readCheckpointNotes(key) {
@@ -1008,7 +1099,9 @@ async function listCheckpointPages() {
   return { found, skipped };
 }
 
-export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end }) {
+// `pre` (internal, same-key save only): { pageId, url, blocks } already read by the
+// caller, so the save skips its own page lookup and block read.
+export async function doCheckpoint({ action, notes, key = "checkpoint-latest", to, edits, start, end, pre }) {
   if (action === "list") {
     const { found, skipped } = await listCheckpointPages();
     const skippedNote = skipped ? `\n(${skipped} page${skipped === 1 ? "" : "s"} could not be read and ${skipped === 1 ? "was" : "were"} skipped.)` : "";
@@ -1054,7 +1147,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
       else replaced += e.replace_all ? count : 1;
     }
     if (text === current.text) return `Edit made no change to "${key}"; nothing written.`;
-    const saved = await doCheckpoint({ action: "save", notes: text, key });
+    const saved = await doCheckpoint({ action: "save", notes: text, key, pre: current });
     return `Edited "${key}": ${replaced} replacement${replaced === 1 ? "" : "s"}, ${deleted} deletion${deleted === 1 ? "" : "s"}.\n${saved}`;
   }
   if (action === "replace_block" || action === "delete_block") {
@@ -1084,7 +1177,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     } catch (err) {
       throw new Error(`${action} aborted, nothing written — ${err.message}`, { cause: err });
     }
-    const saved = await doCheckpoint({ action: "save", notes: edit.lines.join("\n"), key });
+    const saved = await doCheckpoint({ action: "save", notes: edit.lines.join("\n"), key, pre: current });
     const span = edit.from === edit.to ? `line ${edit.from}` : `lines ${edit.from}-${edit.to}`;
     return `${action === "delete_block" ? "Deleted" : "Replaced"} ${span} of "${key}" (${edit.removed} removed, ${edit.added} added).\n${saved}`;
   }
@@ -1105,7 +1198,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     }
     const text = current.text.trim() ? `${current.text}\n${notes}` : notes;
     const added = notes.split("\n").filter(Boolean).length;
-    const saved = await doCheckpoint({ action: "save", notes: text, key });
+    const saved = await doCheckpoint({ action: "save", notes: text, key, pre: current });
     return `Appended ${added} line${added === 1 ? "" : "s"} to "${key}".\n${saved}`;
   }
   if (action === "park") {
@@ -1146,7 +1239,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
     return `Unparked "${key}" -> "checkpoint-latest" (previous active notes were overwritten). ${retired}\n${saved}`;
   }
   if (action === "save") {
-    const found = await findPageByEntityId(key);
+    const found = pre ? { pageId: pre.pageId, url: pre.url, archived: false } : await findPageByEntityId(key);
     // An archived checkpoint page can't be written to: treat it as missing so
     // a fresh page is created and the index row is repointed.
     const existing = found && !found.archived ? found : null;
@@ -1174,12 +1267,14 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
       return `Checkpoint saved successfully.\nURL: ${created.url}`;
     }
 
-    await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at });
+    // One block read serves the range write AND the commit-log maintenance below:
+    // the log sits before the start marker, which the notes write never touches.
+    const blocks = pre?.blocks ?? await readAllBlocks(existing.pageId);
+    await replaceCheckpointRange({ page_id: existing.pageId, contentLines: notesLines, updated_at, blocks });
 
     let logWarning = "";
     if (logForKey) {
       try {
-        const blocks = await readAllBlocks(existing.pageId);
         const range = findCheckpointRange(blocks);
         if (range) {
           const startIdx = blocks.findIndex(b => b.id === range.startBlockId);
@@ -1200,8 +1295,7 @@ export async function doCheckpoint({ action, notes, key = "checkpoint-latest", t
 
           // Backstop: recordCommit already trims on every insert; this catches
           // anything that slipped past it (e.g. a page edited by hand).
-          const freshBlocks = await readAllBlocks(existing.pageId);
-          const { failed } = await trimCommitLogBlocks(freshBlocks);
+          const { failed } = await trimCommitLogBlocks(blocks);
           for (const f of failed) {
             console.warn(`[commit-log] Failed to trim old entry ${f.id}: ${f.error}`);
           }
@@ -1412,15 +1506,20 @@ export function register(server) {
             // Fix #5.3: a page edited directly in Notion never re-triggers
             // embed-on-write, so also re-embed a SCORED candidate whose
             // stored updatedAt is older than Notion's own last_edited_time.
+            // Capped (LAZY_EMBED_CAP per search): each trigger costs ~2 Notion
+            // requests in the shared serial throttle, so an uncapped batch of
+            // ~10 delayed the NEXT tool call. Unscored pages go first; the
+            // rest are picked up by later searches.
+            let queued = 0;
+            const lazyEmbed = (pageId) => { if (queued < LAZY_EMBED_CAP) { queued++; triggerEmbedForPage(pageId); } };
             for (const c of reranked) {
-              if (c.pageId && c.distance === undefined) {
-                triggerEmbedForPage(c.pageId);
-              } else if (c.pageId && c.updatedAt && c.result?.last_edited_time) {
+              if (c.pageId && c.distance === undefined) lazyEmbed(c.pageId);
+            }
+            for (const c of reranked) {
+              if (c.pageId && c.distance !== undefined && c.updatedAt && c.result?.last_edited_time) {
                 const embeddedAt = new Date(c.updatedAt).getTime();
                 const editedAt = new Date(c.result.last_edited_time).getTime();
-                if (Number.isFinite(embeddedAt) && Number.isFinite(editedAt) && editedAt > embeddedAt) {
-                  triggerEmbedForPage(c.pageId);
-                }
+                if (Number.isFinite(embeddedAt) && Number.isFinite(editedAt) && editedAt > embeddedAt) lazyEmbed(c.pageId);
               }
             }
           }
@@ -1619,6 +1718,7 @@ export function register(server) {
         const results = await runSequentially(items, (item) => doCreatePage({
           parent_id: item.parent_id, parent_type: item.parent_type, title: item.title, content: item.content,
           entity_id: item.entity_id, status: item.status, relations: item.relations, one_off: item.one_off, properties: item.properties,
+          awaitEmbed: items.length > 1,
         }));
         const lines = results.map((r, i) => {
           const label = items[i].title;
@@ -1709,6 +1809,7 @@ export function register(server) {
           page_id: item.page_id, title: item.title, append_content: item.append_content, archived: item.archived,
           replacements: item.replacements, status: item.status, entity_id: item.entity_id, relations: item.relations, properties: item.properties,
           content_updates: item.content_updates, block_edits: item.block_edits, replace_content: item.replace_content, append_markdown: item.append_markdown, allow_deleting_content: item.allow_deleting_content,
+          awaitEmbed: items.length > 1,
         }));
         const lines = results.map((r, i) => {
           const label = items[i].page_id;

@@ -71,7 +71,7 @@ describe("findPageByEntityId: lookup + A2 archived flag", () => {
       blocks: { results: markerBlocksAsRead({ entity_id: "e1", status: "open" }) },
     }));
 
-    const found = await findPageByEntityId("e1");
+    const found = await findPageByEntityId("e1", { withMarkers: true });
 
     expect(found.pageId).toBe("page-1");
     expect(found.url).toBe("https://notion.so/page-1");
@@ -87,6 +87,18 @@ describe("findPageByEntityId: lookup + A2 archived flag", () => {
     expect((await findPageByEntityId("e1")).archived).toBe(true);
   });
 
+  it("light path (default) makes 2 requests and never reads blocks", async () => {
+    clientInternals.notionRequest.mockImplementation(route({
+      blocks: new Error("Notion API error (503): must not be called"),
+    }));
+
+    const found = await findPageByEntityId("e1");
+
+    expect(found.pageId).toBe("page-1");
+    expect(found.markers).toEqual({});
+    expect(clientInternals.notionRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("A2: reports archived:true when the page is in the trash", async () => {
     clientInternals.notionRequest.mockImplementation(route({
       page: { id: "page-1", url: "u", in_trash: true, properties: {} },
@@ -100,7 +112,7 @@ describe("findPageByEntityId: lookup + A2 archived flag", () => {
       blocks: new Error("Notion API error (400): Can't edit block that is archived"),
     }));
 
-    const found = await findPageByEntityId("e1");
+    const found = await findPageByEntityId("e1", { withMarkers: true });
 
     expect(found.archived).toBe(true);
     expect(found.markers.entity_id).toBeNull();
@@ -139,13 +151,13 @@ describe("findPageByEntityId: A3 only a 404 means the page is gone", () => {
 
   it("returns null when the block read is a 404", async () => {
     clientInternals.notionRequest.mockImplementation(route({ blocks: new Error("Notion API error (404): gone") }));
-    expect(await findPageByEntityId("e1")).toBeNull();
+    expect(await findPageByEntityId("e1", { withMarkers: true })).toBeNull();
   });
 
   it("rethrows a 503 from the block read of a live page, with cause", async () => {
     clientInternals.notionRequest.mockImplementation(route({ blocks: new Error("Notion API error (503): unavailable") }));
 
-    const err = await findPageByEntityId("e1").then(() => null, (e) => e);
+    const err = await findPageByEntityId("e1", { withMarkers: true }).then(() => null, (e) => e);
 
     expect(err.message).toContain("Could not read blocks of Notion page page-1");
     expect(err.cause.message).toContain("(503)");

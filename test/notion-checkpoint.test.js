@@ -159,17 +159,11 @@ describe("Notion checkpoint tool", () => {
     );
     expect(pageCreateCall).toBeUndefined();
 
-    // The stale inner block was deleted...
-    expect(client.notionRequest).toHaveBeenCalledWith("/blocks/note-old", { method: "DELETE" });
-
-    // ...and replaced with the new note content, inserted right after the
-    // start marker (not appended at the end / not a fresh range).
-    const insertCall = client.notionRequest.mock.calls.find(
-      ([path, opts]) => path === "/blocks/page-123/children" && opts?.method === "PATCH" && opts?.body?.after === "start-1"
-    );
-    expect(insertCall).toBeTruthy();
-    const insertedText = insertCall[1].body.children.map(blockText).join(" ");
-    expect(insertedText).toContain("Updated handoff notes");
+    // The changed note block was patched in place (no delete + re-insert).
+    expect(client.notionRequest).not.toHaveBeenCalledWith("/blocks/note-old", { method: "DELETE" });
+    const patchCall = client.notionRequest.mock.calls.find(([path, opts]) => path === "/blocks/note-old" && opts?.method === "PATCH");
+    expect(patchCall).toBeTruthy();
+    expect(patchCall[1].body.paragraph.rich_text.map((t) => t.text.content).join("")).toBe("Updated handoff notes");
 
     // The start marker's own timestamp was rewritten in place, not replaced
     // wholesale (same block id, new text).

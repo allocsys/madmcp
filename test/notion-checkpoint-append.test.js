@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
+import { finalNoteTexts } from "./_notion-notes-sim.js";
 import { buildCheckpointStartText, buildCheckpointEndText } from "../connectors/notion/client.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
@@ -64,6 +65,7 @@ function blockText(block) {
 // id string = one row pointing at that page); once exhausted, further queries
 // return no results.
 function mockNotion({ pages, indexResults }) {
+  lastPages = pages;
   const queue = [...indexResults];
   client.notionRequest.mockImplementation(async (path, opts = {}) => {
     const method = opts.method || "GET";
@@ -100,13 +102,10 @@ const pageCreateCalls = () =>
     ([path, opts]) => path === "/pages" && opts?.method === "POST" && !opts?.body?.parent?.database_id
   );
 
-// The note blocks inserted right after the start marker, as plain strings.
-function insertedTexts(pageId = "page-active", prefix = "active") {
-  const call = client.notionRequest.mock.calls.find(
-    ([path, opts]) => path === `/blocks/${pageId}/children` && opts?.method === "PATCH" && opts?.body?.after === `start-${prefix}`
-  );
-  expect(call).toBeTruthy();
-  return call[1].body.children.map(blockText);
+// The note lines on the page after replaying every write call.
+let lastPages = {};
+function insertedTexts(pageId = "page-active") {
+  return finalNoteTexts(client.notionRequest.mock.calls, pageId, lastPages[pageId]);
 }
 
 describe("Notion checkpoint append", () => {
@@ -129,6 +128,24 @@ describe("Notion checkpoint append", () => {
     // Old notes stay first, new line goes last.
     expect(insertedTexts()).toEqual(["line one", "line two"]);
     expect(pageCreateCalls().length).toBe(0);
+  });
+
+  it("reads the page once and writes only the new line (no second lookup, no rewrite)", async () => {
+    mockNotion({
+      pages: { "page-active": notesPage("active", "one", "two", "three") },
+      indexResults: ["page-active", "page-active"],
+    });
+
+    await doCheckpoint({ action: "append", notes: "four" });
+
+    const calls = client.notionRequest.mock.calls;
+    expect(calls.filter(([path]) => INDEX_QUERY_RE.test(path))).toHaveLength(1);
+    expect(calls.filter(([path, o]) => path.startsWith("/blocks/page-active/children") && !o?.method)).toHaveLength(1);
+    // Existing notes untouched: one insert after the last note + the timestamp bump.
+    expect(writeCalls().map(([path, o]) => `${o.method} ${path}`).sort()).toEqual(
+      ["PATCH /blocks/page-active/children", "PATCH /blocks/start-active"]
+    );
+    expect(calls.find(([path, o]) => path === "/blocks/page-active/children" && o?.method === "PATCH")[1].body.after).toBe("note-active-2");
   });
 
   it("adds several lines at once, keeping their order", async () => {
@@ -176,7 +193,7 @@ describe("Notion checkpoint append", () => {
     const result = await doCheckpoint({ action: "append", key: "checkpoint-news", notes: "More news" });
 
     expect(result).toContain('Appended 1 line to "checkpoint-news"');
-    expect(insertedTexts("page-src", "src")).toEqual(["News notes", "More news"]);
+    expect(insertedTexts("page-src")).toEqual(["News notes", "More news"]);
     expect(pageCreateCalls().length).toBe(0);
   });
 

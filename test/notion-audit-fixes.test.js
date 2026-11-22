@@ -369,3 +369,66 @@ describe("N7: page_size clamp", () => {
     expect(client.notionRequest.mock.calls.some(([p]) => p.includes("page_size=999"))).toBe(false);
   });
 });
+
+describe("F9: doUpdatePage read/delete/archive efficiency", () => {
+  function route({ failDelete } = {}) {
+    return async (path, opts = {}) => {
+      const method = opts.method || "GET";
+      if (INDEX_QUERY_RE.test(path)) return { results: [{ id: "row-1" }, { id: "row-2" }] };
+      if (path === "/pages/p1" && method === "GET") return { id: "p1", url: "https://notion.so/p1", properties: {} };
+      if (path === "/pages/p1" && method === "PATCH") return { id: "p1", url: "https://notion.so/p1", properties: {} };
+      if (/^\/pages\/row-\d$/.test(path) && method === "PATCH") return {};
+      if (path === "/blocks/p1/children" && method === "PATCH") return {};
+      if (path.startsWith("/blocks/p1/children")) {
+        return { results: [para("s1", "🏷️ status: open"), para("r1", "🔗 relates_to -> a"), para("r2", "🔗 relates_to -> b")], has_more: false };
+      }
+      if (/^\/blocks\/(r\d|s\d)$/.test(path) && method === "DELETE") {
+        if (failDelete) throw new Error("Notion API error (500): boom");
+        return {};
+      }
+      if (/^\/blocks\/s1$/.test(path) && method === "PATCH") return {};
+      throw new Error(`Unexpected notionRequest call: ${method} ${path}`);
+    };
+  }
+
+  it("status + entity_id + relations in one update share ONE block read", async () => {
+    client.notionRequest.mockImplementation(route());
+
+    await doUpdatePage({ page_id: "p1", status: "done", entity_id: "e1", relations: [{ to_entity_id: "x", relation: "relates_to" }] });
+
+    // Only reads made by the update itself: the un-awaited embed trigger reads the page again afterwards.
+    const calls = client.notionRequest.mock.calls;
+    const lastDelete = calls.map(([, o]) => o?.method).lastIndexOf("DELETE");
+    const readsBeforeEnd = calls.slice(0, lastDelete + 1).filter(([p, o]) => p.startsWith("/blocks/p1/children?") && !o?.method);
+    expect(readsBeforeEnd).toHaveLength(1);
+  });
+
+  it("relations replace deletes every old relation block and adds the new ones", async () => {
+    client.notionRequest.mockImplementation(route());
+
+    const results = await doUpdatePage({ page_id: "p1", relations: [{ to_entity_id: "x", relation: "relates_to" }] });
+
+    const deleted = client.notionRequest.mock.calls.filter(([, o]) => o?.method === "DELETE").map(([p]) => p).sort();
+    expect(deleted).toEqual(["/blocks/r1", "/blocks/r2"]);
+    expect(results.join(" ")).toContain("Relations replaced: 2 removed, 1 added.");
+  });
+
+  it("a failed relation delete aborts before anything is added", async () => {
+    client.notionRequest.mockImplementation(route({ failDelete: true }));
+
+    await expect(doUpdatePage({ page_id: "p1", relations: [{ to_entity_id: "x", relation: "relates_to" }] }))
+      .rejects.toThrow(/Relations not replaced, nothing added: 2 of 2/);
+    const appends = client.notionRequest.mock.calls.filter(([p, o]) => p === "/blocks/p1/children" && o?.method === "PATCH");
+    expect(appends).toHaveLength(0);
+  });
+
+  it("archiving a page archives all of its index rows and reports the count", async () => {
+    client.notionRequest.mockImplementation(route());
+
+    const results = await doUpdatePage({ page_id: "p1", archived: true });
+
+    const rowPatches = client.notionRequest.mock.calls.filter(([p, o]) => /^\/pages\/row-\d$/.test(p) && o?.method === "PATCH").map(([p]) => p).sort();
+    expect(rowPatches).toEqual(["/pages/row-1", "/pages/row-2"]);
+    expect(results.join(" ")).toContain("Archived 2 index rows.");
+  });
+});

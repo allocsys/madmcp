@@ -15,30 +15,28 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Returns a `schedule(fn)` function that runs `fn` no sooner than
-// `minIntervalMs` after the previously scheduled call started, regardless of
-// how many callers invoke `schedule` concurrently -- a shared promise chain
-// serializes them. This is what actually protects against a burst of
+// Returns a `schedule(fn)` function that starts `fn` no sooner than
+// `minIntervalMs` after the previously scheduled call STARTED, regardless of
+// how many callers invoke `schedule` concurrently. Only the start gate is
+// serialized: a call does not wait for earlier calls to finish, so slow
+// requests overlap and throughput is ~1/minIntervalMs instead of
+// 1/max(minIntervalMs, latency). This still protects against a burst of
 // parallel tool calls (e.g. several Notion calls landing in the same
-// delegate_agent step, see connectors/delegate/agent/agent_delegate.js's 2026-07-26
-// parallelization) hitting the upstream API all at once.
+// delegate_agent step) hitting the upstream API all at once.
 export function createThrottle(minIntervalMs) {
-  let chain = Promise.resolve();
+  let gate = Promise.resolve();
   let lastStartedAt = 0;
 
   function schedule(fn) {
-    const run = async () => {
+    const turn = gate.then(async () => {
       const wait = lastStartedAt + minIntervalMs - Date.now();
       if (wait > 0) await sleep(wait);
       lastStartedAt = Date.now();
-      return fn();
-    };
-    // Chain onto the shared queue regardless of whether prior requests
-    // succeeded or failed, so one failure doesn't jam the whole queue.
-    const result = chain.then(run, run);
-    // Keep the chain alive without leaking rejections into unrelated callers.
-    chain = result.then(() => {}, () => {});
-    return result;
+    });
+    // gate never rejects, and fn's outcome never affects it, so one
+    // failure can't jam the queue.
+    gate = turn;
+    return turn.then(fn);
   }
 
   return schedule;

@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
+import { finalNoteTexts } from "./_notion-notes-sim.js";
 import { buildCheckpointStartText, buildCheckpointEndText } from "../connectors/notion/client.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
@@ -65,6 +66,7 @@ function blockText(block) {
 // id string = one row pointing at that page); once exhausted, further queries
 // return no results.
 function mockNotion({ pages, indexResults }) {
+  lastPages = pages;
   const queue = [...indexResults];
   client.notionRequest.mockImplementation(async (path, opts = {}) => {
     const method = opts.method || "GET";
@@ -102,13 +104,10 @@ const pageCreateCalls = () =>
     ([path, opts]) => path === "/pages" && opts?.method === "POST" && !opts?.body?.parent?.database_id
   );
 
-// The new note blocks inserted right after the start marker, as plain strings.
-function insertedTexts(pageId = "page-active", prefix = "active") {
-  const call = client.notionRequest.mock.calls.find(
-    ([path, opts]) => path === `/blocks/${pageId}/children` && opts?.method === "PATCH" && opts?.body?.after === `start-${prefix}`
-  );
-  expect(call).toBeTruthy();
-  return call[1].body.children.map(blockText);
+// The note lines on the page after replaying every write call.
+let lastPages = {};
+function insertedTexts(pageId = "page-active") {
+  return finalNoteTexts(client.notionRequest.mock.calls, pageId, lastPages[pageId]);
 }
 
 describe("Notion checkpoint edit", () => {
@@ -135,8 +134,9 @@ describe("Notion checkpoint edit", () => {
     const inserted = insertedTexts().join("\n");
     expect(inserted).toContain("Next step: open the PR");
     expect(inserted).not.toContain("write tests");
-    // The old note block was replaced in place; no new page was created.
-    expect(deleteCalls().map(([path]) => path)).toEqual(["/blocks/note-active-0"]);
+    // The changed note block was patched in place: nothing deleted, no new page.
+    expect(deleteCalls()).toEqual([]);
+    expect(client.notionRequest.mock.calls.some(([path, o]) => path === "/blocks/note-active-0" && o?.method === "PATCH")).toBe(true);
     expect(pageCreateCalls().length).toBe(0);
   });
 
@@ -272,7 +272,7 @@ describe("Notion checkpoint edit", () => {
     });
 
     expect(result).toContain('Edited "checkpoint-news"');
-    expect(insertedTexts("page-src", "src").join("\n")).toContain("News notes v2");
+    expect(insertedTexts("page-src").join("\n")).toContain("News notes v2");
     expect(pageCreateCalls().length).toBe(0);
   });
 
