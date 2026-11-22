@@ -73,6 +73,36 @@ describe("recordCommit", () => {
     );
   });
 
+  it("trims from the single page read: one GET, deletes only the entries beyond the cap", async () => {
+    // 8 existing entries (e1 newest .. e8 oldest). After the insert there are 9,
+    // so exactly the oldest (e8) must go; the new entry takes slot 0.
+    const entries = Array.from({ length: 8 }, (_, i) => para(`e${i + 1}`, `entry ${i + 1}`));
+    client.notionRequest.mockImplementation(async (path, opts = {}) => {
+      const method = opts.method || "GET";
+      if (path.startsWith("/blocks/page-1/children") && method === "GET") {
+        return {
+          results: [
+            para("key-1", "🔑 entity_id: checkpoint-latest"),
+            para("log-marker", COMMIT_LOG_MARKER_TEXT),
+            ...entries,
+            para("start-1", "✅ Checkpoint saved with MCP tool call, don't edit manually (updated: 2026-09-30T00:00:00.000Z)"),
+            para("end-1", "\u2705 End synced checkpoint"),
+          ],
+        };
+      }
+      if (path === "/blocks/page-1/children" && method === "PATCH") return {};
+      if (/^\/blocks\/e\d$/.test(path) && method === "DELETE") return {};
+      throw new Error(`Unexpected notionRequest call: ${method} ${path}`);
+    });
+
+    await recordCommit({ sha: "abcdef1234567890", message: "m", files: ["a.js"], branch: "b", ts: "t" });
+
+    const gets = client.notionRequest.mock.calls.filter(([path, opts]) => path.startsWith("/blocks/page-1/children") && !opts?.method);
+    expect(gets).toHaveLength(1);
+    const deletes = client.notionRequest.mock.calls.filter(([, opts]) => opts?.method === "DELETE").map(([path]) => path);
+    expect(deletes).toEqual(["/blocks/e8"]);
+  });
+
   it("looks the page up under the default 'checkpoint-latest' key only", async () => {
     await recordCommit({ sha: "abcdef1234567890", message: "m", files: ["a.js"], branch: "b", ts: "t" });
     expect(client.findPageByEntityId).toHaveBeenCalledWith("checkpoint-latest");

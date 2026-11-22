@@ -122,9 +122,16 @@ async function recordCommitUnqueued({ sha, message, files, branch, ts }) {
 
     // Enforce the cap on EVERY insert, not only on checkpoint save -- commits
     // can land many times between saves, and the log used to grow unbounded
-    // in that window. Re-read so the trim sees the entry we just added.
-    const fresh = await notionRequest(`/blocks/${page_id}/children?page_size=100`);
-    const { failed } = await trimCommitLogBlocks(fresh.results || []);
+    // in that window. Trim from the blocks already read, with the new entry
+    // projected in right after the marker (newest first), instead of paying
+    // a second page read: it takes slot 0, so only older entries get deleted.
+    const projected = blocks.slice();
+    const markerIdx = projected.findIndex((b) => b.id === logMarkerBlockId);
+    projected.splice(markerIdx + 1, 0, {
+      id: "pending-new-entry", type: "paragraph",
+      paragraph: { rich_text: [{ type: "text", plain_text: logText, text: { content: logText } }] },
+    });
+    const { failed } = await trimCommitLogBlocks(projected);
     for (const f of failed) {
       console.warn(`[commit-log] Failed to trim old entry ${f.id}: ${f.error}`);
     }
