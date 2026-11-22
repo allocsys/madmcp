@@ -331,12 +331,9 @@ async function archiveIndexRowsForPage(page_id) {
       method: "POST",
       body: { filter: { property: "PageId", rich_text: { equals: page_id } }, page_size: 20 },
     });
-    let count = 0;
-    for (const row of data?.results || []) {
-      await notionRequest(`/pages/${row.id}`, { method: "PATCH", body: { archived: true } });
-      count++;
-    }
-    return { count, error: null };
+    const rows = data?.results || [];
+    const failed = await runLimited(rows, (row) => notionRequest(`/pages/${row.id}`, { method: "PATCH", body: { archived: true } }));
+    return { count: rows.length - failed.length, error: failed.length ? failed[0].error : null };
   } catch (err) {
     return { count: 0, error: err.message };
   }
@@ -847,10 +844,16 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
     await patchPageMarkdown(page_id, { type: "insert_content", insert_content: { content: append_markdown, position: { type: "end" } } });
     results.push(`Appended markdown content (${append_markdown.length} chars).`);
   }
+  // status, entity_id and relations each need the page's full block list. One
+  // read serves all three: none of them changes what the next one looks for
+  // (status marker / entity_id marker / relation lines are separate blocks),
+  // and every content edit above has already finished by now.
+  let markerBlocks;
+  const getMarkerBlocks = async () => (markerBlocks ??= await readAllBlocks(page_id));
   if (status !== undefined) {
     // Read ALL blocks: a status marker appended at the end of a long page sits
     // past the first 100, and missing it would add a duplicate marker each time.
-    const markers = parseMarkers(await readAllBlocks(page_id));
+    const markers = parseMarkers(await getMarkerBlocks());
     if (markers.statusBlockId) {
       await notionRequest(`/blocks/${markers.statusBlockId}`, {
         method: "PATCH",
@@ -869,7 +872,7 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   // `replacements` and silently leaving the index stale/pointing nowhere.
   // Same marker-block-in-place pattern as `status` above.
   if (entity_id !== undefined) {
-    const markers = parseMarkers(await readAllBlocks(page_id));
+    const markers = parseMarkers(await getMarkerBlocks());
     const previousEntityId = markers.entity_id;
     if (markers.entityBlockId) {
       await notionRequest(`/blocks/${markers.entityBlockId}`, { method: "PATCH", body: { paragraph: entityMarkerBlock(entity_id).paragraph } });
@@ -903,9 +906,12 @@ async function doUpdatePageInner({ page_id, title, append_content, archived, rep
   if (relations !== undefined) {
     // Read ALL blocks: replaced relation blocks are appended at the end of
     // the page, so on a long page they sit past the first 100 (audit fix N4).
-    const existingRelations = parseRelationBlocks(await readAllBlocks(page_id));
-    for (const r of existingRelations) {
-      await notionRequest(`/blocks/${r.blockId}`, { method: "DELETE" });
+    const existingRelations = parseRelationBlocks(await getMarkerBlocks());
+    // Bounded-concurrency deletes (the throttle now lets calls overlap); a
+    // block that is already gone counts as deleted.
+    const failedDeletes = await deleteBlocks(existingRelations.map((r) => r.blockId));
+    if (failedDeletes.length) {
+      throw new Error(`Relations not replaced, nothing added: ${failedDeletes.length} of ${existingRelations.length} existing relation block(s) could not be deleted (${failedDeletes[0].error}).`);
     }
     const newBlocks = buildRelationBlocks(relations);
     if (newBlocks.length) {
