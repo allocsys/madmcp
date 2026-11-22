@@ -121,7 +121,7 @@ async function syncOneMemory(memory, { dry_run }) {
   const relations = relationsFor(memory);
   const contentLines = contentLinesFor(memory);
 
-  const existing = await findPageByEntityId(notionEntityId);
+  const existing = await findPageByEntityId(notionEntityId, { withMarkers: true });
 
   // Superseded -> archive and stop; don't also try to write/update content
   // on a page we're archiving in the same pass.
