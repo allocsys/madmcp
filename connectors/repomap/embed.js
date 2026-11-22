@@ -14,6 +14,7 @@ import { GEMINI_API_KEYS } from "../../config.js";
 const MODEL = "gemini-embedding-001";
 const OUTPUT_DIMENSIONALITY = 1536; // must match chunks.embedding vector(1536) in worker/src/db/schema.sql
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const EMBED_QUERY_TIMEOUT_MS = 5000; // per key attempt; a hung call must not hang the calling tool
 
 // Embeds a single query string. Tries each configured Gemini key in order
 // (same rotation convention as GEMINI_API_KEYS elsewhere in this repo),
@@ -37,6 +38,7 @@ export async function embedQuery(text) {
           content: { parts: [{ text }] },
           outputDimensionality: OUTPUT_DIMENSIONALITY,
         }),
+        signal: globalThis.AbortSignal.timeout(EMBED_QUERY_TIMEOUT_MS),
       });
 
       if (!res.ok) {
