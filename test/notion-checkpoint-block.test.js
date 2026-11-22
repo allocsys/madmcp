@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { doCheckpoint, doUpdatePage } from "../connectors/notion/tools.js";
 import * as client from "../connectors/notion/client.js";
+import { finalNoteTexts } from "./_notion-notes-sim.js";
 import { buildCheckpointStartText, buildCheckpointEndText, buildMarkerBlocks, buildChangelogEntryText } from "../connectors/notion/client.js";
 
 vi.mock("../connectors/notion/client.js", async (importOriginal) => {
@@ -34,7 +35,9 @@ function notesPage(prefix, ...lines) {
   ];
 }
 
+let lastPages = {};
 function mockNotion({ pages, indexResults = [] }) {
+  lastPages = pages;
   const queue = [...indexResults];
   client.notionRequest.mockImplementation(async (path, opts = {}) => {
     const method = opts.method || "GET";
@@ -59,6 +62,8 @@ function mockNotion({ pages, indexResults = [] }) {
 const callsWhere = (pred) => client.notionRequest.mock.calls.filter(([path, opts]) => pred(path, opts || {}));
 const deletedIds = () => callsWhere((p, o) => o.method === "DELETE").map(([p]) => p.replace("/blocks/", ""));
 const insertCalls = () => callsWhere((p, o) => /\/children$/.test(p) && o.method === "PATCH" && o.body?.after);
+// Note lines on the active page after replaying every write call.
+const finalNotes = () => finalNoteTexts(client.notionRequest.mock.calls, "page-active", lastPages["page-active"]);
 const writeCalls = () => callsWhere((p, o) => o.method === "DELETE" || o.method === "PATCH");
 
 describe("checkpoint replace_block / delete_block", () => {
@@ -71,23 +76,23 @@ describe("checkpoint replace_block / delete_block", () => {
     setup();
     const result = await doCheckpoint({ action: "delete_block", start: "NEXT", end: "1. one" });
     expect(result).toMatch(/Deleted lines 4-5/);
-    const ins = insertCalls();
-    expect(ins).toHaveLength(1);
-    expect(ins[0][1].body.children.map(blockText)).toEqual(["REPO: demo", "- Item A", "- Item B", "NOTES: tail"]);
+    expect(finalNotes()).toEqual(["REPO: demo", "- Item A", "- Item B", "NOTES: tail"]);
+    // Unchanged head/tail were left alone: only the 2 removed lines were deleted.
+    expect(deletedIds()).toEqual(["note-active-3", "note-active-4"]);
   });
 
   it("overwrites a range by line number with new notes", async () => {
     setup();
     const result = await doCheckpoint({ action: "replace_block", start: 2, end: 3, notes: "- Item X" });
     expect(result).toMatch(/Replaced lines 2-3 .*1 added/);
-    expect(insertCalls()[0][1].body.children.map(blockText)).toEqual(["REPO: demo", "- Item X", "NEXT", "1. one", "NOTES: tail"]);
+    expect(finalNotes()).toEqual(["REPO: demo", "- Item X", "NEXT", "1. one", "NOTES: tail"]);
   });
 
   it("replaces a single line when end is omitted", async () => {
     setup();
     const result = await doCheckpoint({ action: "replace_block", start: "REPO", notes: "REPO: other" });
     expect(result).toMatch(/Replaced line 1 /);
-    expect(insertCalls()[0][1].body.children.map(blockText)[0]).toBe("REPO: other");
+    expect(finalNotes()[0]).toBe("REPO: other");
   });
 
   it("aborts without writing on an ambiguous prefix", async () => {
