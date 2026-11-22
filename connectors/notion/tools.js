@@ -254,13 +254,18 @@ function clampPageSize(value, fallback) {
 // exists for this entity_id its PageId/Url are updated in place (Tags are left
 // alone); otherwise a new row is created via appendIndexEntry. Returns an
 // error string or null, same contract as appendIndexEntry.
-async function upsertIndexRow({ entity_id, page_id, url, tags }) {
+// knownRowId: undefined = look the row up; null = caller just checked, there is
+// none (skips the query); string = update that row.
+async function upsertIndexRow({ entity_id, page_id, url, tags, knownRowId }) {
   try {
-    const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
-      method: "POST",
-      body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
-    });
-    const rowId = data?.results?.[0]?.id;
+    let rowId = knownRowId;
+    if (rowId === undefined) {
+      const data = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+        method: "POST",
+        body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
+      });
+      rowId = data?.results?.[0]?.id;
+    }
     if (!rowId) return await appendIndexEntry({ entity_id, page_id, url, tags });
     await notionRequest(`/pages/${rowId}`, {
       method: "PATCH",
@@ -447,25 +452,18 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
   // legitimately new page over an unrelated semantic near-match. Only runs
   // for entity_id-tracked pages, matching exact-match dedup's own scope --
   // one_off pages have explicitly opted out of dedup entirely.
+  // The two lookups are independent, so run them together.
   let possibleDuplicates = [];
-  if (entity_id && !lean) {
-    try {
-      possibleDuplicates = await findSimilarPages([title, content].filter(Boolean).join("\n"));
-    } catch {
-      // best-effort -- see comment above
-    }
-  }
-
-  // Deterministic (no-LLM, no-mem0) related-page detection -- see
-  // linking.js header comment and Notion plan page (entity_id:
-  // plan-notion-autolink-heuristic). Best-effort: a failure here (e.g.
-  // Notion search unreachable) should never block page creation, since this
-  // is a convenience layer on top of an otherwise-complete create call.
   let linkCandidates = { strong: [], medium: [] };
-  try {
-    if (!lean) linkCandidates = await findLinkCandidates({ title, content });
-  } catch {
-    // swallow -- see comment above
+  if (!lean) {
+    const [dups, links] = await Promise.all([
+      entity_id
+        ? findSimilarPages([title, content].filter(Boolean).join("\n")).catch(() => [])
+        : Promise.resolve([]),
+      findLinkCandidates({ title, content }).catch(() => linkCandidates),
+    ]);
+    possibleDuplicates = dups;
+    linkCandidates = links;
   }
   const explicitRelations = relations || [];
   const explicitTargets   = new Set(explicitRelations.map((r) => r.to_entity_id));
@@ -530,14 +528,29 @@ async function doCreatePageUnlocked({ parent_id, parent_type, title, content, en
     // Re-check right before writing: if another create for this entity_id
     // finished first and its page is live, we lost the race. Never overwrite
     // its index row -- archive our page and report theirs.
+    let knownRowId;
     if (!batchError) {
-      const winner = await findPageByEntityId(entity_id);
+      // One index query. Only when a row points at a DIFFERENT page do we pay
+      // for the full liveness check (page GET).
+      let rowPageId = "";
+      try {
+        const q = await notionRequest(`/databases/${NOTION_INDEX_DATABASE_ID}/query`, {
+          method: "POST",
+          body: { filter: { property: "EntityId", rich_text: { equals: entity_id } }, page_size: 1 },
+        });
+        const row = q?.results?.[0];
+        knownRowId = row ? row.id : null;
+        rowPageId = row ? (row.properties?.PageId?.rich_text || []).map((t) => t.plain_text || "").join("") : "";
+      } catch {
+        knownRowId = undefined; // lookup failed: let upsertIndexRow retry it
+      }
+      const winner = rowPageId && rowPageId !== data.id ? await findPageByEntityId(entity_id) : null;
       if (winner && !winner.archived && winner.pageId !== data.id) {
         await notionRequest(`/pages/${data.id}`, { method: "PATCH", body: { archived: true } });
         return { skipped: true, entity_id, existingId: winner.pageId, existingTitle: winner.title, existingUrl: winner.url };
       }
     }
-    indexError = await upsertIndexRow({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")] });
+    indexError = await upsertIndexRow({ entity_id, page_id: data.id, url: data.url, tags: [...extractTags(content || "")], knownRowId });
     if (!indexError && !batchError) {
       try {
         const lost = await reconcileEntityIndex({ entity_id, page_id: data.id });
