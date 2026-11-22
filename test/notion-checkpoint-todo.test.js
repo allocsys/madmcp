@@ -130,6 +130,23 @@ describe("todo helpers", () => {
     expect(setTodoState(lines, [1], "done").lines[1]).toBe("#1 [x] a");
   });
 
+  it("add strips a pasted item prefix instead of nesting it", () => {
+    expect(addTodos([], ["#7 [ ] looks like an item", "- #3 [x] bulleted"]).lines).toEqual(["TODO", "#1 [ ] looks like an item", "#2 [ ] bulleted"]);
+    expect(() => addTodos([], ["#7 [ ]"])).not.toThrow();
+  });
+
+  it("setTodoState skips items already in the state and flags reopened ones", () => {
+    const lines = ["TODO", "#1 [x] a", "#2 [ ] b"];
+    const again = setTodoState(lines, [1], "done");
+    expect(again.changed).toEqual([]);
+    expect(again.unchanged).toEqual([1]);
+    expect(again.lines).toEqual(lines);
+    const reopen = setTodoState(lines, [1], "doing");
+    expect(reopen.reopened).toEqual([1]);
+    expect(reopen.lines[1]).toBe("#1 [~] a");
+    expect(setTodoState(lines, [2], "doing").reopened).toEqual([]);
+  });
+
   it("list shows open and doing only; count matches", () => {
     const lines = ["TODO", "#1 [x] a", "#2 [~] b", "#3 [ ] c"];
     expect(listOpenTodos(lines)).toEqual(["#2 [~] b", "#3 [ ] c"]);
@@ -179,6 +196,24 @@ describe("Notion checkpoint todo actions", () => {
     });
     await expect(doCheckpoint({ action: "todo_done", ids: [7] })).rejects.toThrow(/no todo with id #7/);
     expect(writeCalls().length).toBe(0);
+  });
+
+  it("todo_done on an already-done item says so and writes nothing", async () => {
+    mockNotion({
+      pages: { "page-active": notesPage("active", "TODO", "#1 [x] a", "#2 [ ] b") },
+      indexResults: ["page-active"],
+    });
+    expect(await doCheckpoint({ action: "todo_done", ids: [1] })).toBe("Already done: #1. 1 open.");
+    expect(writeCalls().length).toBe(0);
+  });
+
+  it("todo_doing on a done item reports it as reopened", async () => {
+    mockNotion({
+      pages: { "page-active": notesPage("active", "TODO", "#1 [x] a") },
+      indexResults: ["page-active", "page-active"],
+    });
+    expect(await doCheckpoint({ action: "todo_doing", ids: [1] })).toBe("Doing: #1 (reopened). 1 open.");
+    expect(insertedTexts()).toEqual(["TODO", "#1 [~] a"]);
   });
 
   it("todo_list returns open items only and writes nothing", async () => {

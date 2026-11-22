@@ -1153,10 +1153,20 @@ async function doTodo({ action, notes, key, ids }) {
     result = r.lines;
     msg = `Added ${r.ids.map((i) => `#${i}`).join(", ")}.`;
   } else if (action === "todo_done" || action === "todo_doing") {
+    const label = action === "todo_done" ? "Done" : "Doing";
     const r = setTodoState(lines, ids, action === "todo_done" ? "done" : "doing");
-    if (!r.changed.length) throw new Error(`${action}: no todo with id ${r.missing.map((i) => `#${i}`).join(", ")}; nothing written.`);
+    const tag = (arr) => arr.map((i) => `#${i}`).join(", ");
+    const notes = [
+      r.unchanged.length ? `Already ${label.toLowerCase()}: ${tag(r.unchanged)}.` : "",
+      r.missing.length ? `Not found: ${tag(r.missing)}.` : "",
+    ].filter(Boolean).join(" ");
+    if (!r.changed.length) {
+      if (r.unchanged.length) return `${notes} ${openTodoCount(lines)} open.`;
+      throw new Error(`${action}: no todo with id ${tag(r.missing)}; nothing written.`);
+    }
     result = r.lines;
-    msg = `${action === "todo_done" ? "Done" : "Doing"}: ${r.changed.map((i) => `#${i}`).join(", ")}.${r.missing.length ? ` Not found: ${r.missing.map((i) => `#${i}`).join(", ")}.` : ""}`;
+    const shown = r.changed.map((i) => `#${i}${r.reopened.includes(i) ? " (reopened)" : ""}`).join(", ");
+    msg = `${label}: ${shown}.${notes ? ` ${notes}` : ""}`;
   } else {
     const r = clearDoneTodos(lines);
     if (!r.removed) return "No done todos to clear.";

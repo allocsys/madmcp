@@ -27,7 +27,10 @@ const fmt = (id, mark, text) => `#${id} [${mark}] ${text}`;
 
 // Adds items (already split into lines). Returns { lines, ids }.
 export function addTodos(lines, texts) {
-  const clean = texts.map((t) => t.trim().replace(/^[-*]\s+/, "")).filter(Boolean);
+  // Strip a bullet and a pasted "#N [ ]" item prefix so text never nests one.
+  const clean = texts
+    .map((t) => t.trim().replace(/^[-*]\s+/, "").replace(/^#\d+ \[[ ~x]\]\s+/, "").trim())
+    .filter(Boolean);
   if (!clean.length) throw new Error("todo_add requires 'notes' (one todo per line).");
   const items = parseTodos(lines);
   let next = items.reduce((m, i) => Math.max(m, i.id), 0) + 1;
@@ -43,20 +46,26 @@ export function addTodos(lines, texts) {
   return { lines: out, ids };
 }
 
-// Sets the state of the given ids. Returns { lines, changed, missing }.
+// Sets the state of the given ids. Returns { lines, changed, unchanged,
+// reopened, missing }: unchanged = already in that state (not rewritten),
+// reopened = was done and is now open/doing.
 export function setTodoState(lines, ids, state) {
   if (!Array.isArray(ids) || !ids.length) throw new Error("'ids' is required (an array of todo numbers).");
   const items = parseTodos(lines);
   const out = [...lines];
   const changed = [];
+  const unchanged = [];
+  const reopened = [];
   const missing = [];
   for (const id of ids) {
     const item = items.find((i) => i.id === id);
     if (!item) { missing.push(id); continue; }
+    if (item.mark === MARK[state]) { unchanged.push(id); continue; }
+    if (item.mark === MARK.done) reopened.push(id);
     out[item.idx] = fmt(item.id, MARK[state], item.text);
     changed.push(id);
   }
-  return { lines: out, changed, missing };
+  return { lines: out, changed, unchanged, reopened, missing };
 }
 
 // Open and doing items only, one per line.
